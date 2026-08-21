@@ -446,8 +446,7 @@ export async function streamAgent(
   );
 
   return {
-    textStream: stream.textStream,
-    fullStream: stream.fullStream,
+    stream: stream.fullStream,
     result: resultPromise,
   };
 }

@@ -49,8 +49,7 @@ export interface AgentRunResult {
 }
 
 export interface StreamAgentResult {
-  textStream: AsyncIterable<string>;
-  fullStream: AsyncIterable<unknown>;
+  stream: AsyncIterable<unknown>;
   result: Promise<AgentRunResult>;
 }
 
