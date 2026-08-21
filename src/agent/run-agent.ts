@@ -430,22 +430,20 @@ export async function streamAgent(
   const prepared = await prepareAgentRun(userPrompt, ctx, options);
   const stream = streamText(buildModelRequest(prepared));
 
-  const resultPromise = (async (): Promise<AgentRunResult> => {
-    const [text, responseMessages, toolCalls, toolResults] = await Promise.all([
-      stream.text,
-      stream.responseMessages,
-      stream.toolCalls,
-      stream.toolResults,
-    ]);
-
-    return createAgentRunResult(
+  const resultPromise: Promise<AgentRunResult> = Promise.all([
+    stream.text,
+    stream.responseMessages,
+    stream.toolCalls,
+    stream.toolResults,
+  ]).then(([text, responseMessages, toolCalls, toolResults]) =>
+    createAgentRunResult(
       prepared,
       text,
       responseMessages,
       toolCalls,
       toolResults,
-    );
-  })();
+    ),
+  );
 
   return {
     textStream: stream.textStream,
