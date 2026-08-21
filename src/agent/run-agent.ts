@@ -4,6 +4,7 @@ import {
   stepCountIs,
   streamText,
   tool as defineAiTool,
+  type GenerateTextOnStepFinishCallback,
   type ModelMessage,
   type ToolSet,
 } from "ai";
@@ -316,39 +317,53 @@ function buildHistory(userPrompt: string, options: RunAgentOptions): Message[] {
   return history;
 }
 
-export async function runAgent(
+interface PreparedAgentRun {
+  abortSignal?: AbortSignal;
+  history: Message[];
+  maxSteps: number;
+  model: NonNullable<RunAgentOptions["model"]>;
+  modelInput: ReturnType<typeof toModelInput>;
+  onStepFinish: GenerateTextOnStepFinishCallback<ToolSet>;
+  toolErrors: ToolErrorRecord[];
+  tools: ToolSet;
+}
+
+async function prepareAgentRun(
   userPrompt: string,
   ctx: AgentContext,
-  options: RunAgentOptions = {}
-): Promise<AgentRunResult> {
+  options: RunAgentOptions,
+): Promise<PreparedAgentRun> {
   const maxSteps = options.maxSteps ?? 10;
-  const toolTimeout = options.toolTimeout;
   const abortSignal = options.abortSignal;
-  const registry = options.registry ?? defaultToolRegistry;
   const toolErrors: ToolErrorRecord[] = [];
   const hooks = options.hooks;
-
   const history = buildHistory(userPrompt, options);
-  const tools = buildToolSet(registry, ctx, abortSignal, toolTimeout, hooks, toolErrors);
-
+  const registry = options.registry ?? defaultToolRegistry;
+  const tools = buildToolSet(
+    registry,
+    ctx,
+    abortSignal,
+    options.toolTimeout,
+    hooks,
+    toolErrors,
+  );
   const compression = options.compression;
-  if (compression && compression.shouldCompress(history)) {
+
+  if (compression?.shouldCompress(history)) {
     await compression.compress(history);
   }
 
-  const activeMessages = history.filter(m => m.active !== false);
+  const activeMessages = history.filter((message) => message.active !== false);
   const modelInput = toModelInput(activeMessages);
 
   hooks?.onStepStart?.(1);
 
-  const result = await generateText({
-    model:
-      options.model ??
-      createDefaultModel(options),
-    ...modelInput,
-    tools,
-    stopWhen: stepCountIs(maxSteps),
-    ...(abortSignal ? { abortSignal } : {}),
+  return {
+    abortSignal,
+    history,
+    maxSteps,
+    model: options.model ?? createDefaultModel(options),
+    modelInput,
     onStepFinish: (step) => {
       hooks?.onStepFinish?.(
         step.stepNumber,
@@ -356,63 +371,64 @@ export async function runAgent(
         normalizeToolCalls(step.toolCalls ?? []),
       );
     },
-  });
+    toolErrors,
+    tools,
+  };
+}
 
-  const responseMessages = toInternalMessages(result.responseMessages);
-  history.push(...responseMessages);
-  const toolCalls = normalizeToolCalls(result.toolCalls);
-  const toolResults = normalizeToolResults(result.toolResults);
+function buildModelRequest(prepared: PreparedAgentRun) {
+  return {
+    model: prepared.model,
+    ...prepared.modelInput,
+    tools: prepared.tools,
+    stopWhen: stepCountIs(prepared.maxSteps),
+    ...(prepared.abortSignal ? { abortSignal: prepared.abortSignal } : {}),
+    onStepFinish: prepared.onStepFinish,
+  };
+}
+
+function createAgentRunResult(
+  prepared: PreparedAgentRun,
+  text: string,
+  responseMessages: ModelMessage[],
+  toolCalls: any[],
+  toolResults: any[],
+): AgentRunResult {
+  prepared.history.push(...toInternalMessages(responseMessages));
 
   return {
-    content: result.text,
-    messages: history,
-    toolCalls,
-    toolResults,
-    toolErrors,
+    content: text,
+    messages: prepared.history,
+    toolCalls: normalizeToolCalls(toolCalls),
+    toolResults: normalizeToolResults(toolResults),
+    toolErrors: prepared.toolErrors,
   };
+}
+
+export async function runAgent(
+  userPrompt: string,
+  ctx: AgentContext,
+  options: RunAgentOptions = {},
+): Promise<AgentRunResult> {
+  const prepared = await prepareAgentRun(userPrompt, ctx, options);
+  const result = await generateText(buildModelRequest(prepared));
+
+  return createAgentRunResult(
+    prepared,
+    result.text,
+    result.responseMessages,
+    result.toolCalls,
+    result.toolResults,
+  );
 }
 
 export async function streamAgent(
   userPrompt: string,
   ctx: AgentContext,
-  options: RunAgentOptions = {}
+  options: RunAgentOptions = {},
 ): Promise<StreamAgentResult> {
-  const maxSteps = options.maxSteps ?? 10;
-  const toolTimeout = options.toolTimeout;
-  const abortSignal = options.abortSignal;
-  const registry = options.registry ?? defaultToolRegistry;
-  const toolErrors: ToolErrorRecord[] = [];
-  const hooks = options.hooks;
-
-  const history = buildHistory(userPrompt, options);
-  const tools = buildToolSet(registry, ctx, abortSignal, toolTimeout, hooks, toolErrors);
-
-  const compression = options.compression;
-  if (compression && compression.shouldCompress(history)) {
-    await compression.compress(history);
-  }
-
-  const activeMessages = history.filter(m => m.active !== false);
-  const modelInput = toModelInput(activeMessages);
-
-  hooks?.onStepStart?.(1);
-
-  const stream = streamText({
-    model:
-      options.model ??
-      createDefaultModel(options),
-    ...modelInput,
-    tools,
-    stopWhen: stepCountIs(maxSteps),
-    ...(abortSignal ? { abortSignal } : {}),
-    onStepFinish: (step) => {
-      hooks?.onStepFinish?.(
-        step.stepNumber,
-        step.text,
-        normalizeToolCalls(step.toolCalls ?? []),
-      );
-    },
-  });
+  const prepared = await prepareAgentRun(userPrompt, ctx, options);
+  const stream = streamText(buildModelRequest(prepared));
 
   const resultPromise = (async (): Promise<AgentRunResult> => {
     const [text, responseMessages, toolCalls, toolResults] = await Promise.all([
@@ -422,15 +438,13 @@ export async function streamAgent(
       stream.toolResults,
     ]);
 
-    history.push(...toInternalMessages(responseMessages));
-
-    return {
-      content: text,
-      messages: history,
-      toolCalls: normalizeToolCalls(toolCalls),
-      toolResults: normalizeToolResults(toolResults),
-      toolErrors,
-    };
+    return createAgentRunResult(
+      prepared,
+      text,
+      responseMessages,
+      toolCalls,
+      toolResults,
+    );
   })();
 
   return {

@@ -7,8 +7,6 @@ import type { ToolRegistry } from "../tools/registry.js";
 export interface AgentContext {
   userId: string;
   organizationId: string;
-  permissions: string[];
-  role: string;
 }
 
 export interface Tool {
