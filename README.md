@@ -1,9 +1,9 @@
 <div align="center">
-  <img src="logo.png?v=50cf7f7" alt="Protawk Agents Logo" width="250" style="margin-bottom: 20px;"/>
+  <img src="logo.png?v=50cf7f7" alt="AgentDock Logo" width="250" style="margin-bottom: 20px;"/>
 
   **Reusable TypeScript agent infrastructure for multi-tenant applications.**
 
-  [![version](https://img.shields.io/badge/version-0.1.0-blue.svg?cacheSeconds=2592000)](https://github.com/protawk-com/agents)
+  [![version](https://img.shields.io/badge/version-0.1.0-blue.svg?cacheSeconds=2592000)](https://github.com/Muhammad-Zain01/agentdock)
   [![TypeScript](https://img.shields.io/badge/TypeScript-7.0.2-blue.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
   [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-green.svg?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
   [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -47,7 +47,7 @@ yarn build
 yarn pack:artifact
 ```
 
-> **Note:** `yarn pack:artifact` creates `protawk-agents.tgz`. The package lifecycle runs a clean build before packing, so the artifact is always created from the current source.
+> **Note:** `yarn pack:artifact` creates `agentdock.tgz`. The package lifecycle runs a clean build before packing, so the artifact is always created from the current source.
 
 ## 🛠️ Usage
 
@@ -57,7 +57,7 @@ Import the necessary functions from the package to start building your agent inf
 import {
   createToolRegistry,
   runAgent,
-} from "@protawk/agents";
+} from "agentdock";
 
 // Add your specific implementation here...
 ```

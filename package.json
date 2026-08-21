@@ -1,15 +1,15 @@
 {
-  "name": "@protawk/agents",
+  "name": "agentdock",
   "version": "0.1.0",
-  "description": "Reusable agent infrastructure for Protawk apps",
+  "description": "Reusable TypeScript agent infrastructure for AgentDock applications",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/protawk-com/agents.git"
+    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git"
   },
-  "homepage": "https://github.com/protawk-com/agents#readme",
+  "homepage": "https://github.com/Muhammad-Zain01/agentdock#readme",
   "bugs": {
-    "url": "https://github.com/protawk-com/agents/issues"
+    "url": "https://github.com/Muhammad-Zain01/agentdock/issues"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -43,7 +43,7 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "pack:artifact": "yarn pack --filename protawk-agents.tgz",
+    "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn clean && yarn build",
     "prepare": "yarn build",
     "clean": "rm -rf dist"
