@@ -3,6 +3,12 @@ import type { CompressionStrategy } from "../compression/strategy.js";
 import type { AgentHooks } from "./hooks.js";
 import type { Message } from "./memory.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import type {
+  ToolApprovalRequest,
+  ToolPermissionMode,
+  ToolPermissionPolicy,
+} from "./permissions/types.js";
+import type { AgentRunStore, AgentRunStatus } from "./runs/store.js";
 
 export interface AgentContext {
   userId: string;
@@ -41,11 +47,15 @@ export interface ToolResultRecord {
 }
 
 export interface AgentRunResult {
+  runId: string;
+  status: AgentRunStatus;
   content: string;
   messages: Message[];
   toolCalls: ToolCallRecord[];
   toolResults: ToolResultRecord[];
   toolErrors: ToolErrorRecord[];
+  approvalRequests: ToolApprovalRequest[];
+  stepsCompleted: number;
 }
 
 export interface StreamAgentResult {
@@ -54,11 +64,13 @@ export interface StreamAgentResult {
 }
 
 export interface RunAgentOptions {
+  runStore?: AgentRunStore;
+  runId?: string;
+  permissionMode?: ToolPermissionMode;
+  permissionPolicy?: ToolPermissionPolicy;
   maxSteps?: number;
   systemPrompt?: string;
   model?: LanguageModel;
-  modelId?: string;
-  apiKey?: string;
   registry?: ToolRegistry;
   abortSignal?: AbortSignal;
   toolTimeout?: number;

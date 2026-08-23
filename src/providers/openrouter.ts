@@ -3,7 +3,7 @@ import type { LanguageModel } from "ai";
 
 export interface OpenRouterModelOptions {
   apiKey?: string;
-  modelId?: string;
+  modelId: string;
 }
 
 function getEnv(name: string): string | undefined {
@@ -15,8 +15,13 @@ function getEnv(name: string): string | undefined {
 }
 
 export function createOpenRouterModel(
-  options: OpenRouterModelOptions = {},
+  options: OpenRouterModelOptions,
 ): LanguageModel {
+  if (!options.modelId) {
+    throw new Error(
+      "OPENROUTER modelId is required. Provide an explicit model ID.",
+    );
+  }
   const apiKey = options.apiKey ?? getEnv("OPENROUTER_API_KEY");
 
   if (!apiKey) {
@@ -26,5 +31,5 @@ export function createOpenRouterModel(
   }
 
   const openrouter = createOpenRouter({ apiKey });
-  return openrouter(options.modelId ?? "google/gemini-2.5-flash");
+  return openrouter(options.modelId);
 }

@@ -37,17 +37,32 @@ function toModelMessage(message: Message): ModelMessage {
           input: call.input,
         });
       }
+      for (const request of message.approvalRequests ?? []) {
+        parts.push({
+          type: "tool-approval-request",
+          approvalId: request.approvalId,
+          toolCallId: request.toolCall.toolCallId,
+        });
+      }
       return { role: "assistant", content: parts.length > 0 ? parts : "" };
     }
     case "tool":
       return {
         role: "tool",
-        content: message.toolResults.map((result) => ({
-          type: "tool-result" as const,
-          toolCallId: result.toolCallId,
-          toolName: result.name,
-          output: result.output as any,
-        })),
+        content: [
+          ...message.toolResults.map((result) => ({
+            type: "tool-result" as const,
+            toolCallId: result.toolCallId,
+            toolName: result.name,
+            output: result.output as any,
+          })),
+          ...(message.approvalResponses ?? []).map((response) => ({
+            type: "tool-approval-response" as const,
+            approvalId: response.approvalId,
+            approved: response.approved,
+            ...(response.reason ? { reason: response.reason } : {}),
+          })),
+        ],
       };
     case "system":
       return { role: "user", content: message.content };
@@ -78,11 +93,28 @@ export function toInternalMessages(responseMessages: ModelMessage[]): Message[] 
               input: part.input,
             }))
         : [];
+      const approvalRequests = Array.isArray(message.content)
+        ? message.content
+            .filter(
+              (part) =>
+                part.type === "tool-approval-request" &&
+                part.isAutomatic !== true,
+            )
+            .flatMap((part: any) => {
+              const toolCall = toolCalls.find(
+                (call) => call.toolCallId === part.toolCallId,
+              );
+              return toolCall
+                ? [{ approvalId: part.approvalId, toolCall }]
+                : [];
+            })
+        : [];
 
       return [{
         role: "assistant",
         content: textFromAssistantContent(message.content),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(approvalRequests.length > 0 ? { approvalRequests } : {}),
       }];
     }
 

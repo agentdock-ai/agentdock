@@ -4,30 +4,31 @@ import type {
   ToolSet,
 } from "ai";
 import { stepCountIs } from "ai";
-import { createOpenRouterModel } from "../../providers/openrouter.js";
 import { defaultToolRegistry } from "../../tools/registry.js";
+import type { ToolRegistry } from "../../tools/registry.js";
 import type { AgentHooks } from "../hooks.js";
 import type { Message } from "../memory.js";
 import type { AgentContext, RunAgentOptions, ToolErrorRecord } from "../types.js";
+import type { ToolPermissionDecision } from "../permissions/types.js";
 import { normalizeToolCalls, toModelInput } from "./messages.js";
 import { buildToolSet } from "./tools.js";
 
 export interface PreparedAgentRun {
   abortSignal?: AbortSignal;
   history: Message[];
+  runId: string;
+  stepsCompleted: number;
   maxSteps: number;
   model: LanguageModel;
   modelInput: ReturnType<typeof toModelInput>;
+  onStepStart: (step: number) => void;
   onStepFinish: GenerateTextOnStepFinishCallback<ToolSet>;
   toolErrors: ToolErrorRecord[];
   tools: ToolSet;
-}
-
-function createDefaultModel(options: RunAgentOptions): LanguageModel {
-  return createOpenRouterModel({
-    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
-    modelId: options.modelId ?? "google/gemini-2.5-flash",
-  });
+  permissionMode: NonNullable<RunAgentOptions["permissionMode"]>;
+  permissionPolicy: RunAgentOptions["permissionPolicy"];
+  registry: ToolRegistry;
+  ctx: AgentContext;
 }
 
 export function buildHistory(userPrompt: string, options: RunAgentOptions): Message[] {
@@ -48,9 +49,29 @@ export async function prepareAgentRun(
   ctx: AgentContext,
   options: RunAgentOptions,
 ): Promise<PreparedAgentRun> {
+  const history = buildHistory(userPrompt, options);
+  return prepareAgentRunFromHistory(history, ctx, options, 0);
+}
+
+export async function prepareAgentRunFromHistory(
+  history: Message[],
+  ctx: AgentContext,
+  options: RunAgentOptions,
+  stepsCompleted: number,
+): Promise<PreparedAgentRun> {
   const toolErrors: ToolErrorRecord[] = [];
   const hooks = options.hooks;
-  const history = buildHistory(userPrompt, options);
+  if (!options.model) {
+    throw new Error(
+      "No model configured. Provide options.model, for example createOpenRouterModel({ modelId: \"your-model-id\" }).",
+    );
+  }
+  const permissionMode = options.permissionMode ?? "normal";
+  if (permissionMode === "normal" && !options.permissionPolicy) {
+    throw new Error(
+      "permissionPolicy is required when permissionMode is \"normal\"",
+    );
+  }
   if (options.compression?.shouldCompress(history)) {
     await options.compression.compress(history);
   }
@@ -67,18 +88,25 @@ export async function prepareAgentRun(
   return {
     abortSignal: options.abortSignal,
     history,
-    maxSteps: options.maxSteps ?? 10,
-    model: options.model ?? createDefaultModel(options),
+    runId: options.runId ?? crypto.randomUUID(),
+    stepsCompleted,
+    maxSteps: Math.max(1, (options.maxSteps ?? 10) - stepsCompleted),
+    model: options.model,
     modelInput: toModelInput(history.filter((message) => message.active !== false)),
+    onStepStart: (step) => hooks?.onStepStart?.(stepsCompleted + step),
     onStepFinish: (step) => {
       hooks?.onStepFinish?.(
-        step.stepNumber,
+        stepsCompleted + step.stepNumber,
         step.text,
         normalizeToolCalls(step.toolCalls ?? []),
       );
     },
     toolErrors,
     tools,
+    permissionMode,
+    permissionPolicy: options.permissionPolicy,
+    registry,
+    ctx,
   };
 }
 
@@ -88,7 +116,44 @@ export function buildModelRequest(prepared: PreparedAgentRun) {
     ...prepared.modelInput,
     tools: prepared.tools,
     stopWhen: stepCountIs(prepared.maxSteps),
+    toolApproval: async ({ toolCall }: any): Promise<any> => {
+      if (prepared.permissionMode === "approve_all") return "approved";
+
+      const tool = prepared.registry.get(toolCall.toolName);
+      if (!tool) {
+        return {
+          type: "denied",
+          reason: `Unknown tool: ${toolCall.toolName}`,
+        };
+      }
+
+      let decision: ToolPermissionDecision;
+      try {
+        decision = await prepared.permissionPolicy!.check({
+          tool,
+          toolCall: {
+            toolCallId: toolCall.toolCallId,
+            name: toolCall.toolName,
+            input: toolCall.input,
+          },
+          ctx: prepared.ctx,
+        });
+      } catch {
+        return {
+          type: "denied",
+          reason: "Tool permission check failed",
+        };
+      }
+
+      if (decision.type === "allow") return "approved";
+      if (decision.type === "deny") {
+        return { type: "denied", reason: decision.reason };
+      }
+      return "user-approval";
+    },
     ...(prepared.abortSignal ? { abortSignal: prepared.abortSignal } : {}),
+    onStepStart: ({ stepNumber }: { stepNumber: number }) =>
+      prepared.onStepStart(stepNumber),
     onStepFinish: prepared.onStepFinish,
   };
 }
