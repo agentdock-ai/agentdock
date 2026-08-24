@@ -16,8 +16,9 @@ This package provides a single `AgentDock` runtime for backend applications. Pro
 ## ✨ Features
 
 - **Agent Runtime:** Run, stream, resume approvals, and cancel agent runs.
+- **Typed Events:** Provider-independent events for live clients.
 - **Tool Registry:** Register and manage tools per `AgentDock` instance.
-- **Run Store:** Inject in-memory or durable run persistence.
+- **Run State:** Inject in-memory or durable run persistence.
 - **Provider Helpers:** Built-in helpers for AI SDK providers such as OpenRouter.
 - **TypeScript First:** Fully typed for safe, scalable, and rapid development.
 
@@ -83,4 +84,22 @@ agent.registerTool({
 const result = await agent.run("What is the weather in Lahore?", {
   userId: "user-123",
 });
+```
+
+For live output, consume the normalized AgentDock event stream:
+
+```ts
+import { AgentEventType } from "agentdock";
+
+const session = await agent.stream("What is the weather in Lahore?", {
+  userId: "user-123",
+});
+
+for await (const event of session.stream) {
+  if (event.type === AgentEventType.TextDelta) {
+    process.stdout.write(event.text);
+  }
+}
+
+const result = await session.result;
 ```

@@ -3,6 +3,7 @@ import type { CompressionStrategy } from "../compression/strategy.js";
 import type { AgentHooks } from "./hooks.js";
 import type { Message } from "./memory.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import type { AgentEvent } from "./events.js";
 import type {
   ToolApprovalRequest,
   ToolPermissionMode,
@@ -70,7 +71,7 @@ export interface AgentRunResult {
 }
 
 export interface StreamAgentResult {
-  stream: AsyncIterable<unknown>;
+  stream: AsyncIterable<AgentEvent>;
   result: Promise<AgentRunResult>;
 }
 

@@ -1,9 +1,4 @@
-import {
-  generateText,
-  streamText,
-  type LanguageModel,
-  type ModelMessage,
-} from "ai";
+import { streamText, type LanguageModel, type ModelMessage } from "ai";
 import { createAgentRunResult } from "./runtime/result.js";
 import {
   buildModelRequest,
@@ -21,6 +16,11 @@ import {
   type AgentRunStore,
   InMemoryAgentRunStore,
 } from "./runs/store.js";
+import { AgentEventType } from "./events.js";
+import {
+  AgentEventStream,
+  serializeApprovalResponses,
+} from "./runtime/events.js";
 import type {
   ToolApprovalDecision,
   ToolApprovalResponse,
@@ -96,41 +96,11 @@ export class AgentDock {
     ctx: AgentContext,
     options: AgentDockRunOptions = {},
   ): Promise<AgentRunResult> {
-    const runId = options.runId ?? crypto.randomUUID();
-    const abortSignal = this.createRunAbortSignal(runId, options.abortSignal);
-    let prepared;
-
-    try {
-      prepared = await prepareAgentRun(userPrompt, ctx, {
-        ...this.buildRunOptions(options),
-        runId,
-        abortSignal,
-      });
-      await this.saveRunningRun(runId, prepared.history);
-    } catch (error) {
-      clearRunController(runId);
-      throw error;
+    const session = await this.stream(userPrompt, ctx, options);
+    for await (const _event of session.stream) {
+      // Drain the live event stream so the underlying model stream completes.
     }
-
-    try {
-      const result = await generateText(buildModelRequest(prepared));
-      const output = createAgentRunResult(
-        prepared,
-        result.text,
-        result.responseMessages,
-        result.toolCalls,
-        result.toolResults,
-        result.content,
-        result.steps.length,
-      );
-      await this.persistResult(output);
-      return output;
-    } catch (error) {
-      await this.markRunFailed(runId, error);
-      throw error;
-    } finally {
-      clearRunController(runId);
-    }
+    return session.result;
   }
 
   async stream(
@@ -154,36 +124,25 @@ export class AgentDock {
       throw error;
     }
 
-    const stream = streamText(buildModelRequest(prepared));
-    const result = Promise.all([
-      stream.text,
-      stream.responseMessages,
-      stream.toolCalls,
-      stream.toolResults,
-      stream.content,
-      stream.steps,
-    ])
-      .then(async ([text, responseMessages, toolCalls, toolResults, content, steps]) => {
-        const output = createAgentRunResult(
-          prepared,
-          text,
-          responseMessages as ModelMessage[],
-          toolCalls,
-          toolResults,
-          content,
-          steps.length,
-        );
-        await this.persistResult(output);
-        clearRunController(runId);
-        return output;
-      })
-      .catch(async (error) => {
-        await this.markRunFailed(runId, error);
-        clearRunController(runId);
-        throw error;
-      });
+    try {
+      const stream = streamText(buildModelRequest(prepared));
+      const result = this.createStreamResult(stream, prepared, runId, 0);
 
-    return { stream: stream.fullStream, result };
+      return {
+        stream: new AgentEventStream({
+          runId,
+          rawStream: stream.fullStream,
+          result,
+          getRun: () => this.getRun(runId),
+          initialEvents: [{ type: AgentEventType.RunStarted }],
+        }),
+        result,
+      };
+    } catch (error) {
+      await this.markRunFailed(runId, error);
+      clearRunController(runId);
+      throw error;
+    }
   }
 
   async resume(
@@ -191,41 +150,11 @@ export class AgentDock {
     ctx: AgentContext,
     options: AgentDockRunOptions = {},
   ): Promise<AgentRunResult> {
-    const claim = await this.claimApprovalRun(input.runId, input.approvals);
-    const history = buildApprovalHistory(claim, input.approvals);
-    const abortSignal = this.createRunAbortSignal(input.runId, options.abortSignal);
-
-    try {
-      const prepared = await prepareAgentRunFromHistory(
-        history,
-        ctx,
-        {
-          ...this.buildRunOptions(options),
-          runId: input.runId,
-          abortSignal,
-        },
-        claim.record.stepsCompleted,
-      );
-      await this.runStore.update(input.runId, { messages: history });
-
-      const result = await generateText(buildModelRequest(prepared));
-      const output = createAgentRunResult(
-        prepared,
-        result.text,
-        result.responseMessages,
-        result.toolCalls,
-        result.toolResults,
-        result.content,
-        claim.record.stepsCompleted + result.steps.length,
-      );
-      await this.persistResult(output);
-      return output;
-    } catch (error) {
-      await this.markRunFailed(input.runId, error);
-      throw error;
-    } finally {
-      clearRunController(input.runId);
+    const session = await this.resumeStream(input, ctx, options);
+    for await (const _event of session.stream) {
+      // Drain the live event stream so the underlying model stream completes.
     }
+    return session.result;
   }
 
   async resumeStream(
@@ -237,6 +166,7 @@ export class AgentDock {
     const history = buildApprovalHistory(claim, input.approvals);
     const abortSignal = this.createRunAbortSignal(input.runId, options.abortSignal);
     let prepared;
+    const approvalResponses = buildApprovalResponses(claim, input.approvals);
 
     try {
       prepared = await prepareAgentRunFromHistory(
@@ -250,42 +180,33 @@ export class AgentDock {
         claim.record.stepsCompleted,
       );
       await this.runStore.update(input.runId, { messages: history });
+      const stream = streamText(buildModelRequest(prepared));
+      const result = this.createStreamResult(
+        stream,
+        prepared,
+        input.runId,
+        claim.record.stepsCompleted,
+      );
+
+      return {
+        stream: new AgentEventStream({
+          runId: input.runId,
+          rawStream: stream.fullStream,
+          result,
+          getRun: () => this.getRun(input.runId),
+          initialEvents: [{
+            type: AgentEventType.ApprovalResolved,
+            approvals: serializeApprovalResponses(approvalResponses),
+          }],
+          stepOffset: claim.record.stepsCompleted,
+        }),
+        result,
+      };
     } catch (error) {
       await this.markRunFailed(input.runId, error);
       clearRunController(input.runId);
       throw error;
     }
-
-    const stream = streamText(buildModelRequest(prepared));
-    const result = Promise.all([
-      stream.text,
-      stream.responseMessages,
-      stream.toolCalls,
-      stream.toolResults,
-      stream.content,
-      stream.steps,
-    ])
-      .then(async ([text, responseMessages, toolCalls, toolResults, content, steps]) => {
-        const output = createAgentRunResult(
-          prepared,
-          text,
-          responseMessages as ModelMessage[],
-          toolCalls,
-          toolResults,
-          content,
-          claim.record.stepsCompleted + steps.length,
-        );
-        await this.persistResult(output);
-        clearRunController(input.runId);
-        return output;
-      })
-      .catch(async (error) => {
-        await this.markRunFailed(input.runId, error);
-        clearRunController(input.runId);
-        throw error;
-      });
-
-    return { stream: stream.fullStream, result };
   }
 
   async stop(runId: string): Promise<void> {
@@ -300,10 +221,14 @@ export class AgentDock {
     }
 
     stopRunController(runId);
-    await this.runStore.update(runId, {
-      status: "cancelled",
-      pendingApprovals: [],
-    });
+    await this.runStore.transition(
+      runId,
+      ["running", "waiting_for_approval"],
+      {
+        status: "cancelled",
+        pendingApprovals: [],
+      },
+    );
   }
 
   private buildRunOptions(options: AgentDockRunOptions): RunAgentOptions {
@@ -340,31 +265,75 @@ export class AgentDock {
     });
   }
 
-  private async persistResult(result: AgentRunResult): Promise<void> {
-    const current = await this.runStore.get(result.runId);
-    if (current?.status === "cancelled") {
-      result.status = "cancelled";
-      return;
-    }
+  private createStreamResult(
+    stream: ReturnType<typeof streamText>,
+    prepared: Awaited<ReturnType<typeof prepareAgentRunFromHistory>>,
+    runId: string,
+    stepsCompleted: number,
+  ): Promise<AgentRunResult> {
+    return Promise.all([
+      stream.text,
+      stream.responseMessages,
+      stream.toolCalls,
+      stream.toolResults,
+      stream.content,
+      stream.steps,
+    ])
+      .then(async ([text, responseMessages, toolCalls, toolResults, content, steps]) => {
+        const output = createAgentRunResult(
+          prepared,
+          text,
+          responseMessages as ModelMessage[],
+          toolCalls,
+          toolResults,
+          content,
+          stepsCompleted + steps.length,
+        );
+        await this.persistResult(output);
+        clearRunController(runId);
+        return output;
+      })
+      .catch(async (error) => {
+        await this.markRunFailed(runId, error);
+        clearRunController(runId);
+        throw error;
+      });
+  }
 
+  private async persistResult(result: AgentRunResult): Promise<void> {
     const waitingForApproval = result.approvalRequests.length > 0;
-    await this.runStore.update(result.runId, {
+    const persisted = await this.runStore.transition(result.runId, "running", {
       status: waitingForApproval ? "waiting_for_approval" : "completed",
       messages: result.messages,
       pendingApprovals: result.approvalRequests,
       stepsCompleted: result.stepsCompleted,
     });
+
+    if (!persisted) {
+      const current = await this.runStore.get(result.runId);
+      if (current?.status === "cancelled") {
+        result.status = "cancelled";
+        return;
+      }
+      throw new Error(`Agent run is no longer active: ${result.runId}`);
+    }
+
     result.status = waitingForApproval ? "waiting_for_approval" : "completed";
   }
 
   private async markRunFailed(runId: string, error: unknown): Promise<void> {
-    const current = await this.runStore.get(runId);
-    if (!current || current.status === "cancelled") return;
-
-    await this.runStore.update(runId, {
+    const failed = await this.runStore.transition(runId, "running", {
       status: "failed",
       error: error instanceof Error ? error.message : "Agent run failed",
     });
+
+    if (!failed) {
+      const current = await this.runStore.get(runId);
+      if (current?.status === "cancelled") return;
+      if (!current) return;
+      if (current.status === "failed") return;
+      throw new Error(`Agent run is no longer active: ${runId}`);
+    }
   }
 
   private async claimApprovalRun(
@@ -385,28 +354,32 @@ function buildApprovalHistory(
   claim: AgentRunApprovalClaim,
   decisions: ToolApprovalDecision[],
 ): AgentRunRecord["messages"] {
-  const decisionsById = new Map(
-    decisions.map((decision) => [decision.approvalId, decision]),
-  );
-  const approvalResponses: ToolApprovalResponse[] = claim.approvals.map(
-    (approval) => {
-      const decision = decisionsById.get(approval.approvalId)!;
-      return {
-        approvalId: approval.approvalId,
-        toolCall: approval.toolCall,
-        approved: decision.approved,
-        ...(decision.reason ? { reason: decision.reason } : {}),
-      };
-    },
-  );
-
   return [
     ...claim.record.messages,
     {
       role: "tool",
       content: "",
       toolResults: [],
-      approvalResponses,
+      approvalResponses: buildApprovalResponses(claim, decisions),
     },
   ];
+}
+
+function buildApprovalResponses(
+  claim: AgentRunApprovalClaim,
+  decisions: ToolApprovalDecision[],
+): ToolApprovalResponse[] {
+  const decisionsById = new Map(
+    decisions.map((decision) => [decision.approvalId, decision]),
+  );
+
+  return claim.approvals.map((approval) => {
+    const decision = decisionsById.get(approval.approvalId)!;
+    return {
+      approvalId: approval.approvalId,
+      toolCall: approval.toolCall,
+      approved: decision.approved,
+      ...(decision.reason ? { reason: decision.reason } : {}),
+    };
+  });
 }

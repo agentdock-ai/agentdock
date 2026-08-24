@@ -35,6 +35,15 @@ export interface AgentRunStore {
     update: Partial<AgentRunRecord>,
   ): Promise<void> | void;
   /**
+   * Atomically applies an update only when the run is currently in one of the
+   * expected statuses.
+   */
+  transition(
+    runId: string,
+    expectedStatus: AgentRunStatus | AgentRunStatus[],
+    update: Partial<AgentRunRecord>,
+  ): Promise<boolean> | boolean;
+  /**
    * Atomically claims the complete set of pending approvals for a run.
    * Returns null when the run is missing, no longer waits for approval, or the
    * supplied approval IDs do not match exactly.
@@ -65,6 +74,27 @@ export class InMemoryAgentRunStore implements AgentRunStore {
       ...update,
       updatedAt: Date.now(),
     }));
+  }
+
+  transition(
+    runId: string,
+    expectedStatus: AgentRunStatus | AgentRunStatus[],
+    update: Partial<AgentRunRecord>,
+  ): boolean {
+    const current = this.runs.get(runId);
+    if (!current) return false;
+
+    const expected = Array.isArray(expectedStatus)
+      ? expectedStatus
+      : [expectedStatus];
+    if (!expected.includes(current.status)) return false;
+
+    this.runs.set(runId, cloneRecord({
+      ...current,
+      ...update,
+      updatedAt: Date.now(),
+    }));
+    return true;
   }
 
   claimApprovals(

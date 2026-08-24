@@ -1,4 +1,5 @@
 export * from "./agent-dock.js";
+export * from "./events.js";
 export type {
   AgentContext,
   AgentRunResult,
