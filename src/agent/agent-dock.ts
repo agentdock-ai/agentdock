@@ -294,10 +294,32 @@ export class AgentDock {
         return output;
       })
       .catch(async (error) => {
+        const current = await this.runStore.get(runId);
+        if (current?.status === "cancelled") {
+          clearRunController(runId);
+          return this.createCancelledResult(prepared, stepsCompleted);
+        }
+
         await this.markRunFailed(runId, error);
         clearRunController(runId);
         throw error;
       });
+  }
+
+  private createCancelledResult(
+    prepared: Awaited<ReturnType<typeof prepareAgentRunFromHistory>>,
+    stepsCompleted: number,
+  ): AgentRunResult {
+    return createAgentRunResult(
+      prepared,
+      "",
+      [],
+      [],
+      [],
+      [],
+      stepsCompleted,
+      "cancelled",
+    );
   }
 
   private async persistResult(result: AgentRunResult): Promise<void> {
