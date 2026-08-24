@@ -4,7 +4,6 @@ import type {
   ToolSet,
 } from "ai";
 import { stepCountIs } from "ai";
-import { defaultToolRegistry } from "../../tools/registry.js";
 import type { ToolRegistry } from "../../tools/registry.js";
 import type { AgentHooks } from "../hooks.js";
 import type { Message } from "../memory.js";
@@ -68,7 +67,10 @@ export async function prepareAgentRunFromHistory(
   if (options.compression?.shouldCompress(history)) {
     await options.compression.compress(history);
   }
-  const registry = options.registry ?? defaultToolRegistry;
+  if (!options.registry) {
+    throw new Error("No tool registry configured.");
+  }
+  const registry = options.registry;
   const tools = buildToolSet(
     registry,
     ctx,

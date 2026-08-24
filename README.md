@@ -11,13 +11,14 @@
 
 <br />
 
-This package provides a generic agent loop, tool registry, and provider helper. Product-specific tools, prompts, and authorization stay in the consuming app.
+This package provides a single `AgentDock` runtime for backend applications. Product-specific tools, prompts, authorization, and persistence stay in the consuming app.
 
 ## ✨ Features
 
-- **Generic Agent Loop:** Standardized loop for building robust agent workflows.
-- **Tool Registry:** Easily register, manage, and distribute tools for your agents.
-- **Provider Helpers:** Built-in helpers for AI SDK providers (e.g., OpenRouter).
+- **Agent Runtime:** Run, stream, resume approvals, and cancel agent runs.
+- **Tool Registry:** Register and manage tools per `AgentDock` instance.
+- **Run Store:** Inject in-memory or durable run persistence.
+- **Provider Helpers:** Built-in helpers for AI SDK providers such as OpenRouter.
 - **TypeScript First:** Fully typed for safe, scalable, and rapid development.
 
 ## 🚀 Setup
@@ -51,13 +52,35 @@ yarn pack:artifact
 
 ## 🛠️ Usage
 
-Import the necessary functions from the package to start building your agent infrastructure:
+Create one configured `AgentDock` instance for your backend application:
 
 ```ts
 import {
-  createToolRegistry,
-  runAgent,
+  AgentDock,
+  ToolRegistry,
+  InMemoryAgentRunStore,
+  createOpenRouterModel,
 } from "agentdock";
 
-// Add your specific implementation here...
+const agent = new AgentDock({
+  model: createOpenRouterModel({ modelId: "your-model-id" }),
+  registry: new ToolRegistry(),
+  runStore: new InMemoryAgentRunStore(),
+});
+
+agent.registerTool({
+  name: "get_weather",
+  description: "Get the current weather for a city.",
+  parameters: {
+    type: "object",
+    properties: { city: { type: "string" } },
+    required: ["city"],
+    additionalProperties: false,
+  },
+  execute: async ({ input }) => ({ city: input.city, temperature: 22 }),
+});
+
+const result = await agent.run("What is the weather in Lahore?", {
+  userId: "user-123",
+});
 ```

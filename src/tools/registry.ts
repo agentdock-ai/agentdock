@@ -39,25 +39,3 @@ export class ToolRegistry {
     this.tools.clear();
   }
 }
-
-export const defaultToolRegistry = new ToolRegistry();
-
-export function createToolRegistry(): ToolRegistry {
-  return new ToolRegistry();
-}
-
-export function registerTool(tool: Tool): void {
-  defaultToolRegistry.register(tool);
-}
-
-export function getTool(name: string): Tool | undefined {
-  return defaultToolRegistry.get(name);
-}
-
-export function getTools(): Tool[] {
-  return defaultToolRegistry.list();
-}
-
-export function getToolSchemas(): ToolSchema[] {
-  return defaultToolRegistry.schemas();
-}

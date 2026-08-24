@@ -95,8 +95,6 @@ export class InMemoryAgentRunStore implements AgentRunStore {
   }
 }
 
-export const defaultAgentRunStore = new InMemoryAgentRunStore();
-
 function cloneRecord(record: AgentRunRecord): AgentRunRecord {
   return structuredClone(record);
 }

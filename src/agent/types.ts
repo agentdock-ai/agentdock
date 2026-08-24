@@ -7,7 +7,7 @@ import type {
   ToolApprovalRequest,
   ToolPermissionMode,
 } from "./permissions/types.js";
-import type { AgentRunStore, AgentRunStatus } from "./runs/store.js";
+import type { AgentRunStatus } from "./runs/store.js";
 
 export interface AgentContext {
   [key: string]: unknown;
@@ -75,7 +75,6 @@ export interface StreamAgentResult {
 }
 
 export interface RunAgentOptions {
-  runStore?: AgentRunStore;
   runId?: string;
   permissionMode?: ToolPermissionMode;
   maxSteps?: number;
