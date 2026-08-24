@@ -14,11 +14,23 @@ export interface AgentContext {
   organizationId: string;
 }
 
+export interface ToolAuthorizationInput {
+  toolCall: ToolCallRecord;
+  ctx: AgentContext;
+}
+
+export type ToolAuthorizationResult =
+  | { allowed: true }
+  | { allowed: false; reason: string };
+
 export interface Tool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
   requiresApproval?: boolean;
+  authorize?(
+    input: ToolAuthorizationInput,
+  ): ToolAuthorizationResult | Promise<ToolAuthorizationResult>;
   execute(input: ToolExecuteInput): Promise<unknown>;
 }
 

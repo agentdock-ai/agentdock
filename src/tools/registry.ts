@@ -4,6 +4,7 @@ export interface ToolSchema {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  requiresApproval: boolean;
 }
 
 export class ToolRegistry {
@@ -30,6 +31,7 @@ export class ToolRegistry {
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,
+      requiresApproval: tool.requiresApproval ?? false,
     }));
   }
 

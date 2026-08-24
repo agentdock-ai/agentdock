@@ -109,8 +109,6 @@ export function buildModelRequest(prepared: PreparedAgentRun) {
     tools: prepared.tools,
     stopWhen: stepCountIs(prepared.maxSteps),
     toolApproval: async ({ toolCall }: any): Promise<any> => {
-      if (prepared.permissionMode === "approve_all") return "approved";
-
       const tool = prepared.registry.get(toolCall.toolName);
       if (!tool) {
         return {
@@ -119,6 +117,33 @@ export function buildModelRequest(prepared: PreparedAgentRun) {
         };
       }
 
+      if (tool.authorize) {
+        let authorization;
+        try {
+          authorization = await tool.authorize({
+            toolCall: {
+              toolCallId: toolCall.toolCallId,
+              name: toolCall.toolName,
+              input: toolCall.input,
+            },
+            ctx: prepared.ctx,
+          });
+        } catch {
+          return {
+            type: "denied",
+            reason: "Tool authorization check failed",
+          };
+        }
+
+        if (!authorization.allowed) {
+          return {
+            type: "denied",
+            reason: authorization.reason,
+          };
+        }
+      }
+
+      if (prepared.permissionMode === "approve_all") return "approved";
       return tool.requiresApproval ? "user-approval" : "approved";
     },
     ...(prepared.abortSignal ? { abortSignal: prepared.abortSignal } : {}),
