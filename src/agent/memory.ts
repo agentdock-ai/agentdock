@@ -2,7 +2,7 @@ import type { ToolCallRecord, ToolResultRecord } from "./types.js";
 import type { ToolApprovalRequest, ToolApprovalResponse } from "./permissions/types.js";
 
 export type Message =
-  | { role: "user"; content: string; id?: string; userId?: string | null; active?: boolean; compacted?: boolean }
+  | { role: "user"; content: string; id?: string; active?: boolean; compacted?: boolean }
   | {
       role: "assistant";
       content: string;

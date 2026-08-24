@@ -48,7 +48,7 @@ export async function runAgent(
     throw error;
   }
 
-  await saveRunningRun(store, runId, ctx, prepared.history);
+  await saveRunningRun(store, runId, prepared.history);
 
   try {
     const result = await generateText(buildModelRequest(prepared));
@@ -61,7 +61,7 @@ export async function runAgent(
       result.content,
       result.steps.length,
     );
-    await persistResult(store, ctx, output);
+    await persistResult(store, output);
     return output;
   } catch (error) {
     await markRunFailed(store, runId, error);
@@ -91,7 +91,7 @@ export async function streamAgent(
     throw error;
   }
 
-  await saveRunningRun(store, runId, ctx, prepared.history);
+  await saveRunningRun(store, runId, prepared.history);
   const stream = streamText(buildModelRequest(prepared));
 
   const result = Promise.all([
@@ -111,7 +111,7 @@ export async function streamAgent(
       content,
       steps.length,
     );
-    await persistResult(store, ctx, output);
+    await persistResult(store, output);
     clearRunController(runId);
     return output;
   }).catch(async (error) => {
@@ -132,7 +132,7 @@ export async function resumeAgent(
   options: RunAgentOptions = {},
 ): Promise<AgentRunResult> {
   const store = getStore(options);
-  const claim = await claimApprovalRun(store, input.runId, input.approvals, ctx);
+  const claim = await claimApprovalRun(store, input.runId, input.approvals);
   const history = buildApprovalHistory(claim, input.approvals);
   const runAbortSignal = createRunAbortSignal(input.runId, options.abortSignal);
 
@@ -154,7 +154,7 @@ export async function resumeAgent(
       result.content,
       claim.record.stepsCompleted + result.steps.length,
     );
-    await persistResult(store, ctx, output);
+    await persistResult(store, output);
     return output;
   } catch (error) {
     await markRunFailed(store, input.runId, error);
@@ -173,7 +173,7 @@ export async function resumeStreamAgent(
   options: RunAgentOptions = {},
 ): Promise<StreamAgentResult> {
   const store = getStore(options);
-  const claim = await claimApprovalRun(store, input.runId, input.approvals, ctx);
+  const claim = await claimApprovalRun(store, input.runId, input.approvals);
   const history = buildApprovalHistory(claim, input.approvals);
   const runAbortSignal = createRunAbortSignal(input.runId, options.abortSignal);
 
@@ -210,7 +210,7 @@ export async function resumeStreamAgent(
       content,
       claim.record.stepsCompleted + steps.length,
     );
-    await persistResult(store, ctx, output);
+    await persistResult(store, output);
     clearRunController(input.runId);
     return output;
   }).catch(async (error) => {
@@ -224,11 +224,12 @@ export async function resumeStreamAgent(
 
 export async function stopAgent(
   runId: string,
-  ctx: AgentContext,
+  _ctx: AgentContext,
   options: Pick<RunAgentOptions, "runStore"> = {},
 ): Promise<void> {
   const store = options.runStore ?? defaultAgentRunStore;
-  const record = await requireOwnedRun(store, runId, ctx);
+  const record = await store.get(runId);
+  if (!record) throw new Error(`Agent run not found: ${runId}`);
   if (record.status === "completed" || record.status === "failed" || record.status === "cancelled") {
     return;
   }
@@ -250,13 +251,10 @@ function createRunAbortSignal(runId: string, callerSignal?: AbortSignal): AbortS
 async function saveRunningRun(
   store: AgentRunStore,
   runId: string,
-  ctx: AgentContext,
   messages: AgentRunRecord["messages"],
 ): Promise<void> {
   await store.save({
     runId,
-    userId: ctx.userId,
-    organizationId: ctx.organizationId,
     status: "running",
     messages,
     pendingApprovals: [],
@@ -268,12 +266,9 @@ async function saveRunningRun(
 
 async function persistResult(
   store: AgentRunStore,
-  ctx: AgentContext,
   result: AgentRunResult,
 ): Promise<void> {
   await store.update(result.runId, {
-    userId: ctx.userId,
-    organizationId: ctx.organizationId,
     status: result.approvalRequests.length > 0
       ? "waiting_for_approval"
       : "completed",
@@ -299,28 +294,12 @@ async function markRunFailed(
   });
 }
 
-async function requireOwnedRun(
-  store: AgentRunStore,
-  runId: string,
-  ctx: AgentContext,
-): Promise<AgentRunRecord> {
-  const record = await store.get(runId);
-  if (!record) throw new Error(`Agent run not found: ${runId}`);
-  if (record.userId !== ctx.userId || record.organizationId !== ctx.organizationId) {
-    throw new Error("Agent run does not belong to this context");
-  }
-  return record;
-}
-
 async function claimApprovalRun(
   store: AgentRunStore,
   runId: string,
   decisions: ToolApprovalDecision[],
-  ctx: AgentContext,
 ): Promise<AgentRunApprovalClaim> {
-  await requireOwnedRun(store, runId, ctx);
-
-  const claim = await store.claimApprovals(runId, decisions, ctx);
+  const claim = await store.claimApprovals(runId, decisions);
   if (!claim) {
     throw new Error(
       `Agent run approval claim failed: ${runId} is no longer waiting for the supplied approvals`,

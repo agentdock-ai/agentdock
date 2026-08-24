@@ -10,8 +10,7 @@ import type {
 import type { AgentRunStore, AgentRunStatus } from "./runs/store.js";
 
 export interface AgentContext {
-  userId: string;
-  organizationId: string;
+  [key: string]: unknown;
 }
 
 export interface ToolAuthorizationInput {

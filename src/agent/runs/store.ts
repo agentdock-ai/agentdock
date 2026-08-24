@@ -13,8 +13,6 @@ export type AgentRunStatus =
 
 export interface AgentRunRecord {
   runId: string;
-  userId: string;
-  organizationId: string;
   status: AgentRunStatus;
   messages: Message[];
   pendingApprovals: ToolApprovalRequest[];
@@ -38,13 +36,12 @@ export interface AgentRunStore {
   ): Promise<void> | void;
   /**
    * Atomically claims the complete set of pending approvals for a run.
-   * Returns null when the run is missing, not owned by the caller, no longer
-   * waits for approval, or the supplied approval IDs do not match exactly.
+   * Returns null when the run is missing, no longer waits for approval, or the
+   * supplied approval IDs do not match exactly.
    */
   claimApprovals(
     runId: string,
     decisions: ToolApprovalDecision[],
-    owner: Pick<AgentRunRecord, "userId" | "organizationId">,
   ): Promise<AgentRunApprovalClaim | null> | AgentRunApprovalClaim | null;
 }
 
@@ -73,14 +70,11 @@ export class InMemoryAgentRunStore implements AgentRunStore {
   claimApprovals(
     runId: string,
     decisions: ToolApprovalDecision[],
-    owner: Pick<AgentRunRecord, "userId" | "organizationId">,
   ): AgentRunApprovalClaim | null {
     const current = this.runs.get(runId);
 
     if (
       !current ||
-      current.userId !== owner.userId ||
-      current.organizationId !== owner.organizationId ||
       current.status !== "waiting_for_approval" ||
       !hasExactApprovalSet(current.pendingApprovals, decisions)
     ) {
