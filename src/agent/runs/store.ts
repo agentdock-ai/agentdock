@@ -1,5 +1,8 @@
 import type { Message } from "../memory.js";
-import type { ToolApprovalRequest } from "../permissions/types.js";
+import type {
+  ToolApprovalDecision,
+  ToolApprovalRequest,
+} from "../permissions/types.js";
 
 export type AgentRunStatus =
   | "running"
@@ -21,6 +24,11 @@ export interface AgentRunRecord {
   error?: string;
 }
 
+export interface AgentRunApprovalClaim {
+  record: AgentRunRecord;
+  approvals: ToolApprovalRequest[];
+}
+
 export interface AgentRunStore {
   get(runId: string): Promise<AgentRunRecord | null> | AgentRunRecord | null;
   save(record: AgentRunRecord): Promise<void> | void;
@@ -28,6 +36,16 @@ export interface AgentRunStore {
     runId: string,
     update: Partial<AgentRunRecord>,
   ): Promise<void> | void;
+  /**
+   * Atomically claims the complete set of pending approvals for a run.
+   * Returns null when the run is missing, not owned by the caller, no longer
+   * waits for approval, or the supplied approval IDs do not match exactly.
+   */
+  claimApprovals(
+    runId: string,
+    decisions: ToolApprovalDecision[],
+    owner: Pick<AgentRunRecord, "userId" | "organizationId">,
+  ): Promise<AgentRunApprovalClaim | null> | AgentRunApprovalClaim | null;
 }
 
 export class InMemoryAgentRunStore implements AgentRunStore {
@@ -51,10 +69,54 @@ export class InMemoryAgentRunStore implements AgentRunStore {
       updatedAt: Date.now(),
     }));
   }
+
+  claimApprovals(
+    runId: string,
+    decisions: ToolApprovalDecision[],
+    owner: Pick<AgentRunRecord, "userId" | "organizationId">,
+  ): AgentRunApprovalClaim | null {
+    const current = this.runs.get(runId);
+
+    if (
+      !current ||
+      current.userId !== owner.userId ||
+      current.organizationId !== owner.organizationId ||
+      current.status !== "waiting_for_approval" ||
+      !hasExactApprovalSet(current.pendingApprovals, decisions)
+    ) {
+      return null;
+    }
+
+    const approvals = structuredClone(current.pendingApprovals);
+    const claimedRecord = cloneRecord({
+      ...current,
+      status: "running",
+      pendingApprovals: [],
+      updatedAt: Date.now(),
+    });
+
+    this.runs.set(runId, claimedRecord);
+
+    return { record: claimedRecord, approvals };
+  }
 }
 
 export const defaultAgentRunStore = new InMemoryAgentRunStore();
 
 function cloneRecord(record: AgentRunRecord): AgentRunRecord {
   return structuredClone(record);
+}
+
+function hasExactApprovalSet(
+  pendingApprovals: ToolApprovalRequest[],
+  decisions: ToolApprovalDecision[],
+): boolean {
+  if (pendingApprovals.length === 0 || pendingApprovals.length !== decisions.length) {
+    return false;
+  }
+
+  const decisionIds = new Set(decisions.map((decision) => decision.approvalId));
+  if (decisionIds.size !== decisions.length) return false;
+
+  return pendingApprovals.every((request) => decisionIds.has(request.approvalId));
 }

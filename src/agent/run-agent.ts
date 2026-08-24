@@ -12,11 +12,15 @@ import {
 } from "./runs/runtime.js";
 import {
   defaultAgentRunStore,
+  type AgentRunApprovalClaim,
   type AgentRunRecord,
   type AgentRunStore,
   type AgentRunStatus,
 } from "./runs/store.js";
-import type { ToolApprovalResponse } from "./permissions/types.js";
+import type {
+  ToolApprovalDecision,
+  ToolApprovalResponse,
+} from "./permissions/types.js";
 import type {
   AgentContext,
   AgentRunResult,
@@ -122,50 +126,24 @@ export async function streamAgent(
 export async function resumeAgent(
   input: {
     runId: string;
-    approvalId: string;
-    approved: boolean;
-    reason?: string;
+    approvals: ToolApprovalDecision[];
   },
   ctx: AgentContext,
   options: RunAgentOptions = {},
 ): Promise<AgentRunResult> {
   const store = getStore(options);
-  const record = await requireOwnedRun(store, input.runId, ctx);
-  validateApproval(record, input.approvalId);
-
-  const approval = record.pendingApprovals.find(
-    (request) => request.approvalId === input.approvalId,
-  )!;
-  const approvalResponse: ToolApprovalResponse = {
-    approvalId: input.approvalId,
-    toolCall: approval.toolCall,
-    approved: input.approved,
-    ...(input.reason ? { reason: input.reason } : {}),
-  };
-  const history = [
-    ...record.messages,
-    {
-      role: "tool" as const,
-      content: "",
-      toolResults: [],
-      approvalResponses: [approvalResponse],
-    },
-  ];
-
+  const claim = await claimApprovalRun(store, input.runId, input.approvals, ctx);
+  const history = buildApprovalHistory(claim, input.approvals);
   const runAbortSignal = createRunAbortSignal(input.runId, options.abortSignal);
-  const prepared = await prepareAgentRunFromHistory(
-    history,
-    ctx,
-    { ...options, runId: input.runId, abortSignal: runAbortSignal },
-    record.stepsCompleted,
-  );
-  await store.update(input.runId, {
-    status: "running",
-    pendingApprovals: [],
-    messages: history,
-  });
 
   try {
+    const prepared = await prepareAgentRunFromHistory(
+      history,
+      ctx,
+      { ...options, runId: input.runId, abortSignal: runAbortSignal },
+      claim.record.stepsCompleted,
+    );
+    await store.update(input.runId, { messages: history });
     const result = await generateText(buildModelRequest(prepared));
     const output = createAgentRunResult(
       prepared,
@@ -174,7 +152,7 @@ export async function resumeAgent(
       result.toolCalls,
       result.toolResults,
       result.content,
-      record.stepsCompleted + result.steps.length,
+      claim.record.stepsCompleted + result.steps.length,
     );
     await persistResult(store, ctx, output);
     return output;
@@ -189,48 +167,30 @@ export async function resumeAgent(
 export async function resumeStreamAgent(
   input: {
     runId: string;
-    approvalId: string;
-    approved: boolean;
-    reason?: string;
+    approvals: ToolApprovalDecision[];
   },
   ctx: AgentContext,
   options: RunAgentOptions = {},
 ): Promise<StreamAgentResult> {
   const store = getStore(options);
-  const record = await requireOwnedRun(store, input.runId, ctx);
-  validateApproval(record, input.approvalId);
-
-  const approval = record.pendingApprovals.find(
-    (request) => request.approvalId === input.approvalId,
-  )!;
-  const approvalResponse: ToolApprovalResponse = {
-    approvalId: input.approvalId,
-    toolCall: approval.toolCall,
-    approved: input.approved,
-    ...(input.reason ? { reason: input.reason } : {}),
-  };
-  const history = [
-    ...record.messages,
-    {
-      role: "tool" as const,
-      content: "",
-      toolResults: [],
-      approvalResponses: [approvalResponse],
-    },
-  ];
-
+  const claim = await claimApprovalRun(store, input.runId, input.approvals, ctx);
+  const history = buildApprovalHistory(claim, input.approvals);
   const runAbortSignal = createRunAbortSignal(input.runId, options.abortSignal);
-  const prepared = await prepareAgentRunFromHistory(
-    history,
-    ctx,
-    { ...options, runId: input.runId, abortSignal: runAbortSignal },
-    record.stepsCompleted,
-  );
-  await store.update(input.runId, {
-    status: "running",
-    pendingApprovals: [],
-    messages: history,
-  });
+
+  let prepared;
+  try {
+    prepared = await prepareAgentRunFromHistory(
+      history,
+      ctx,
+      { ...options, runId: input.runId, abortSignal: runAbortSignal },
+      claim.record.stepsCompleted,
+    );
+    await store.update(input.runId, { messages: history });
+  } catch (error) {
+    await markRunFailed(store, input.runId, error);
+    clearRunController(input.runId);
+    throw error;
+  }
 
   const stream = streamText(buildModelRequest(prepared));
   const result = Promise.all([
@@ -248,7 +208,7 @@ export async function resumeStreamAgent(
       toolCalls,
       toolResults,
       content,
-      record.stepsCompleted + steps.length,
+      claim.record.stepsCompleted + steps.length,
     );
     await persistResult(store, ctx, output);
     clearRunController(input.runId);
@@ -352,11 +312,50 @@ async function requireOwnedRun(
   return record;
 }
 
-function validateApproval(record: AgentRunRecord, approvalId: string): void {
-  if (record.status !== "waiting_for_approval") {
-    throw new Error(`Agent run is not waiting for approval: ${record.runId}`);
+async function claimApprovalRun(
+  store: AgentRunStore,
+  runId: string,
+  decisions: ToolApprovalDecision[],
+  ctx: AgentContext,
+): Promise<AgentRunApprovalClaim> {
+  await requireOwnedRun(store, runId, ctx);
+
+  const claim = await store.claimApprovals(runId, decisions, ctx);
+  if (!claim) {
+    throw new Error(
+      `Agent run approval claim failed: ${runId} is no longer waiting for the supplied approvals`,
+    );
   }
-  if (!record.pendingApprovals.some((request) => request.approvalId === approvalId)) {
-    throw new Error(`Approval request not found: ${approvalId}`);
-  }
+
+  return claim;
+}
+
+function buildApprovalHistory(
+  claim: AgentRunApprovalClaim,
+  decisions: ToolApprovalDecision[],
+): AgentRunRecord["messages"] {
+  const decisionsById = new Map(
+    decisions.map((decision) => [decision.approvalId, decision]),
+  );
+  const approvalResponses: ToolApprovalResponse[] = claim.approvals.map(
+    (approval) => {
+      const decision = decisionsById.get(approval.approvalId)!;
+      return {
+        approvalId: approval.approvalId,
+        toolCall: approval.toolCall,
+        approved: decision.approved,
+        ...(decision.reason ? { reason: decision.reason } : {}),
+      };
+    },
+  );
+
+  return [
+    ...claim.record.messages,
+    {
+      role: "tool" as const,
+      content: "",
+      toolResults: [],
+      approvalResponses,
+    },
+  ];
 }
