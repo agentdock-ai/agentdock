@@ -6,7 +6,6 @@ import type { ToolRegistry } from "../tools/registry.js";
 import type {
   ToolApprovalRequest,
   ToolPermissionMode,
-  ToolPermissionPolicy,
 } from "./permissions/types.js";
 import type { AgentRunStore, AgentRunStatus } from "./runs/store.js";
 
@@ -19,6 +18,7 @@ export interface Tool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  requiresApproval?: boolean;
   execute(input: ToolExecuteInput): Promise<unknown>;
 }
 
@@ -67,7 +67,6 @@ export interface RunAgentOptions {
   runStore?: AgentRunStore;
   runId?: string;
   permissionMode?: ToolPermissionMode;
-  permissionPolicy?: ToolPermissionPolicy;
   maxSteps?: number;
   systemPrompt?: string;
   model?: LanguageModel;

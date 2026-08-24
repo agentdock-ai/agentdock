@@ -9,7 +9,6 @@ import type { ToolRegistry } from "../../tools/registry.js";
 import type { AgentHooks } from "../hooks.js";
 import type { Message } from "../memory.js";
 import type { AgentContext, RunAgentOptions, ToolErrorRecord } from "../types.js";
-import type { ToolPermissionDecision } from "../permissions/types.js";
 import { normalizeToolCalls, toModelInput } from "./messages.js";
 import { buildToolSet } from "./tools.js";
 
@@ -26,7 +25,6 @@ export interface PreparedAgentRun {
   toolErrors: ToolErrorRecord[];
   tools: ToolSet;
   permissionMode: NonNullable<RunAgentOptions["permissionMode"]>;
-  permissionPolicy: RunAgentOptions["permissionPolicy"];
   registry: ToolRegistry;
   ctx: AgentContext;
 }
@@ -67,11 +65,6 @@ export async function prepareAgentRunFromHistory(
     );
   }
   const permissionMode = options.permissionMode ?? "normal";
-  if (permissionMode === "normal" && !options.permissionPolicy) {
-    throw new Error(
-      "permissionPolicy is required when permissionMode is \"normal\"",
-    );
-  }
   if (options.compression?.shouldCompress(history)) {
     await options.compression.compress(history);
   }
@@ -104,7 +97,6 @@ export async function prepareAgentRunFromHistory(
     toolErrors,
     tools,
     permissionMode,
-    permissionPolicy: options.permissionPolicy,
     registry,
     ctx,
   };
@@ -127,29 +119,7 @@ export function buildModelRequest(prepared: PreparedAgentRun) {
         };
       }
 
-      let decision: ToolPermissionDecision;
-      try {
-        decision = await prepared.permissionPolicy!.check({
-          tool,
-          toolCall: {
-            toolCallId: toolCall.toolCallId,
-            name: toolCall.toolName,
-            input: toolCall.input,
-          },
-          ctx: prepared.ctx,
-        });
-      } catch {
-        return {
-          type: "denied",
-          reason: "Tool permission check failed",
-        };
-      }
-
-      if (decision.type === "allow") return "approved";
-      if (decision.type === "deny") {
-        return { type: "denied", reason: decision.reason };
-      }
-      return "user-approval";
+      return tool.requiresApproval ? "user-approval" : "approved";
     },
     ...(prepared.abortSignal ? { abortSignal: prepared.abortSignal } : {}),
     onStepStart: ({ stepNumber }: { stepNumber: number }) =>
