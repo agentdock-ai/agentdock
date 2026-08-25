@@ -17,7 +17,7 @@ function getEnv(name: string): string | undefined {
 export function createOpenRouterModel(
   options: OpenRouterModelOptions,
 ): LanguageModel {
-  if (!options.modelId) {
+  if (!options.modelId.trim()) {
     throw new Error(
       "OPENROUTER modelId is required. Provide an explicit model ID.",
     );

@@ -58,13 +58,17 @@ Create one configured `AgentDock` instance for your backend application:
 ```ts
 import {
   AgentDock,
+  AgentModelFactory,
   ToolRegistry,
   InMemoryAgentRunStore,
-  createOpenRouterModel,
 } from "agentdock";
 
+const modelFactory = new AgentModelFactory();
 const agent = new AgentDock({
-  model: createOpenRouterModel({ modelId: "your-model-id" }),
+  model: modelFactory.create({
+    provider: "openrouter",
+    modelId: "your-model-id",
+  }),
   registry: new ToolRegistry(),
   runStore: new InMemoryAgentRunStore(),
 });
@@ -102,4 +106,30 @@ for await (const event of session.stream) {
 }
 
 const result = await session.result;
+```
+
+### Provider selection
+
+`AgentModelFactory` provides the supported model providers through one typed API.
+
+```ts
+import { AgentModelFactory } from "agentdock";
+
+const modelFactory = new AgentModelFactory();
+
+const model = modelFactory.create({
+  provider: "ollama",
+  modelId: "llama3.2",
+  // Optional when Ollama is not running on the default local host.
+  baseURL: "http://localhost:11434",
+});
+```
+
+For OpenRouter, use `provider: "openrouter"` and provide `modelId`. The API key
+can be passed explicitly or read from `OPENROUTER_API_KEY`.
+
+The permission demo supports both providers:
+
+```bash
+AGENTDOCK_PROVIDER=ollama AGENTDOCK_MODEL=llama3.2 yarn demo:permissions
 ```

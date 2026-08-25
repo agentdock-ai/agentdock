@@ -33,6 +33,14 @@
     "./providers/openrouter": {
       "types": "./dist/providers/openrouter.d.ts",
       "import": "./dist/providers/openrouter.js"
+    },
+    "./providers/ollama": {
+      "types": "./dist/providers/ollama.d.ts",
+      "import": "./dist/providers/ollama.js"
+    },
+    "./providers/factory": {
+      "types": "./dist/providers/factory.d.ts",
+      "import": "./dist/providers/factory.js"
     }
   },
   "files": [
@@ -43,6 +51,8 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "yarn build && node --test test/*.test.mjs",
+    "demo:permissions": "yarn build && node scripts/permission-demo.mjs",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn clean && yarn build",
     "prepare": "yarn build",
@@ -50,7 +60,8 @@
   },
   "dependencies": {
     "@openrouter/ai-sdk-provider": "^3.0.0",
-    "ai": "^7.0.47",
+    "ai": "^7.0.66",
+    "ai-sdk-ollama": "^4.0.0",
     "zod": "^3.24.3"
   },
   "devDependencies": {
