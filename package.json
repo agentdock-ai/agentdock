@@ -82,7 +82,6 @@
     "test:unit": "vitest run test/unit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "demo:permissions": "yarn build && node scripts/permission-demo.mjs",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn clean && yarn build",
     "prepare": "yarn build",
