@@ -1,52 +1,82 @@
 import type { LanguageModel } from "ai";
+import type { ModelProvider } from "./base.js";
 import {
-  createOpenRouterModel,
-  type OpenRouterModelOptions,
-} from "./openrouter.js";
+  AmazonBedrockModelProvider,
+  type AmazonBedrockModelOptions,
+} from "./bedrock.js";
 import {
-  createOllamaModel,
+  AnthropicModelProvider,
+  type AnthropicModelOptions,
+} from "./anthropic.js";
+import {
+  AzureModelProvider,
+  type AzureModelOptions,
+} from "./azure.js";
+import {
+  VercelGatewayModelProvider,
+  type VercelGatewayModelOptions,
+} from "./gateway.js";
+import {
+  GoogleModelProvider,
+  type GoogleModelOptions,
+} from "./google.js";
+import {
+  OllamaModelProvider,
   type OllamaModelOptions,
 } from "./ollama.js";
+import {
+  OpenAIModelProvider,
+  type OpenAIModelOptions,
+} from "./openai.js";
+import {
+  OpenRouterModelProvider,
+  type OpenRouterModelOptions,
+} from "./openrouter.js";
+import { XaiModelProvider, type XaiModelOptions } from "./xai.js";
 
-export type AgentModelConfig =
-  | ({ provider: "openrouter" } & OpenRouterModelOptions)
-  | ({ provider: "ollama" } & OllamaModelOptions);
-
-export interface AgentModelFactoryDependencies {
-  openrouter?: (options: OpenRouterModelOptions) => LanguageModel;
-  ollama?: (options: OllamaModelOptions) => LanguageModel;
+interface AgentModelOptionsByProvider {
+  openrouter: OpenRouterModelOptions;
+  ollama: OllamaModelOptions;
+  gateway: VercelGatewayModelOptions;
+  openai: OpenAIModelOptions;
+  anthropic: AnthropicModelOptions;
+  google: GoogleModelOptions;
+  xai: XaiModelOptions;
+  azure: AzureModelOptions;
+  "amazon-bedrock": AmazonBedrockModelOptions;
 }
+
+type AgentModelProviderName = keyof AgentModelOptionsByProvider;
+
+export type AgentModelConfig = {
+  [Provider in AgentModelProviderName]: {
+    provider: Provider;
+  } & AgentModelOptionsByProvider[Provider];
+}[AgentModelProviderName];
+
+type AgentModelProviders = {
+  [Provider in AgentModelProviderName]: ModelProvider<
+    AgentModelOptionsByProvider[Provider]
+  >;
+};
 
 export class AgentModelFactory {
-  private readonly openrouter: NonNullable<
-    AgentModelFactoryDependencies["openrouter"]
-  >;
+  private readonly providers = {
+    openrouter: new OpenRouterModelProvider(),
+    ollama: new OllamaModelProvider(),
+    gateway: new VercelGatewayModelProvider(),
+    openai: new OpenAIModelProvider(),
+    anthropic: new AnthropicModelProvider(),
+    google: new GoogleModelProvider(),
+    xai: new XaiModelProvider(),
+    azure: new AzureModelProvider(),
+    "amazon-bedrock": new AmazonBedrockModelProvider(),
+  } satisfies AgentModelProviders;
 
-  private readonly ollama: NonNullable<
-    AgentModelFactoryDependencies["ollama"]
-  >;
-
-  constructor(dependencies: AgentModelFactoryDependencies = {}) {
-    this.openrouter = dependencies.openrouter ?? createOpenRouterModel;
-    this.ollama = dependencies.ollama ?? createOllamaModel;
+  create<Provider extends AgentModelProviderName>(
+    config: { provider: Provider } & AgentModelOptionsByProvider[Provider],
+  ): LanguageModel {
+    const { provider, ...options } = config;
+    return this.providers[provider].create(options);
   }
-
-  create(config: AgentModelConfig): LanguageModel {
-    switch (config.provider) {
-      case "openrouter": {
-        const { provider: _, ...options } = config;
-        return this.openrouter(options);
-      }
-      case "ollama": {
-        const { provider: _, ...options } = config;
-        return this.ollama(options);
-      }
-      default:
-        return assertNever(config);
-    }
-  }
-}
-
-function assertNever(value: never): never {
-  throw new Error(`Unsupported model provider: ${String(value)}`);
 }

@@ -66,7 +66,7 @@ export async function prepareAgentRunFromHistory(
   }
   if (!options.model) {
     throw new Error(
-      "No model configured. Provide options.model, for example createOpenRouterModel({ modelId: \"your-model-id\" }).",
+      "No model configured. Provide options.model, for example new AgentModelFactory().create({ provider: \"openrouter\", modelId: \"your-model-id\" }).",
     );
   }
   const permissionMode = options.permissionMode ?? "normal";

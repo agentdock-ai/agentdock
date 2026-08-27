@@ -140,6 +140,8 @@ const result = await session.result;
 ### Provider selection
 
 `AgentModelFactory` provides the supported model providers through one typed API.
+The built-in provider identifiers are `openrouter`, `ollama`, `gateway`,
+`openai`, `anthropic`, `google`, `xai`, `azure`, and `amazon-bedrock`.
 
 ```ts
 import { AgentModelFactory } from "agentdock";
@@ -157,7 +159,23 @@ const model = modelFactory.create({
 For OpenRouter, use `provider: "openrouter"` and provide `modelId`. The API key
 can be passed explicitly or read from `OPENROUTER_API_KEY`.
 
-The permission demo supports both providers:
+The direct providers use their official AI SDK environment variables when an
+API key is not supplied in the configuration. Vercel AI Gateway uses
+`AI_GATEWAY_API_KEY`, and Amazon Bedrock can use its standard AWS credential
+environment and credential-chain configuration.
+
+For example, Vercel AI Gateway can route to a model from a supported upstream
+provider:
+
+```ts
+const model = modelFactory.create({
+  provider: "gateway",
+  modelId: "openai/gpt-4.1",
+});
+```
+
+The permission demo currently supports the local Ollama and OpenRouter
+providers:
 
 ```bash
 AGENTDOCK_PROVIDER=ollama AGENTDOCK_MODEL=llama3.2 yarn demo:permissions

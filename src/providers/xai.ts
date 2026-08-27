@@ -1,24 +1,24 @@
-import { createOllama } from "ai-sdk-ollama";
+import { createXai } from "@ai-sdk/xai";
 import type { LanguageModel } from "ai";
 import { BaseModelProvider } from "./base.js";
 
-export interface OllamaModelOptions {
+export interface XaiModelOptions {
   modelId: string;
-  baseURL?: string;
   apiKey?: string;
+  baseURL?: string;
   headers?: Record<string, string>;
 }
 
-export class OllamaModelProvider extends BaseModelProvider<OllamaModelOptions> {
-  readonly type = "ollama";
+export class XaiModelProvider extends BaseModelProvider<XaiModelOptions> {
+  readonly type = "xai";
 
   protected createLanguageModel(
     modelId: string,
-    options: OllamaModelOptions,
+    options: XaiModelOptions,
   ): LanguageModel {
-    const provider = createOllama({
-      ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+    const provider = createXai({
       ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+      ...(options.baseURL ? { baseURL: options.baseURL } : {}),
       ...(options.headers ? { headers: options.headers } : {}),
     });
 

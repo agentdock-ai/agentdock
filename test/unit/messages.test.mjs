@@ -141,6 +141,81 @@ test("toInternalMessages restores assistant calls, approvals, and tool results",
   ]);
 });
 
+test("approval responses survive the internal message round-trip", () => {
+  const modelMessages = [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "call-publish-report",
+          toolName: "publish_report",
+          input: { reportId: "report-monthly" },
+        },
+        {
+          type: "tool-approval-request",
+          approvalId: "approval-publish-report",
+          toolCallId: "call-publish-report",
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: [{
+        type: "tool-approval-response",
+        approvalId: "approval-publish-report",
+        approved: true,
+      }],
+    },
+  ];
+
+  const internalMessages = toInternalMessages(modelMessages);
+
+  assert.deepEqual(internalMessages, [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{
+        toolCallId: "call-publish-report",
+        name: "publish_report",
+        input: { reportId: "report-monthly" },
+      }],
+      approvalRequests: [{
+        approvalId: "approval-publish-report",
+        toolCall: {
+          toolCallId: "call-publish-report",
+          name: "publish_report",
+          input: { reportId: "report-monthly" },
+        },
+      }],
+    },
+    {
+      role: "tool",
+      content: "",
+      toolResults: [],
+      approvalResponses: [{
+        approvalId: "approval-publish-report",
+        approved: true,
+        toolCall: {
+          toolCallId: "call-publish-report",
+          name: "publish_report",
+          input: { reportId: "report-monthly" },
+        },
+      }],
+    },
+  ]);
+
+  const restored = toModelInput(internalMessages);
+  assert.deepEqual(restored.messages[1], {
+    role: "tool",
+    content: [{
+      type: "tool-approval-response",
+      approvalId: "approval-publish-report",
+      approved: true,
+    }],
+  });
+});
+
 test("tool calls and results are normalized to AgentDock records", () => {
   assert.deepEqual(
     normalizeToolCalls([

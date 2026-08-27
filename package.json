@@ -38,6 +38,34 @@
       "types": "./dist/providers/ollama.d.ts",
       "import": "./dist/providers/ollama.js"
     },
+    "./providers/gateway": {
+      "types": "./dist/providers/gateway.d.ts",
+      "import": "./dist/providers/gateway.js"
+    },
+    "./providers/openai": {
+      "types": "./dist/providers/openai.d.ts",
+      "import": "./dist/providers/openai.js"
+    },
+    "./providers/anthropic": {
+      "types": "./dist/providers/anthropic.d.ts",
+      "import": "./dist/providers/anthropic.js"
+    },
+    "./providers/google": {
+      "types": "./dist/providers/google.d.ts",
+      "import": "./dist/providers/google.js"
+    },
+    "./providers/xai": {
+      "types": "./dist/providers/xai.d.ts",
+      "import": "./dist/providers/xai.js"
+    },
+    "./providers/azure": {
+      "types": "./dist/providers/azure.d.ts",
+      "import": "./dist/providers/azure.js"
+    },
+    "./providers/bedrock": {
+      "types": "./dist/providers/bedrock.d.ts",
+      "import": "./dist/providers/bedrock.js"
+    },
     "./providers/factory": {
       "types": "./dist/providers/factory.d.ts",
       "import": "./dist/providers/factory.js"
@@ -61,6 +89,12 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^5.0.66",
+    "@ai-sdk/anthropic": "^4.0.44",
+    "@ai-sdk/azure": "^4.0.52",
+    "@ai-sdk/google": "^4.0.55",
+    "@ai-sdk/openai": "^4.0.50",
+    "@ai-sdk/xai": "^4.0.48",
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "ai": "^7.0.66",
     "ai-sdk-ollama": "^4.0.0",

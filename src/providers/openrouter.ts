@@ -1,35 +1,24 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
-
+import { BaseModelProvider, getRuntimeEnv, requireApiKey } from "./base.js";
 export interface OpenRouterModelOptions {
   apiKey?: string;
   modelId: string;
 }
 
-function getEnv(name: string): string | undefined {
-  const runtime = globalThis as typeof globalThis & {
-    process?: { env?: Record<string, string | undefined> };
-  };
+export class OpenRouterModelProvider extends BaseModelProvider<OpenRouterModelOptions> {
+  readonly type = "openrouter";
 
-  return runtime.process?.env?.[name];
-}
-
-export function createOpenRouterModel(
-  options: OpenRouterModelOptions,
-): LanguageModel {
-  if (!options.modelId.trim()) {
-    throw new Error(
-      "OPENROUTER modelId is required. Provide an explicit model ID.",
+  protected createLanguageModel(
+    modelId: string,
+    options: OpenRouterModelOptions,
+  ): LanguageModel {
+    const apiKey = requireApiKey(
+      "OpenRouter",
+      options.apiKey ?? getRuntimeEnv("OPENROUTER_API_KEY"),
+      "OPENROUTER_API_KEY",
     );
-  }
-  const apiKey = options.apiKey ?? getEnv("OPENROUTER_API_KEY");
 
-  if (!apiKey) {
-    throw new Error(
-      "OPENROUTER_API_KEY is required to create an OpenRouter model",
-    );
+    return createOpenRouter({ apiKey })(modelId);
   }
-
-  const openrouter = createOpenRouter({ apiKey });
-  return openrouter(options.modelId);
 }

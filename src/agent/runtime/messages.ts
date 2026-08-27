@@ -1,6 +1,13 @@
 import type { ModelMessage } from "ai";
 import type { Message } from "../memory.js";
-import type { ToolCallRecord, ToolResultRecord } from "../types.js";
+import type {
+  ToolCallRecord,
+  ToolResultRecord,
+} from "../types.js";
+import type {
+  ToolApprovalResponse,
+  ToolApprovalRequest,
+} from "../permissions/types.js";
 
 export function toModelInput(messages: Message[]): {
   instructions?: string;
@@ -82,6 +89,8 @@ function textFromAssistantContent(content: ModelMessage["content"]): string {
 }
 
 export function toInternalMessages(responseMessages: ModelMessage[]): Message[] {
+  const approvalRequestsById = new Map<string, ToolApprovalRequest>();
+
   return responseMessages.flatMap((message): Message[] => {
     if (message.role === "assistant") {
       const toolCalls: ToolCallRecord[] = Array.isArray(message.content)
@@ -93,7 +102,7 @@ export function toInternalMessages(responseMessages: ModelMessage[]): Message[] 
               input: part.input,
             }))
         : [];
-      const approvalRequests = Array.isArray(message.content)
+      const internalApprovalRequests = Array.isArray(message.content)
         ? message.content
             .filter(
               (part) =>
@@ -110,11 +119,17 @@ export function toInternalMessages(responseMessages: ModelMessage[]): Message[] 
             })
         : [];
 
+      for (const request of internalApprovalRequests) {
+        approvalRequestsById.set(request.approvalId, request);
+      }
+
       return [{
         role: "assistant",
         content: textFromAssistantContent(message.content),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(approvalRequests.length > 0 ? { approvalRequests } : {}),
+        ...(internalApprovalRequests.length > 0
+          ? { approvalRequests: internalApprovalRequests }
+          : {}),
       }];
     }
 
@@ -128,8 +143,27 @@ export function toInternalMessages(responseMessages: ModelMessage[]): Message[] 
           output: part.output,
         }));
 
-      return toolResults.length > 0
-        ? [{ role: "tool", content: JSON.stringify(toolResults), toolResults }]
+      const approvalResponses: ToolApprovalResponse[] = message.content
+        .filter((part) => part.type === "tool-approval-response")
+        .flatMap((part: any) => {
+          const request = approvalRequestsById.get(part.approvalId);
+          return request
+            ? [{
+                approvalId: part.approvalId,
+                approved: part.approved,
+                toolCall: request.toolCall,
+                ...(part.reason ? { reason: part.reason } : {}),
+              }]
+            : [];
+        });
+
+      return toolResults.length > 0 || approvalResponses.length > 0
+        ? [{
+            role: "tool",
+            content: toolResults.length > 0 ? JSON.stringify(toolResults) : "",
+            toolResults,
+            ...(approvalResponses.length > 0 ? { approvalResponses } : {}),
+          }]
         : [];
     }
 
