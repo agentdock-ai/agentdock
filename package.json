@@ -51,7 +51,9 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "yarn build && node --test test/*.test.mjs",
+    "test:unit": "vitest run test/unit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "demo:permissions": "yarn build && node scripts/permission-demo.mjs",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn clean && yarn build",
@@ -66,7 +68,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20"
