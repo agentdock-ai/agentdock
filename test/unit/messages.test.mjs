@@ -32,14 +32,14 @@ test("buildHistory appends the prompt and adds a system prompt once", () => {
   ]);
 });
 
-test("buildHistory does not duplicate an active system message", () => {
+test("buildHistory uses a run-level system prompt override", () => {
   const history = buildHistory("Continue.", {
     messages: [{ role: "system", content: "Existing instructions." }],
     systemPrompt: "New instructions.",
   });
 
   assert.deepEqual(history, [
-    { role: "system", content: "Existing instructions." },
+    { role: "system", content: "New instructions." },
     { role: "user", content: "Continue." },
   ]);
 });

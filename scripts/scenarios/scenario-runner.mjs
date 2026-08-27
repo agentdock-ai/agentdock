@@ -1,5 +1,17 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import {
+  AgentDock,
+  AgentModelFactory,
+  InMemoryAgentStore,
+  ToolRegistry,
+} from "../../dist/index.js";
+
+const DEFAULT_MODEL = Object.freeze({
+  provider: "ollama",
+  modelId: "llama3.2",
+  baseURL: "http://127.0.0.1:11434",
+});
 
 const color = {
   reset: "\u001b[0m",
@@ -17,19 +29,50 @@ export class ScenarioRunner {
   #readline;
   #textActive = false;
 
-  constructor({ agent, sessionId, context = {}, input = stdin, output = stdout }) {
-    if (!agent) throw new Error("ScenarioRunner requires an agent.");
+  constructor({
+    agent,
+    model,
+    registry,
+    store = new InMemoryAgentStore(),
+    tools = [],
+    sessionId = "scenario-demo-session",
+    systemPrompt = "You are an AgentDock scenario assistant.",
+    permissionMode = "normal",
+    maxSteps = 3,
+    context = {},
+    input = stdin,
+    output = stdout,
+    colors = output.isTTY,
+  } = {}) {
     if (!sessionId?.trim()) {
       throw new Error("ScenarioRunner requires a session ID.");
     }
 
-    this.agent = agent;
+    const activeRegistry = registry ?? agent?.registry ?? new ToolRegistry();
+
+    this.agent = agent ?? new AgentDock({
+      model: model ?? new AgentModelFactory().create(DEFAULT_MODEL),
+      registry: activeRegistry,
+      store,
+      defaults: { systemPrompt, permissionMode, maxSteps },
+    });
+    this.registry = activeRegistry;
+    this.registerTools(tools);
     this.sessionId = sessionId;
     this.context = context;
     this.input = input;
     this.output = output;
-    this.colorsEnabled = process.env.NO_COLOR === undefined &&
-      (output.isTTY || process.env.FORCE_COLOR !== undefined);
+    this.colorsEnabled = Boolean(colors);
+  }
+
+  registerTool(tool) {
+    this.registry.register(tool);
+    return this;
+  }
+
+  registerTools(tools) {
+    for (const tool of tools) this.registerTool(tool);
+    return this;
   }
 
   async run(prompt, options = {}) {
@@ -51,13 +94,14 @@ export class ScenarioRunner {
         }
 
         const approvals = await this.requestApprovals(result.approvalRequests);
-        result = await this.consume(
+        const resumedResult = await this.consume(
           await this.agent.resumeStream(
             { runId: result.runId, approvals },
             this.context,
             { ...options, sessionId: this.sessionId },
           ),
         );
+        result = mergeRunResults(result, resumedResult);
       }
 
       this.printResult(result);
@@ -90,8 +134,11 @@ export class ScenarioRunner {
     const approvals = [];
 
     for (const request of requests) {
+      this.line(
+        `${this.paint(request.toolCall.name, "cyan")} input: ${formatValue(request.toolCall.input)}`,
+      );
       const answer = await this.#readline.question(
-        `${this.paint(request.toolCall.name, "cyan")}? [y/n] `,
+        "Approve? [y/n] ",
       );
       const approved = /^(y|yes)$/i.test(answer.trim());
 
@@ -209,4 +256,22 @@ function formatValue(value) {
   } catch {
     return String(value);
   }
+}
+
+function mergeRunResults(previous, current) {
+  return {
+    ...current,
+    toolCalls: mergeRecords(previous.toolCalls, current.toolCalls),
+    toolResults: mergeRecords(previous.toolResults, current.toolResults),
+    toolErrors: mergeRecords(previous.toolErrors, current.toolErrors),
+  };
+}
+
+function mergeRecords(previous, current) {
+  const records = new Map();
+  for (const record of [...previous, ...current]) {
+    const key = record.toolCallId ?? JSON.stringify(record);
+    records.set(key, record);
+  }
+  return [...records.values()];
 }

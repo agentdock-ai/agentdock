@@ -1,11 +1,17 @@
 import {
   jsonSchema,
   tool as defineAiTool,
+  type ToolExecutionOptions,
   type ToolSet,
 } from "ai";
 import type { AgentContext, ToolErrorRecord } from "../types.js";
 import type { AgentHooks } from "../hooks.js";
-import { deriveAbortSignal, toErrorMessage, withAbortSignal } from "./errors.js";
+import {
+  deriveAbortSignal,
+  releaseAbortSignal,
+  toErrorMessage,
+  withAbortSignal,
+} from "./errors.js";
 import type { ToolRegistry } from "../../tools/registry.js";
 
 export function buildToolSet(
@@ -22,26 +28,33 @@ export function buildToolSet(
       defineAiTool({
         description: registeredTool.description,
         inputSchema: jsonSchema(registeredTool.parameters),
-        execute: async (input: unknown, options: any) => {
+        execute: async (
+          input: unknown,
+          options: ToolExecutionOptions<unknown>,
+        ) => {
+          if (input === null || typeof input !== "object" || Array.isArray(input)) {
+            throw new TypeError("Tool input must be an object.");
+          }
+
           const normalizedInput = input as Record<string, unknown>;
-          const toolCallId = options?.toolCallId as string;
+          const toolCallId = options.toolCallId;
           const toolAbortSignal = deriveAbortSignal(abortSignal, toolTimeout);
 
-          await hooks?.onToolCall?.({
-            toolCallId,
-            name: registeredTool.name,
-            input: normalizedInput,
-          });
-
-          let execution = registeredTool.execute({
-            input: normalizedInput,
-            ctx,
-            signal: toolAbortSignal,
-          });
-
-          if (toolAbortSignal) execution = withAbortSignal(execution, toolAbortSignal);
-
           try {
+            await hooks?.onToolCall?.({
+              toolCallId,
+              name: registeredTool.name,
+              input: normalizedInput,
+            });
+
+            let execution = registeredTool.execute({
+              input: normalizedInput,
+              ctx,
+              signal: toolAbortSignal,
+            });
+
+            if (toolAbortSignal) execution = withAbortSignal(execution, toolAbortSignal);
+
             const result = await execution;
             hooks?.onToolResult?.({
               toolCallId,
@@ -66,6 +79,8 @@ export function buildToolSet(
               error: message,
             });
             return { error: message };
+          } finally {
+            releaseAbortSignal(toolAbortSignal);
           }
         },
       }),

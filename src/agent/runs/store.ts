@@ -65,12 +65,21 @@ export class InMemoryAgentRunStore implements AgentRunStore {
   }
 
   save(record: AgentRunRecord): void {
+    if (this.runs.has(record.runId)) {
+      throw new Error(`Agent run already exists: ${record.runId}`);
+    }
     this.runs.set(record.runId, cloneValue(record));
   }
 
   update(runId: string, update: Partial<AgentRunRecord>): void {
     const current = this.runs.get(runId);
     if (!current) throw new Error(`Agent run not found: ${runId}`);
+    if (
+      (update.runId !== undefined && update.runId !== runId) ||
+      (update.sessionId !== undefined && update.sessionId !== current.sessionId)
+    ) {
+      throw new Error(`Agent run identity is immutable: ${runId}`);
+    }
     this.runs.set(runId, cloneValue({
       ...current,
       ...update,
@@ -85,6 +94,12 @@ export class InMemoryAgentRunStore implements AgentRunStore {
   ): boolean {
     const current = this.runs.get(runId);
     if (!current) return false;
+    if (
+      (update.runId !== undefined && update.runId !== runId) ||
+      (update.sessionId !== undefined && update.sessionId !== current.sessionId)
+    ) {
+      return false;
+    }
 
     const expected = Array.isArray(expectedStatus)
       ? expectedStatus
@@ -108,6 +123,11 @@ export class InMemoryAgentRunStore implements AgentRunStore {
     if (
       !current ||
       current.status !== "waiting_for_approval" ||
+      !decisions.every(
+        (decision) =>
+          typeof decision.approvalId === "string" &&
+          typeof decision.approved === "boolean",
+      ) ||
       !hasExactApprovalSet(current.pendingApprovals, decisions)
     ) {
       return null;

@@ -1,6 +1,7 @@
 import type {
   GenerateTextOnStepFinishCallback,
   LanguageModel,
+  ToolApprovalStatus,
   ToolSet,
 } from "ai";
 import { stepCountIs } from "ai";
@@ -31,12 +32,19 @@ export interface PreparedAgentRun {
 
 export function buildHistory(userPrompt: string, options: RunAgentOptions): Message[] {
   const history = [...(options.messages ?? []), { role: "user" as const, content: userPrompt }];
-  const hasSystemPrompt = history.some(
-    (message) => message.role === "system" && message.compacted !== true,
-  );
 
-  if (options.systemPrompt && !hasSystemPrompt) {
-    history.unshift({ role: "system", content: options.systemPrompt });
+  if (options.systemPrompt) {
+    const systemIndex = history.findIndex(
+      (message) => message.role === "system" && message.compacted !== true,
+    );
+    if (systemIndex >= 0) {
+      history[systemIndex] = {
+        ...history[systemIndex],
+        content: options.systemPrompt,
+      };
+    } else {
+      history.unshift({ role: "system", content: options.systemPrompt });
+    }
   }
 
   return history;
@@ -76,6 +84,16 @@ export async function prepareAgentRunFromHistory(
   if (!options.registry) {
     throw new Error("No tool registry configured.");
   }
+  const maxSteps = options.maxSteps ?? 10;
+  if (!Number.isInteger(maxSteps) || maxSteps < 1) {
+    throw new Error("maxSteps must be a positive integer.");
+  }
+  if (!Number.isInteger(stepsCompleted) || stepsCompleted < 0) {
+    throw new Error("stepsCompleted must be a non-negative integer.");
+  }
+  if (stepsCompleted >= maxSteps) {
+    throw new Error("stepsCompleted must be less than maxSteps.");
+  }
   const registry = options.registry;
   const tools = buildToolSet(
     registry,
@@ -92,7 +110,7 @@ export async function prepareAgentRunFromHistory(
     runId: options.runId ?? crypto.randomUUID(),
     sessionId: options.sessionId,
     stepsCompleted,
-    maxSteps: Math.max(1, (options.maxSteps ?? 10) - stepsCompleted),
+    maxSteps: maxSteps - stepsCompleted,
     model: options.model,
     modelInput: toModelInput(history.filter((message) => message.active !== false)),
     onStepStart: (step) => hooks?.onStepStart?.(stepsCompleted + step),
@@ -117,7 +135,11 @@ export function buildModelRequest(prepared: PreparedAgentRun) {
     ...prepared.modelInput,
     tools: prepared.tools,
     stopWhen: stepCountIs(prepared.maxSteps),
-    toolApproval: async ({ toolCall }: any): Promise<any> => {
+    toolApproval: async ({
+      toolCall,
+    }: {
+      toolCall: { toolCallId: string; toolName: string; input: unknown };
+    }): Promise<ToolApprovalStatus> => {
       const tool = prepared.registry.get(toolCall.toolName);
       if (!tool) {
         return {

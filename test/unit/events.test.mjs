@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { AgentEventType } from "../../src/agent/events.js";
-import { AgentEventStream } from "../../src/agent/runtime/events.js";
+import {
+  AgentEventStream,
+  serializeToolCall,
+} from "../../src/agent/runtime/events.js";
 
 async function collect(iterable) {
   const values = [];
@@ -175,4 +178,60 @@ test("AgentEventStream can only be consumed once", () => {
     () => stream[Symbol.asyncIterator](),
     /AgentEventStream can only be consumed once/,
   );
+});
+
+test("AgentEventStream surfaces a raw stream failure before the final result", async () => {
+  async function* failingStream() {
+    yield { type: "start" };
+    throw new Error("Raw stream failed");
+  }
+
+  const stream = new AgentEventStream({
+    runId: "run-stream-failed",
+    rawStream: failingStream(),
+    result: Promise.resolve(completedResult({ runId: "run-stream-failed" })),
+    getRun: async () => null,
+  });
+
+  const events = await collect(stream);
+  assert.equal(events.at(-1).type, AgentEventType.RunFailed);
+  assert.equal(events.at(-1).error.message, "Raw stream failed");
+});
+
+test("AgentEventStream preserves provider metadata on custom parts", async () => {
+  const stream = new AgentEventStream({
+    runId: "run-custom",
+    rawStream: streamParts([{
+      type: "custom",
+      kind: "provider.custom",
+      providerMetadata: { provider: { traceId: "trace-1" } },
+    }]),
+    result: Promise.resolve(completedResult({ runId: "run-custom" })),
+    getRun: async () => null,
+  });
+
+  const events = await collect(stream);
+  assert.deepEqual(events.find((event) => event.type === AgentEventType.Custom), {
+    type: AgentEventType.Custom,
+    kind: "provider.custom",
+    metadata: { provider: { traceId: "trace-1" } },
+    version: 1,
+    runId: "run-custom",
+    timestamp: events.find((event) => event.type === AgentEventType.Custom).timestamp,
+    eventId: events.find((event) => event.type === AgentEventType.Custom).eventId,
+  });
+});
+
+test("serializeToolCall serializes shared values independently", () => {
+  const shared = { reportId: "report-1" };
+  const serialized = serializeToolCall({
+    toolCallId: "call-shared",
+    name: "lookup_report",
+    input: { first: shared, second: shared },
+  });
+
+  assert.deepEqual(serialized.input, {
+    first: { reportId: "report-1" },
+    second: { reportId: "report-1" },
+  });
 });

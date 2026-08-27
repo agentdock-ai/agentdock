@@ -58,6 +58,23 @@ test("prepareAgentRunFromHistory requires a session ID, model, and registry", as
   );
 });
 
+test("prepareAgentRunFromHistory rejects invalid and exhausted step budgets", async () => {
+  const options = {
+    sessionId: "session-1",
+    model: {},
+    registry: new ToolRegistry(),
+  };
+
+  await assert.rejects(
+    prepareAgentRunFromHistory([], {}, { ...options, maxSteps: 0 }, 0),
+    /maxSteps/,
+  );
+  await assert.rejects(
+    prepareAgentRunFromHistory([], {}, { ...options, maxSteps: 3 }, 3),
+    /maxSteps|steps/i,
+  );
+});
+
 test("buildModelRequest approves tools that do not require user approval", async () => {
   assert.equal(await evaluateApproval(createTool()), "approved");
 });

@@ -67,6 +67,7 @@ export class AgentDock {
   private readonly runStore: AgentStore["runs"];
   private readonly sessionStore: AgentStore["sessions"];
   private readonly defaults: AgentDockDefaults;
+  private readonly sessionWriteQueues = new Map<string, Promise<void>>();
 
   constructor(options: AgentDockOptions) {
     this.model = options.model;
@@ -157,9 +158,12 @@ export class AgentDock {
         result,
       };
     } catch (error) {
-      await this.markRunFailed(runId, error);
-      clearRunController(runId);
-      throw error;
+      try {
+        await this.markRunFailed(runId, error);
+        throw error;
+      } finally {
+        clearRunController(runId);
+      }
     }
   }
 
@@ -180,10 +184,13 @@ export class AgentDock {
     ctx: AgentContext,
     options: AgentDockResumeOptions = {},
   ): Promise<StreamAgentResult> {
-    const claim = await this.claimApprovalRun(input.runId, input.approvals);
-    if (options.sessionId && options.sessionId !== claim.record.sessionId) {
-      throw new Error(`Agent run does not belong to session: ${options.sessionId}`);
+    if (options.sessionId) {
+      const current = await this.runStore.get(input.runId);
+      if (current && current.sessionId !== options.sessionId) {
+        throw new Error(`Agent run does not belong to session: ${options.sessionId}`);
+      }
     }
+    const claim = await this.claimApprovalRun(input.runId, input.approvals);
     const history = buildApprovalHistory(claim, input.approvals);
     const abortSignal = this.createRunAbortSignal(input.runId, options.abortSignal);
     let prepared;
@@ -230,13 +237,16 @@ export class AgentDock {
         result,
       };
     } catch (error) {
-      await this.markRunFailed(input.runId, error);
-      clearRunController(input.runId);
-      throw error;
+      try {
+        await this.markRunFailed(input.runId, error);
+        throw error;
+      } finally {
+        clearRunController(input.runId);
+      }
     }
   }
 
-  async stop(runId: string): Promise<void> {
+  async stop(runId: string): Promise<boolean> {
     const record = await this.runStore.get(runId);
     if (!record) throw new Error(`Agent run not found: ${runId}`);
     if (
@@ -244,11 +254,11 @@ export class AgentDock {
       record.status === "failed" ||
       record.status === "cancelled"
     ) {
-      return;
+      return false;
     }
 
     stopRunController(runId);
-    await this.runStore.transition(
+    return this.runStore.transition(
       runId,
       ["running", "waiting_for_approval"],
       {
@@ -284,6 +294,11 @@ export class AgentDock {
     sessionId: string,
     messages: AgentRunRecord["messages"],
   ): Promise<void> {
+    if (await this.runStore.get(runId)) {
+      throw new Error(`Agent run already exists: ${runId}`);
+    }
+
+    await this.persistSessionMessages(sessionId, messages, runId);
     await this.runStore.save({
       runId,
       sessionId,
@@ -294,7 +309,6 @@ export class AgentDock {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
-    await this.persistSessionMessages(sessionId, messages, runId);
   }
 
   private createStreamResult(
@@ -326,15 +340,17 @@ export class AgentDock {
         return output;
       })
       .catch(async (error) => {
-        const current = await this.runStore.get(runId);
-        if (current?.status === "cancelled") {
-          clearRunController(runId);
-          return this.createCancelledResult(prepared, stepsCompleted);
-        }
+        try {
+          const current = await this.runStore.get(runId);
+          if (current?.status === "cancelled") {
+            return this.createCancelledResult(prepared, stepsCompleted);
+          }
 
-        await this.markRunFailed(runId, error);
-        clearRunController(runId);
-        throw error;
+          await this.markRunFailed(runId, error);
+          throw error;
+        } finally {
+          clearRunController(runId);
+        }
       });
   }
 
@@ -381,20 +397,49 @@ export class AgentDock {
     messages: AgentSessionRecord["messages"],
     latestRunId?: string,
   ): Promise<void> {
+    const previous = this.sessionWriteQueues.get(sessionId) ?? Promise.resolve();
+    const operation = previous
+      .catch(() => {})
+      .then(() => this.writeSessionMessages(sessionId, messages, latestRunId));
+    this.sessionWriteQueues.set(sessionId, operation);
+
+    try {
+      await operation;
+    } finally {
+      if (this.sessionWriteQueues.get(sessionId) === operation) {
+        this.sessionWriteQueues.delete(sessionId);
+      }
+    }
+  }
+
+  private async writeSessionMessages(
+    sessionId: string,
+    messages: AgentSessionRecord["messages"],
+    latestRunId?: string,
+  ): Promise<void> {
     const current = await this.sessionStore.get(sessionId);
     if (!current) {
-      await this.sessionStore.save({
-        sessionId,
-        messages,
-        ...(latestRunId ? { latestRunId } : {}),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
+      try {
+        await this.sessionStore.save({
+          sessionId,
+          messages,
+          ...(latestRunId ? { latestRunId } : {}),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (error) {
+        const created = await this.sessionStore.get(sessionId);
+        if (!created) throw error;
+        await this.sessionStore.update(sessionId, {
+          messages: mergeSessionMessages(created.messages, messages),
+          ...(latestRunId ? { latestRunId } : {}),
+        });
+      }
       return;
     }
 
     await this.sessionStore.update(sessionId, {
-      messages,
+      messages: mergeSessionMessages(current.messages, messages),
       ...(latestRunId ? { latestRunId } : {}),
     });
   }
@@ -460,4 +505,23 @@ function buildApprovalResponses(
       ...(decision.reason ? { reason: decision.reason } : {}),
     };
   });
+}
+
+function mergeSessionMessages(
+  current: AgentSessionRecord["messages"],
+  incoming: AgentSessionRecord["messages"],
+): AgentSessionRecord["messages"] {
+  let commonPrefix = 0;
+  while (
+    commonPrefix < current.length &&
+    commonPrefix < incoming.length &&
+    JSON.stringify(current[commonPrefix]) === JSON.stringify(incoming[commonPrefix])
+  ) {
+    commonPrefix += 1;
+  }
+
+  if (commonPrefix === incoming.length) return current;
+  if (commonPrefix === current.length) return incoming;
+
+  return [...current, ...incoming.slice(commonPrefix)];
 }

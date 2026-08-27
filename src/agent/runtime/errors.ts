@@ -34,14 +34,49 @@ export function withAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Pr
   });
 }
 
+const abortSignalCleanups = new WeakMap<AbortSignal, () => void>();
+
+export function releaseAbortSignal(signal: AbortSignal | undefined): void {
+  if (!signal) return;
+  abortSignalCleanups.get(signal)?.();
+}
+
 export function deriveAbortSignal(
   abortSignal: AbortSignal | undefined,
   toolTimeout: number | undefined,
 ): AbortSignal | undefined {
-  if (abortSignal && toolTimeout != null) {
-    return AbortSignal.any([abortSignal, AbortSignal.timeout(toolTimeout)]);
+  if (toolTimeout != null) {
+    const timeoutController = new AbortController();
+    const timeoutSignal = timeoutController.signal;
+    const timeoutId = setTimeout(() => {
+      timeoutController.abort(
+        new DOMException("The operation timed out.", "TimeoutError"),
+      );
+    }, toolTimeout);
+    const releaseTimeout = () => {
+      clearTimeout(timeoutId);
+      timeoutSignal.removeEventListener("abort", releaseTimeout);
+      abortSignalCleanups.delete(timeoutSignal);
+    };
+    abortSignalCleanups.set(timeoutSignal, releaseTimeout);
+    timeoutSignal.addEventListener("abort", releaseTimeout, { once: true });
+
+    if (abortSignal) {
+      const combinedSignal = AbortSignal.any([abortSignal, timeoutSignal]);
+      const releaseCombined = () => {
+        releaseAbortSignal(timeoutSignal);
+        abortSignal?.removeEventListener("abort", releaseCombined);
+        combinedSignal.removeEventListener("abort", releaseCombined);
+        abortSignalCleanups.delete(combinedSignal);
+      };
+      abortSignalCleanups.set(combinedSignal, releaseCombined);
+      abortSignal.addEventListener("abort", releaseCombined, { once: true });
+      combinedSignal.addEventListener("abort", releaseCombined, { once: true });
+      return combinedSignal;
+    }
+
+    return timeoutSignal;
   }
   if (abortSignal) return abortSignal;
-  if (toolTimeout != null) return AbortSignal.timeout(toolTimeout);
   return undefined;
 }

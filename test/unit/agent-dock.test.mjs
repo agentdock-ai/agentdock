@@ -12,6 +12,7 @@ import {
   textResponse,
   toolCallResponse,
 } from "../fixtures/models.mjs";
+import { stopRunController } from "../../src/agent/runs/runtime.js";
 
 async function collect(iterable) {
   const events = [];
@@ -254,4 +255,171 @@ test("AgentDock rejects a second approval claim for the same run", async () => {
     agent.resume({ runId: waiting.runId, approvals: [decision] }, { userId: "user-report" }),
     /approval claim failed/,
   );
+});
+
+test("AgentDock does not consume approvals when the session ID is wrong", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "publish_report",
+    description: "Publish a report.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => ({ published: true }),
+  });
+  const agent = createAgent(
+    createScriptedModel([toolCallResponse({
+      toolCallId: "call-publish-report",
+      toolName: "publish_report",
+      input: {},
+    })]),
+    new InMemoryAgentStore(),
+    registry,
+  );
+
+  const waiting = await agent.run(
+    "Publish the report.",
+    {},
+    { sessionId: "session-owner", runId: "run-session-owner" },
+  );
+
+  await assert.rejects(
+    agent.resume(
+      {
+        runId: waiting.runId,
+        approvals: [{
+          approvalId: waiting.approvalRequests[0].approvalId,
+          approved: true,
+        }],
+      },
+      {},
+      { sessionId: "session-attacker" },
+    ),
+    /does not belong to session/,
+  );
+  assert.equal((await agent.getRun(waiting.runId)).status, "waiting_for_approval");
+});
+
+test("AgentDock rejects duplicate run IDs without replacing the original run", async () => {
+  const agent = createAgent(createScriptedModel([
+    textResponse("The original run is complete."),
+    textResponse("The duplicate run must not execute."),
+  ]));
+
+  await agent.run(
+    "Create the original run.",
+    {},
+    { sessionId: "session-duplicate", runId: "run-duplicate" },
+  );
+
+  await assert.rejects(
+    agent.run(
+      "Reuse the run ID.",
+      {},
+      { sessionId: "session-duplicate", runId: "run-duplicate" },
+    ),
+    /already exists/,
+  );
+  assert.equal(
+    (await agent.getRun("run-duplicate")).messages.at(-1).content,
+    "The original run is complete.",
+  );
+});
+
+test("AgentDock preserves both histories for concurrent runs in one session", async () => {
+  const baseStore = new InMemoryAgentStore();
+  let sessionReads = 0;
+  const store = {
+    runs: baseStore.runs,
+    sessions: {
+      get(sessionId) {
+        if (sessionReads++ < 4) return null;
+        return baseStore.sessions.get(sessionId);
+      },
+      save(record) {
+        return baseStore.sessions.save(record);
+      },
+      update(sessionId, update) {
+        return baseStore.sessions.update(sessionId, update);
+      },
+    },
+  };
+  const agent = createAgent(createScriptedModel([
+    textResponse("First result."),
+    textResponse("Second result."),
+  ]), store);
+
+  await Promise.all([
+    agent.run("First request.", {}, { sessionId: "session-concurrent", runId: "run-first" }),
+    agent.run("Second request.", {}, { sessionId: "session-concurrent", runId: "run-second" }),
+  ]);
+
+  const contents = (await agent.getSession("session-concurrent")).messages
+    .map((message) => message.content);
+  assert.ok(contents.includes("First request."));
+  assert.ok(contents.includes("Second request."));
+  assert.ok(contents.includes("First result."));
+  assert.ok(contents.includes("Second result."));
+});
+
+test("AgentDock does not leave a run when session persistence fails", async () => {
+  const baseStore = new InMemoryAgentStore();
+  const store = {
+    runs: baseStore.runs,
+    sessions: {
+      get: () => null,
+      save: () => {
+        throw new Error("Session persistence unavailable");
+      },
+      update: () => {
+        throw new Error("Session persistence unavailable");
+      },
+    },
+  };
+  const agent = createAgent(createScriptedModel([textResponse("Unreachable.")]), store);
+
+  await assert.rejects(
+    agent.run(
+      "Persist this run.",
+      {},
+      { sessionId: "session-persistence", runId: "run-persistence" },
+    ),
+    /Session persistence unavailable/,
+  );
+  assert.equal(await baseStore.runs.get("run-persistence"), null);
+});
+
+test("AgentDock clears the controller when terminal persistence fails", async () => {
+  const baseStore = new InMemoryAgentStore();
+  const store = {
+    runs: baseStore.runs,
+    sessions: {
+      get: (sessionId) => baseStore.sessions.get(sessionId),
+      save: (record) => baseStore.sessions.save(record),
+      update: () => {
+        throw new Error("Session update unavailable");
+      },
+    },
+  };
+  const agent = createAgent(createScriptedModel([textResponse("Complete.")]), store);
+
+  await assert.rejects(
+    agent.run(
+      "Complete the run.",
+      {},
+      { sessionId: "session-controller", runId: "run-controller" },
+    ),
+  );
+  assert.equal(stopRunController("run-controller"), false);
+});
+
+test("AgentDock reports that stopping a terminal run was ignored", async () => {
+  const agent = createAgent(createScriptedModel([textResponse("Complete.")]));
+
+  await agent.run(
+    "Complete the run.",
+    {},
+    { sessionId: "session-terminal-stop", runId: "run-terminal-stop" },
+  );
+
+  assert.equal(await agent.stop("run-terminal-stop"), false);
 });

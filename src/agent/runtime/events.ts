@@ -68,14 +68,15 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
       yield event;
     }
 
+    let streamError: unknown;
     try {
       for await (const part of this.options.rawStream) {
         for (const payload of this.normalize(part)) {
           yield this.publish(payload);
         }
       }
-    } catch {
-      // The final result carries the authoritative failure or cancellation state.
+    } catch (error) {
+      streamError = error;
     }
 
     try {
@@ -102,6 +103,14 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
         return;
       }
 
+      if (streamError) {
+        yield this.publish({
+          type: AgentEventType.RunFailed,
+          error: toAgentError(streamError),
+        });
+        return;
+      }
+
       yield this.publish({
         type: AgentEventType.RunCompleted,
         content: output.content,
@@ -119,7 +128,7 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
 
       yield this.publish({
         type: AgentEventType.RunFailed,
-        error: toAgentError(error),
+        error: toAgentError(streamError ?? error),
       });
     }
   }
@@ -154,6 +163,9 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
         return [{
           type: AgentEventType.Custom,
           kind: part.kind,
+          ...(part.providerMetadata === undefined
+            ? {}
+            : { metadata: toSerializable(part.providerMetadata) }),
         }];
 
       case "tool-input-start":
@@ -424,14 +436,18 @@ function toSerializable(
   if (seen.has(value)) return "[Circular]";
   seen.add(value);
 
-  if (Array.isArray(value)) {
-    return value.map((item) => toSerializable(item, seen));
-  }
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => toSerializable(item, seen));
+    }
 
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      toSerializable(item, seen),
-    ]),
-  );
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        toSerializable(item, seen),
+      ]),
+    );
+  } finally {
+    seen.delete(value);
+  }
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import { buildToolSet } from "../../src/agent/runtime/tools.js";
 import {
@@ -136,4 +136,69 @@ test("buildToolSet converts tool failures into tool error results", async () => 
     result: undefined,
     error: "Report service unavailable",
   }]);
+});
+
+test("buildToolSet converts synchronous tool throws into tool error results", async () => {
+  const registry = new ToolRegistry();
+  const toolErrors = [];
+
+  registry.register({
+    name: "sync_failure",
+    description: "A synchronously failing tool.",
+    parameters: { type: "object", properties: {} },
+    execute: () => {
+      throw new Error("Synchronous failure");
+    },
+  });
+
+  const tools = buildToolSet(registry, {}, undefined, undefined, undefined, toolErrors);
+  const output = await tools.sync_failure.execute(
+    {},
+    { toolCallId: "call-sync-failure" },
+  );
+
+  assert.deepEqual(output, { error: "Synchronous failure" });
+  assert.equal(toolErrors[0].error, "Synchronous failure");
+});
+
+test("buildToolSet rejects tool input that is not an object", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "validate_input",
+    description: "Validates tool input.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ ok: true }),
+  });
+
+  const tools = buildToolSet(registry, {}, undefined, undefined, undefined, []);
+
+  await assert.rejects(
+    tools.validate_input.execute(null, { toolCallId: "call-invalid-input" }),
+    /object|input/i,
+  );
+});
+
+test("buildToolSet releases completed tool timeout timers", async () => {
+  vi.useFakeTimers();
+  try {
+    const registry = new ToolRegistry();
+    let signal;
+    registry.register({
+      name: "quick_tool",
+      description: "Completes before its timeout.",
+      parameters: { type: "object", properties: {} },
+      execute: async (input) => {
+        signal = input.signal;
+        return { ok: true };
+      },
+    });
+
+    const tools = buildToolSet(registry, {}, undefined, 1_000, undefined, []);
+    await tools.quick_tool.execute({}, { toolCallId: "call-quick-tool" });
+
+    vi.advanceTimersByTime(1_000);
+    assert.equal(signal.aborted, false);
+  } finally {
+    vi.useRealTimers();
+  }
 });

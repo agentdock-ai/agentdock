@@ -111,6 +111,52 @@ export function defineAgentStoreContract(name, createStore) {
       Promise.resolve().then(() => store.runs.update("missing-run", {})),
       /Agent run not found: missing-run/,
     );
+
+    await assert.rejects(
+      Promise.resolve().then(() => store.sessions.update(session.sessionId, {
+        sessionId: "different-session",
+      })),
+      /immutable|sessionId/i,
+    );
+    await assert.rejects(
+      Promise.resolve().then(() => store.runs.update(run.runId, {
+        runId: "different-run",
+        sessionId: "different-session",
+      })),
+      /immutable|runId|sessionId/i,
+    );
+  });
+
+  test(`${name} does not overwrite existing records on duplicate save`, async () => {
+    const store = await createStore();
+    const session = createSession();
+    const run = createRun();
+    await store.sessions.save(session);
+    await store.runs.save(run);
+
+    await assert.rejects(
+      Promise.resolve().then(() => store.sessions.save({
+        ...session,
+        messages: [{ role: "user", content: "replacement" }],
+      })),
+      /already exists|duplicate/i,
+    );
+    await assert.rejects(
+      Promise.resolve().then(() => store.runs.save({
+        ...run,
+        messages: [{ role: "user", content: "replacement" }],
+      })),
+      /already exists|duplicate/i,
+    );
+
+    assert.equal(
+      (await store.sessions.get(session.sessionId)).messages[0].content,
+      "Find the monthly report.",
+    );
+    assert.equal(
+      (await store.runs.get(run.runId)).messages[0].content,
+      "Find the monthly report.",
+    );
   });
 
   test(`${name} applies status transitions only from expected states`, async () => {
@@ -180,6 +226,23 @@ export function defineAgentStoreContract(name, createStore) {
       null,
     );
     assert.equal((await store.runs.get(run.runId)).status, "waiting_for_approval");
+  });
+
+  test(`${name} rejects malformed approval decisions`, async () => {
+    const store = await createStore();
+    const approval = createApproval();
+    await store.runs.save(createRun({
+      status: "waiting_for_approval",
+      pendingApprovals: [approval],
+    }));
+
+    assert.equal(
+      await store.runs.claimApprovals("run-contract", [{
+        approvalId: approval.approvalId,
+        approved: "yes",
+      }]),
+      null,
+    );
   });
 
   test(`${name} allows only one concurrent approval claimant`, async () => {
