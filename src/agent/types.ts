@@ -60,6 +60,7 @@ export interface ToolResultRecord {
 
 export interface AgentRunResult {
   runId: string;
+  sessionId: string;
   status: AgentRunStatus;
   content: string;
   messages: Message[];
@@ -77,6 +78,7 @@ export interface StreamAgentResult {
 
 export interface RunAgentOptions {
   runId?: string;
+  sessionId?: string;
   permissionMode?: ToolPermissionMode;
   maxSteps?: number;
   systemPrompt?: string;

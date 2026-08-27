@@ -15,6 +15,7 @@ export interface PreparedAgentRun {
   abortSignal?: AbortSignal;
   history: Message[];
   runId: string;
+  sessionId: string;
   stepsCompleted: number;
   maxSteps: number;
   model: LanguageModel;
@@ -58,6 +59,11 @@ export async function prepareAgentRunFromHistory(
 ): Promise<PreparedAgentRun> {
   const toolErrors: ToolErrorRecord[] = [];
   const hooks = options.hooks;
+  if (!options.sessionId?.trim()) {
+    throw new Error(
+      "No sessionId configured. Every agent run must belong to a session.",
+    );
+  }
   if (!options.model) {
     throw new Error(
       "No model configured. Provide options.model, for example createOpenRouterModel({ modelId: \"your-model-id\" }).",
@@ -84,6 +90,7 @@ export async function prepareAgentRunFromHistory(
     abortSignal: options.abortSignal,
     history,
     runId: options.runId ?? crypto.randomUUID(),
+    sessionId: options.sessionId,
     stepsCompleted,
     maxSteps: Math.max(1, (options.maxSteps ?? 10) - stepsCompleted),
     model: options.model,

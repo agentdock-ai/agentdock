@@ -13,6 +13,11 @@
 
 This package provides a single `AgentDock` runtime for backend applications. Product-specific tools, prompts, authorization, and persistence stay in the consuming app.
 
+Runs belong to a required `sessionId`. AgentDock loads and updates the session's
+conversation messages through the injected `store`; callers do not need
+to manually pass message history between runs. The default in-memory stores are
+process-local and can be replaced with database-backed implementations.
+
 ## ✨ Features
 
 - **Agent Runtime:** Run, stream, resume approvals, and cancel agent runs.
@@ -60,17 +65,18 @@ import {
   AgentDock,
   AgentModelFactory,
   ToolRegistry,
-  InMemoryAgentRunStore,
+  InMemoryAgentStore,
 } from "agentdock";
 
 const modelFactory = new AgentModelFactory();
+const sessionId = "session-123";
 const agent = new AgentDock({
   model: modelFactory.create({
     provider: "openrouter",
     modelId: "your-model-id",
   }),
   registry: new ToolRegistry(),
-  runStore: new InMemoryAgentRunStore(),
+  store: new InMemoryAgentStore(),
 });
 
 agent.registerTool({
@@ -85,9 +91,11 @@ agent.registerTool({
   execute: async ({ input }) => ({ city: input.city, temperature: 22 }),
 });
 
-const result = await agent.run("What is the weather in Lahore?", {
-  userId: "user-123",
-});
+const result = await agent.run(
+  "What is the weather in Lahore?",
+  { userId: "user-123" },
+  { sessionId },
+);
 ```
 
 For live output, consume the normalized AgentDock event stream:
@@ -95,9 +103,11 @@ For live output, consume the normalized AgentDock event stream:
 ```ts
 import { AgentEventType } from "agentdock";
 
-const session = await agent.stream("What is the weather in Lahore?", {
-  userId: "user-123",
-});
+const session = await agent.stream(
+  "What is the weather in Lahore?",
+  { userId: "user-123" },
+  { sessionId },
+);
 
 for await (const event of session.stream) {
   if (event.type === AgentEventType.TextDelta) {

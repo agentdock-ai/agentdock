@@ -13,7 +13,16 @@ export type {
   ToolResultRecord,
 } from "./types.js";
 export type { AgentHooks } from "./hooks.js";
-export type { Message, MemoryProvider } from "./memory.js";
-export { InMemoryProvider } from "./memory.js";
+export type { Message } from "./memory.js";
 export * from "./permissions/types.js";
-export * from "./runs/store.js";
+export type {
+  AgentRunApprovalClaim,
+  AgentRunRecord,
+  AgentRunStatus,
+  AgentRunStore,
+} from "./runs/store.js";
+export type {
+  AgentSessionRecord,
+  AgentSessionStore,
+} from "./sessions/store.js";
+export * from "./storage/store.js";

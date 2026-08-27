@@ -3,6 +3,7 @@ import type {
   ToolApprovalDecision,
   ToolApprovalRequest,
 } from "../permissions/types.js";
+import { cloneValue } from "../storage/clone.js";
 
 export type AgentRunStatus =
   | "running"
@@ -13,6 +14,7 @@ export type AgentRunStatus =
 
 export interface AgentRunRecord {
   runId: string;
+  sessionId: string;
   status: AgentRunStatus;
   messages: Message[];
   pendingApprovals: ToolApprovalRequest[];
@@ -59,17 +61,17 @@ export class InMemoryAgentRunStore implements AgentRunStore {
 
   get(runId: string): AgentRunRecord | null {
     const record = this.runs.get(runId);
-    return record ? cloneRecord(record) : null;
+    return record ? cloneValue(record) : null;
   }
 
   save(record: AgentRunRecord): void {
-    this.runs.set(record.runId, cloneRecord(record));
+    this.runs.set(record.runId, cloneValue(record));
   }
 
   update(runId: string, update: Partial<AgentRunRecord>): void {
     const current = this.runs.get(runId);
     if (!current) throw new Error(`Agent run not found: ${runId}`);
-    this.runs.set(runId, cloneRecord({
+    this.runs.set(runId, cloneValue({
       ...current,
       ...update,
       updatedAt: Date.now(),
@@ -89,7 +91,7 @@ export class InMemoryAgentRunStore implements AgentRunStore {
       : [expectedStatus];
     if (!expected.includes(current.status)) return false;
 
-    this.runs.set(runId, cloneRecord({
+    this.runs.set(runId, cloneValue({
       ...current,
       ...update,
       updatedAt: Date.now(),
@@ -111,8 +113,8 @@ export class InMemoryAgentRunStore implements AgentRunStore {
       return null;
     }
 
-    const approvals = structuredClone(current.pendingApprovals);
-    const claimedRecord = cloneRecord({
+    const approvals = cloneValue(current.pendingApprovals);
+    const claimedRecord = cloneValue<AgentRunRecord>({
       ...current,
       status: "running",
       pendingApprovals: [],
@@ -123,10 +125,6 @@ export class InMemoryAgentRunStore implements AgentRunStore {
 
     return { record: claimedRecord, approvals };
   }
-}
-
-function cloneRecord(record: AgentRunRecord): AgentRunRecord {
-  return structuredClone(record);
 }
 
 function hasExactApprovalSet(

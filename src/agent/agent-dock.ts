@@ -13,9 +13,14 @@ import {
 import {
   type AgentRunApprovalClaim,
   type AgentRunRecord,
-  type AgentRunStore,
-  InMemoryAgentRunStore,
 } from "./runs/store.js";
+import {
+  type AgentSessionRecord,
+} from "./sessions/store.js";
+import {
+  type AgentStore,
+  InMemoryAgentStore,
+} from "./storage/store.js";
 import { AgentEventType } from "./events.js";
 import {
   AgentEventStream,
@@ -36,32 +41,39 @@ import { ToolRegistry, type ToolSchema } from "../tools/registry.js";
 
 export type AgentDockDefaults = Omit<
   RunAgentOptions,
-  "model" | "registry" | "runId" | "messages" | "abortSignal"
+  "model" | "registry" | "runId" | "sessionId" | "messages" | "abortSignal"
 >;
 
 export type AgentDockRunOptions = Omit<
   RunAgentOptions,
-  "model" | "registry"
->;
+  "model" | "registry" | "sessionId" | "messages"
+> & { sessionId: string };
+
+export type AgentDockResumeOptions = Omit<AgentDockRunOptions, "sessionId"> & {
+  sessionId?: string;
+};
 
 export interface AgentDockOptions {
   model: LanguageModel;
   registry?: ToolRegistry;
-  runStore?: AgentRunStore;
+  store?: AgentStore;
   defaults?: AgentDockDefaults;
 }
 
 export class AgentDock {
   readonly model: LanguageModel;
   readonly registry: ToolRegistry;
-  readonly runStore: AgentRunStore;
 
+  private readonly runStore: AgentStore["runs"];
+  private readonly sessionStore: AgentStore["sessions"];
   private readonly defaults: AgentDockDefaults;
 
   constructor(options: AgentDockOptions) {
     this.model = options.model;
     this.registry = options.registry ?? new ToolRegistry();
-    this.runStore = options.runStore ?? new InMemoryAgentRunStore();
+    const store = options.store ?? new InMemoryAgentStore();
+    this.runStore = store.runs;
+    this.sessionStore = store.sessions;
     this.defaults = options.defaults ?? {};
   }
 
@@ -91,10 +103,14 @@ export class AgentDock {
     return this.runStore.get(runId);
   }
 
+  async getSession(sessionId: string): Promise<AgentSessionRecord | null> {
+    return this.sessionStore.get(sessionId);
+  }
+
   async run(
     userPrompt: string,
     ctx: AgentContext,
-    options: AgentDockRunOptions = {},
+    options: AgentDockRunOptions,
   ): Promise<AgentRunResult> {
     const session = await this.stream(userPrompt, ctx, options);
     for await (const _event of session.stream) {
@@ -106,9 +122,10 @@ export class AgentDock {
   async stream(
     userPrompt: string,
     ctx: AgentContext,
-    options: AgentDockRunOptions = {},
+    options: AgentDockRunOptions,
   ): Promise<StreamAgentResult> {
     const runId = options.runId ?? crypto.randomUUID();
+    const session = await this.sessionStore.get(options.sessionId);
     const abortSignal = this.createRunAbortSignal(runId, options.abortSignal);
     let prepared;
 
@@ -117,8 +134,9 @@ export class AgentDock {
         ...this.buildRunOptions(options),
         runId,
         abortSignal,
+        messages: session?.messages ?? [],
       });
-      await this.saveRunningRun(runId, prepared.history);
+      await this.saveRunningRun(runId, prepared.sessionId, prepared.history);
     } catch (error) {
       clearRunController(runId);
       throw error;
@@ -148,7 +166,7 @@ export class AgentDock {
   async resume(
     input: { runId: string; approvals: ToolApprovalDecision[] },
     ctx: AgentContext,
-    options: AgentDockRunOptions = {},
+    options: AgentDockResumeOptions = {},
   ): Promise<AgentRunResult> {
     const session = await this.resumeStream(input, ctx, options);
     for await (const _event of session.stream) {
@@ -160,9 +178,12 @@ export class AgentDock {
   async resumeStream(
     input: { runId: string; approvals: ToolApprovalDecision[] },
     ctx: AgentContext,
-    options: AgentDockRunOptions = {},
+    options: AgentDockResumeOptions = {},
   ): Promise<StreamAgentResult> {
     const claim = await this.claimApprovalRun(input.runId, input.approvals);
+    if (options.sessionId && options.sessionId !== claim.record.sessionId) {
+      throw new Error(`Agent run does not belong to session: ${options.sessionId}`);
+    }
     const history = buildApprovalHistory(claim, input.approvals);
     const abortSignal = this.createRunAbortSignal(input.runId, options.abortSignal);
     let prepared;
@@ -175,11 +196,17 @@ export class AgentDock {
         {
           ...this.buildRunOptions(options),
           runId: input.runId,
+          sessionId: claim.record.sessionId,
           abortSignal,
         },
         claim.record.stepsCompleted,
       );
       await this.runStore.update(input.runId, { messages: history });
+      await this.persistSessionMessages(
+        claim.record.sessionId,
+        history,
+        claim.record.runId,
+      );
       const stream = streamText(buildModelRequest(prepared));
       const result = this.createStreamResult(
         stream,
@@ -231,7 +258,9 @@ export class AgentDock {
     );
   }
 
-  private buildRunOptions(options: AgentDockRunOptions): RunAgentOptions {
+  private buildRunOptions(
+    options: AgentDockRunOptions | AgentDockResumeOptions,
+  ): RunAgentOptions {
     return {
       ...this.defaults,
       ...options,
@@ -252,10 +281,12 @@ export class AgentDock {
 
   private async saveRunningRun(
     runId: string,
+    sessionId: string,
     messages: AgentRunRecord["messages"],
   ): Promise<void> {
     await this.runStore.save({
       runId,
+      sessionId,
       status: "running",
       messages,
       pendingApprovals: [],
@@ -263,6 +294,7 @@ export class AgentDock {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
+    await this.persistSessionMessages(sessionId, messages, runId);
   }
 
   private createStreamResult(
@@ -340,7 +372,31 @@ export class AgentDock {
       throw new Error(`Agent run is no longer active: ${result.runId}`);
     }
 
+    await this.persistSessionMessages(result.sessionId, result.messages, result.runId);
     result.status = waitingForApproval ? "waiting_for_approval" : "completed";
+  }
+
+  private async persistSessionMessages(
+    sessionId: string,
+    messages: AgentSessionRecord["messages"],
+    latestRunId?: string,
+  ): Promise<void> {
+    const current = await this.sessionStore.get(sessionId);
+    if (!current) {
+      await this.sessionStore.save({
+        sessionId,
+        messages,
+        ...(latestRunId ? { latestRunId } : {}),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+
+    await this.sessionStore.update(sessionId, {
+      messages,
+      ...(latestRunId ? { latestRunId } : {}),
+    });
   }
 
   private async markRunFailed(runId: string, error: unknown): Promise<void> {

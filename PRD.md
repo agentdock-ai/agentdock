@@ -30,7 +30,9 @@ The initial harness includes:
 - The ability to cancel runs
 - A registry for application-defined tools
 - Tool authorization support
+- Session state with canonical conversation messages
 - In-memory or durable run persistence through an injected store
+- In-memory or durable session persistence through an injected store
 - Provider helpers for connecting the harness to AI models through the Vercel AI SDK
 - Typed APIs for backend applications
 
@@ -59,11 +61,13 @@ As a backend developer, I want to configure an AI model, register my application
 AgentDock is successful when an application can:
 
 1. Configure an agent with a model and run store.
-2. Register and authorize its own tools.
-3. Start an agent run and receive its result or stream.
-4. Pause for required approvals and resume the run later.
-5. Cancel or inspect runs reliably.
-6. Use the same infrastructure across multiple products or agent implementations.
+2. Configure a session store and associate each run with a session.
+3. Register and authorize its own tools.
+4. Start an agent run and receive its result or stream.
+5. Continue a session without manually passing message history between runs.
+6. Pause for required approvals and resume the run later.
+7. Cancel or inspect runs reliably.
+8. Use the same infrastructure across multiple products or agent implementations.
 
 ## 9. Future Clarifications
 

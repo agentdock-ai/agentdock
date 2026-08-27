@@ -34,6 +34,7 @@ export function createAgentRunResult(
 
   return {
     runId: prepared.runId,
+    sessionId: prepared.sessionId,
     status,
     content: text,
     messages: prepared.history,
