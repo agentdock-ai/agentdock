@@ -77,6 +77,9 @@ const agent = new AgentDock({
   }),
   registry: new ToolRegistry(),
   store: new InMemoryAgentStore(),
+  defaults: {
+    systemPrompt: "You are a helpful assistant. Use registered tools when appropriate.",
+  },
 });
 
 agent.registerTool({
@@ -97,6 +100,22 @@ const result = await agent.run(
   { sessionId },
 );
 ```
+
+`systemPrompt` belongs inside `defaults` when it should apply to every run
+created by the `AgentDock` instance. It can also be overridden for one run:
+
+```ts
+const result = await agent.run(
+  "Answer concisely.",
+  { userId: "user-123" },
+  {
+    sessionId,
+    systemPrompt: "Use one short sentence.",
+  },
+);
+```
+
+`systemPrompt` is not a top-level `AgentDock` constructor option.
 
 For live output, consume the normalized AgentDock event stream:
 
