@@ -1,11 +1,11 @@
 <div align="center">
-  <img src="logo.png?v=50cf7f7" alt="AgentDock Logo" width="250" style="margin-bottom: 20px;"/>
+  <img src="logo.png?v=d971329" alt="AgentDock Logo" width="250" style="margin-bottom: 20px;"/>
 
   **Reusable TypeScript agent infrastructure for multi-tenant applications.**
 
   [![version](https://img.shields.io/badge/version-0.1.0-blue.svg?cacheSeconds=2592000)](https://github.com/Muhammad-Zain01/agentdock)
   [![TypeScript](https://img.shields.io/badge/TypeScript-7.0.2-blue.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-  [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-green.svg?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+  [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24-green.svg?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
   [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 </div>
 
