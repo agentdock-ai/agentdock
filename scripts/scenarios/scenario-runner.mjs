@@ -1,241 +1,154 @@
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
-import {
-  AgentDock,
-  AgentModelFactory,
-  InMemoryAgentStore,
-  ToolRegistry,
-} from "../../dist/index.js";
-
-const DEFAULT_MODEL = Object.freeze({
-  provider: "ollama",
-  modelId: "llama3.2",
-  baseURL: "http://127.0.0.1:11434",
-});
-
-const color = {
-  reset: "\u001b[0m",
-  bold: "\u001b[1m",
-  dim: "\u001b[2m",
-  red: "\u001b[31m",
-  green: "\u001b[32m",
-  yellow: "\u001b[33m",
-  blue: "\u001b[34m",
-  magenta: "\u001b[35m",
-  cyan: "\u001b[36m",
-};
+import { stdout } from "node:process";
+import { AgentEventType } from "../../dist/index.js";
 
 export class ScenarioRunner {
-  #readline;
   #textActive = false;
 
   constructor({
     agent,
-    model,
-    registry,
-    store = new InMemoryAgentStore(),
     tools = [],
-    sessionId = "scenario-demo-session",
-    systemPrompt = "You are an AgentDock scenario assistant.",
-    permissionMode = "normal",
-    maxSteps = 3,
+    sessionId = "scenario-session",
     context = {},
-    input = stdin,
+    approve,
     output = stdout,
     colors = output.isTTY,
   } = {}) {
-    if (!sessionId?.trim()) {
+    if (!agent)
+      throw new Error("ScenarioRunner requires an AgentDock instance.");
+    if (!sessionId.trim())
       throw new Error("ScenarioRunner requires a session ID.");
-    }
 
-    const activeRegistry = registry ?? agent?.registry ?? new ToolRegistry();
-
-    this.agent = agent ?? new AgentDock({
-      model: model ?? new AgentModelFactory().create(DEFAULT_MODEL),
-      registry: activeRegistry,
-      store,
-      defaults: { systemPrompt, permissionMode, maxSteps },
-    });
-    this.registry = activeRegistry;
-    this.registerTools(tools);
+    this.agent = agent;
     this.sessionId = sessionId;
     this.context = context;
-    this.input = input;
+    this.approve = approve;
     this.output = output;
     this.colorsEnabled = Boolean(colors);
-  }
 
-  registerTool(tool) {
-    this.registry.register(tool);
-    return this;
-  }
-
-  registerTools(tools) {
-    for (const tool of tools) this.registerTool(tool);
-    return this;
+    for (const tool of tools) this.agent.registerTool(tool);
   }
 
   async run(prompt, options = {}) {
-    this.line(`${this.paint("Scenario", "bold", "cyan")}: ${prompt}`);
+    this.line(`${this.paint("Scenario", "cyan")}: ${prompt}`);
+    let result = await this.consume(
+      await this.agent.stream(prompt, this.context, {
+        ...options,
+        sessionId: this.sessionId,
+      }),
+    );
 
-    try {
-      let result = await this.consume(
-        await this.agent.stream(prompt, this.context, {
-          ...options,
-          sessionId: this.sessionId,
-        }),
+    while (result.status === "waiting_for_approval") {
+      const approvals = await this.resolveApprovals(result.approvalRequests);
+      const { runId: _runId, ...resumeOptions } = options;
+      const resumed = await this.consume(
+        await this.agent.resumeStream(
+          { runId: result.runId, approvals },
+          this.context,
+          { ...resumeOptions, sessionId: this.sessionId },
+        ),
       );
-      let approvalRounds = 0;
-
-      while (result.status === "waiting_for_approval") {
-        approvalRounds += 1;
-        if (approvalRounds > 10) {
-          throw new Error("Scenario exceeded 10 approval rounds.");
-        }
-
-        const approvals = await this.requestApprovals(result.approvalRequests);
-        const resumedResult = await this.consume(
-          await this.agent.resumeStream(
-            { runId: result.runId, approvals },
-            this.context,
-            { ...options, sessionId: this.sessionId },
-          ),
-        );
-        result = mergeRunResults(result, resumedResult);
-      }
-
-      this.printResult(result);
-      return result;
-    } finally {
-      this.#readline?.close();
-      this.#readline = undefined;
+      result = mergeRunResults(result, resumed);
     }
+
+    this.printResult(result);
+    return result;
   }
 
   async consume(session) {
-    for await (const event of session.stream) {
-      this.render(event);
-    }
-
+    for await (const event of session.stream) this.render(event);
     if (this.#textActive) {
       this.line();
       this.#textActive = false;
     }
-
     return session.result;
   }
 
-  async requestApprovals(requests) {
-    if (!this.#readline) {
-      this.#readline = createInterface({ input: this.input, output: this.output });
+  async resolveApprovals(requests) {
+    if (!this.approve) {
+      throw new Error("Scenario requires an approve(request) handler.");
     }
 
-    this.line(this.paint("Approval required", "bold", "yellow"));
-    const approvals = [];
-
-    for (const request of requests) {
-      this.line(
-        `${this.paint(request.toolCall.name, "cyan")} input: ${formatValue(request.toolCall.input)}`,
-      );
-      const answer = await this.#readline.question(
-        "Approve? [y/n] ",
-      );
-      const approved = /^(y|yes)$/i.test(answer.trim());
-
-      approvals.push({
-        approvalId: request.approvalId,
-        approved,
-        ...(approved ? {} : { reason: "Denied manually" }),
-      });
-    }
-
-    return approvals;
+    return Promise.all(
+      requests.map(async (request) => {
+        const approved = await this.approve(request);
+        return {
+          approvalId: request.approvalId,
+          approved,
+          ...(approved ? {} : { reason: "Denied by scenario." }),
+        };
+      }),
+    );
   }
 
   render(event) {
     switch (event.type) {
-      case "run.started":
-        this.line(this.paint("Run started", "bold", "blue"));
+      case AgentEventType.RunStarted:
+        this.line(this.paint("Run started", "blue"));
         return;
-      case "step.started":
-        this.line(`${this.paint("Step", "bold", "blue")} ${event.step}`);
+      case AgentEventType.StreamStarted:
+        this.line(this.paint("Stream started", "blue"));
         return;
-      case "text.started":
+      case AgentEventType.TextDelta:
         this.#textActive = true;
-        return;
-      case "text.delta":
         this.write(this.paint(event.text, "green"));
         return;
-      case "text.completed":
-        this.line();
-        this.#textActive = false;
+      case AgentEventType.ToolCalled:
+        this.line(
+          `${this.paint("Tool call", "magenta")}: ${event.toolCall.name}`,
+        );
+        this.line(formatValue(event.toolCall.input));
         return;
-      case "reasoning.delta":
-        this.write(this.paint(event.text, "dim"));
+      case AgentEventType.ToolResult:
+        this.line(
+          `${this.paint("Tool result", "green")}: ${formatValue(event.result.output)}`,
+        );
         return;
-      case "reasoning.completed":
-        this.line();
+      case AgentEventType.ToolError:
+        this.line(`${this.paint("Tool error", "red")}: ${event.error.error}`);
         return;
-      case "tool.called":
-        this.printToolCall(event.toolCall);
+      case AgentEventType.ApprovalRequired:
+        this.line(
+          `${this.paint("Approval requested", "yellow")}: ${event.approvals.length} tool call(s)`,
+        );
         return;
-      case "tool.result":
-        this.line(`${this.paint("Tool result", "bold", "green")} ${formatValue(event.result.output)}`);
+      case AgentEventType.ApprovalResolved:
+        this.line(
+          `${this.paint("Approval resolved", "magenta")}: ${event.approvals.length} decision(s)`,
+        );
         return;
-      case "tool.error":
-        this.line(`${this.paint("Tool error", "bold", "red")} ${event.error.message}`);
+      case AgentEventType.RunWaitingForApproval:
+        this.line(this.paint("Run waiting for approval", "yellow"));
         return;
-      case "tool.output.denied":
-        this.line(`${this.paint("Tool denied", "bold", "yellow")} ${event.toolCall.name}`);
+      case AgentEventType.RunCompleted:
+        this.line(this.paint("Run completed", "green"));
         return;
-      case "approval.required":
-        this.line(`${this.paint("Approval requested", "bold", "yellow")} ${event.approvals.length} tool call(s)`);
+      case AgentEventType.RunCancelled:
+        this.line(
+          `${this.paint("Run cancelled", "yellow")}: ${event.reason ?? "No reason provided"}`,
+        );
         return;
-      case "approval.resolved":
-        this.line(`${this.paint("Approval resolved", "bold", "magenta")} ${event.approvals.length} decision(s)`);
-        return;
-      case "stream.finished":
-        this.line(`${this.paint("Stream finished", "bold", "blue")} ${event.finishReason}`);
-        return;
-      case "stream.aborted":
-        this.line(`${this.paint("Stream aborted", "bold", "yellow")} ${event.reason ?? "No reason provided"}`);
-        return;
-      case "stream.error":
-        this.line(`${this.paint("Stream error", "bold", "red")} ${event.error.message}`);
-        return;
-      case "run.completed":
-        this.line(this.paint("Run completed", "bold", "green"));
-        return;
-      case "run.cancelled":
-        this.line(`${this.paint("Run cancelled", "bold", "yellow")} ${event.reason ?? "No reason provided"}`);
-        return;
-      case "run.failed":
-        this.line(`${this.paint("Run failed", "bold", "red")} ${event.error.message}`);
+      case AgentEventType.RunFailed:
+        this.line(`${this.paint("Run failed", "red")}: ${event.error.message}`);
         return;
       default:
         return;
     }
   }
 
-  printToolCall(toolCall) {
-    this.line(`${this.paint("Tool call", "bold", "magenta")} ${this.paint(toolCall.name, "cyan")}`);
-    this.line(this.paint(formatValue(toolCall.input), "dim"));
-  }
-
   printResult(result) {
     this.line();
-    this.line(this.paint("Final result", "bold", "cyan"));
-    this.line(`${this.paint("Status", "bold")} ${result.status}`);
-    this.line(`${this.paint("Run ID", "bold")} ${result.runId}`);
-    this.line(`${this.paint("Session ID", "bold")} ${result.sessionId}`);
-    this.line(`${this.paint("Content", "bold")} ${result.content || "(empty)"}`);
-    this.line(`${this.paint("Tool calls", "bold")} ${result.toolCalls.length}`);
-    this.line(`${this.paint("Tool results", "bold")} ${result.toolResults.length}`);
+    this.line(this.paint("Final result", "cyan"));
+    this.line(`Status: ${result.status}`);
+    this.line(`Run ID: ${result.runId}`);
+    this.line(`Session ID: ${result.sessionId}`);
+    this.line(`Content: ${result.content || "(empty)"}`);
+    this.line(`Tool calls: ${result.toolCalls.length}`);
+    this.line(`Tool results: ${result.toolResults.length}`);
   }
 
-  paint(value, style, foreground) {
+  paint(value, foreground) {
     if (!this.colorsEnabled) return value;
-    return `${color[style] ?? ""}${color[foreground] ?? ""}${value}${color.reset}`;
+    return `\u001b[${color[foreground]}m${value}\u001b[0m`;
   }
 
   write(value = "") {
@@ -247,15 +160,18 @@ export class ScenarioRunner {
   }
 }
 
+const color = {
+  red: 31,
+  green: 32,
+  yellow: 33,
+  blue: 34,
+  magenta: 35,
+  cyan: 36,
+};
+
 function formatValue(value) {
   if (typeof value === "string") return value;
-  if (value === undefined) return "undefined";
-
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+  return JSON.stringify(value);
 }
 
 function mergeRunResults(previous, current) {
@@ -268,10 +184,19 @@ function mergeRunResults(previous, current) {
 }
 
 function mergeRecords(previous, current) {
-  const records = new Map();
-  for (const record of [...previous, ...current]) {
-    const key = record.toolCallId ?? JSON.stringify(record);
-    records.set(key, record);
+  return [
+    ...new Map(
+      [...previous, ...current].map((record) => [record.toolCallId, record]),
+    ).values(),
+  ];
+}
+
+export function requireScenarioEnvironment(name) {
+  const value = process.env[name];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(
+      `Set ${name} before running scenarios. The key is never stored by AgentDock.`,
+    );
   }
-  return [...records.values()];
+  return value;
 }

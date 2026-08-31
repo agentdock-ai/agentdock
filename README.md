@@ -1,182 +1,129 @@
-<div align="center">
-  <img src="logo.png?v=d971329" alt="AgentDock Logo" width="250" style="margin-bottom: 20px;"/>
+# AgentDock
 
-  **Reusable TypeScript agent infrastructure for multi-tenant applications.**
+AgentDock is a small TypeScript facade for a streamed LangChain ReAct agent running on LangGraph.
 
-  [![version](https://img.shields.io/badge/version-0.1.0-blue.svg?cacheSeconds=2592000)](https://github.com/Muhammad-Zain01/agentdock)
-  [![TypeScript](https://img.shields.io/badge/TypeScript-7.0.2-blue.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-  [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24-green.svg?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-  [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-</div>
+It owns the application contract: tool registration, approval policy, normalized events, run lifecycle, and a small public API. LangChain owns models and tools; LangGraph owns the ReAct loop, checkpoints, interrupts, and resume.
 
-<br />
-
-This package provides a single `AgentDock` runtime for backend applications. Product-specific tools, prompts, authorization, and persistence stay in the consuming app.
-
-Runs belong to a required `sessionId`. AgentDock loads and updates the session's
-conversation messages through the injected `store`; callers do not need
-to manually pass message history between runs. The default in-memory stores are
-process-local and can be replaced with database-backed implementations.
-
-## ✨ Features
-
-- **Agent Runtime:** Run, stream, resume approvals, and cancel agent runs.
-- **Typed Events:** Provider-independent events for live clients.
-- **Tool Registry:** Register and manage tools per `AgentDock` instance.
-- **Run State:** Inject in-memory or durable run persistence.
-- **Provider Helpers:** Built-in helpers for AI SDK providers such as OpenRouter.
-- **TypeScript First:** Fully typed for safe, scalable, and rapid development.
-
-## 🚀 Setup
-
-Install the dependencies and build the package:
+## Install
 
 ```bash
-yarn install
-yarn build
+yarn add agentdock @langchain/openai
 ```
 
-## 💻 Local Development
+Applications install the LangChain provider they need and pass a configured chat model to AgentDock.
 
-Run the TypeScript compiler in watch mode:
-
-```bash
-yarn dev
-```
-
-## 📦 Build And Package
-
-To perform typechecking, create a clean build, and package the artifact:
-
-```bash
-yarn typecheck
-yarn build
-yarn pack:artifact
-```
-
-> **Note:** `yarn pack:artifact` creates `agentdock.tgz`. The package lifecycle runs a clean build before packing, so the artifact is always created from the current source.
-
-## 🛠️ Usage
-
-Create one configured `AgentDock` instance for your backend application:
+## Usage
 
 ```ts
-import {
-  AgentDock,
-  AgentModelFactory,
-  ToolRegistry,
-  InMemoryAgentStore,
-} from "agentdock";
+import { ChatOpenAI } from "@langchain/openai";
+import { AgentDock } from "agentdock";
 
-const modelFactory = new AgentModelFactory();
-const sessionId = "session-123";
-const agent = new AgentDock({
-  model: modelFactory.create({
-    provider: "openrouter",
-    modelId: "your-model-id",
-  }),
-  registry: new ToolRegistry(),
-  store: new InMemoryAgentStore(),
+const dock = new AgentDock({
+  model: new ChatOpenAI({ model: "gpt-5.4-mini" }),
   defaults: {
-    systemPrompt: "You are a helpful assistant. Use registered tools when appropriate.",
+    systemPrompt: "Answer clearly and use tools when they help.",
+    maxSteps: 4,
   },
 });
 
-agent.registerTool({
+dock.registerTool({
   name: "get_weather",
-  description: "Get the current weather for a city.",
+  description: "Look up the current weather for a city.",
   parameters: {
     type: "object",
     properties: { city: { type: "string" } },
     required: ["city"],
     additionalProperties: false,
   },
-  execute: async ({ input }) => ({ city: input.city, temperature: 22 }),
+  execute: async ({ input }) => ({ city: input.city, forecast: "sunny" }),
 });
 
-const result = await agent.run(
+const { stream, result } = await dock.stream(
   "What is the weather in Lahore?",
   { userId: "user-123" },
-  { sessionId },
-);
-```
-
-`systemPrompt` belongs inside `defaults` when it should apply to every run
-created by the `AgentDock` instance. It can also be overridden for one run:
-
-```ts
-const result = await agent.run(
-  "Answer concisely.",
-  { userId: "user-123" },
-  {
-    sessionId,
-    systemPrompt: "Use one short sentence.",
-  },
-);
-```
-
-`systemPrompt` is not a top-level `AgentDock` constructor option.
-
-For live output, consume the normalized AgentDock event stream:
-
-```ts
-import { AgentEventType } from "agentdock";
-
-const session = await agent.stream(
-  "What is the weather in Lahore?",
-  { userId: "user-123" },
-  { sessionId },
+  { sessionId: "session-123" },
 );
 
-for await (const event of session.stream) {
-  if (event.type === AgentEventType.TextDelta) {
-    process.stdout.write(event.text);
-  }
+for await (const event of stream) {
+  if (event.type === "text.delta") process.stdout.write(event.text);
 }
 
-const result = await session.result;
+console.log(await result);
 ```
 
-### Provider selection
+## Optional provider resolver
 
-`AgentModelFactory` provides the supported model providers through one typed API.
-The built-in provider identifiers are `openrouter`, `ollama`, `gateway`,
-`openai`, `anthropic`, `google`, `xai`, `azure`, and `amazon-bedrock`.
+`@agentdock/models` is a separate package for applications that prefer a small provider configuration object over importing LangChain provider classes directly. It returns the same `BaseChatModel`; it does not change AgentDock's workflow behavior.
 
 ```ts
-import { AgentModelFactory } from "agentdock";
+import { AgentDock } from "agentdock";
+import { AgentDockModel } from "@agentdock/models";
 
-const modelFactory = new AgentModelFactory();
-
-const model = modelFactory.create({
-  provider: "ollama",
-  modelId: "llama3.2",
-  // Optional when Ollama is not running on the default local host.
-  baseURL: "http://localhost:11434",
+const dock = new AgentDock({
+  model: AgentDockModel.openAI({
+    model: "gpt-5.4-mini",
+    apiKey: process.env.OPENAI_API_KEY,
+  }),
 });
 ```
 
-For OpenRouter, use `provider: "openrouter"` and provide `modelId`. The API key
-can be passed explicitly or read from `OPENROUTER_API_KEY`.
+The optional resolver initially supports `openai`, `ollama`, and `openrouter`; applications that need a provider outside that set can continue to pass any LangChain `BaseChatModel` directly.
 
-The direct providers use their official AI SDK environment variables when an
-API key is not supplied in the configuration. Vercel AI Gateway uses
-`AI_GATEWAY_API_KEY`, and Amazon Bedrock can use its standard AWS credential
-environment and credential-chain configuration.
+### OpenRouter scenarios
 
-For example, Vercel AI Gateway can route to a model from a supported upstream
-provider:
-
-```ts
-const model = modelFactory.create({
-  provider: "gateway",
-  modelId: "openai/gpt-4.1",
-});
-```
-
-The permission demo currently supports the local Ollama and OpenRouter
-providers:
+All scenarios use OpenRouter with `deepseek/deepseek-v4-flash-0731` by default. They exercise real streaming, tool calling, approval, and resume. They are separate from `yarn test` because they use your account and incur provider usage.
 
 ```bash
-AGENTDOCK_PROVIDER=ollama AGENTDOCK_MODEL=llama3.2 yarn demo:permissions
+yarn install
+yarn install:models
+export OPENROUTER_API_KEY="your-key"
+yarn test:scenarios
 ```
+
+Override the model without changing source code when needed:
+
+```bash
+AGENTDOCK_OPENROUTER_MODEL="provider/model" yarn scenario:openrouter
+```
+
+## Approval and resume
+
+Set `requiresApproval: true` on a side-effecting tool. AgentDock emits `approval.required` and returns a `waiting_for_approval` result. LangGraph keeps the graph checkpoint; resume the same session after a decision.
+
+```ts
+const waiting = await dock.run("Publish the report.", context, {
+  sessionId: "session-123",
+  runId: "run-publish",
+});
+
+const completed = await dock.resume(
+  {
+    runId: waiting.runId,
+    approvals: waiting.approvalRequests.map((request) => ({
+      approvalId: request.approvalId,
+      approved: true,
+    })),
+  },
+  context,
+  { sessionId: "session-123" },
+);
+```
+
+Use a durable LangGraph checkpointer in production:
+
+```ts
+const dock = new AgentDock({
+  model,
+  checkpointer: productionCheckpointer,
+});
+```
+
+The default `MemorySaver` is process-local and intended for development and tests.
+
+## V1 boundary
+
+- One workflow: streamed ReAct (`workflow: "react"`, the default).
+- One execution path: `stream()`; `run()` consumes that stream.
+- One state owner: the LangGraph checkpointer.
+- One tool/authorization/approval path shared by every future workflow.
+- No bundled model provider wrappers, custom graph engine, context-engine, UI, or plugin system.

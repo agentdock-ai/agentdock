@@ -23,52 +23,8 @@
       "import": "./dist/agent/index.js"
     },
     "./tools": {
-      "types": "./dist/tools/index.d.ts",
-      "import": "./dist/tools/index.js"
-    },
-    "./providers": {
-      "types": "./dist/providers/index.d.ts",
-      "import": "./dist/providers/index.js"
-    },
-    "./providers/openrouter": {
-      "types": "./dist/providers/openrouter.d.ts",
-      "import": "./dist/providers/openrouter.js"
-    },
-    "./providers/ollama": {
-      "types": "./dist/providers/ollama.d.ts",
-      "import": "./dist/providers/ollama.js"
-    },
-    "./providers/gateway": {
-      "types": "./dist/providers/gateway.d.ts",
-      "import": "./dist/providers/gateway.js"
-    },
-    "./providers/openai": {
-      "types": "./dist/providers/openai.d.ts",
-      "import": "./dist/providers/openai.js"
-    },
-    "./providers/anthropic": {
-      "types": "./dist/providers/anthropic.d.ts",
-      "import": "./dist/providers/anthropic.js"
-    },
-    "./providers/google": {
-      "types": "./dist/providers/google.d.ts",
-      "import": "./dist/providers/google.js"
-    },
-    "./providers/xai": {
-      "types": "./dist/providers/xai.d.ts",
-      "import": "./dist/providers/xai.js"
-    },
-    "./providers/azure": {
-      "types": "./dist/providers/azure.d.ts",
-      "import": "./dist/providers/azure.js"
-    },
-    "./providers/bedrock": {
-      "types": "./dist/providers/bedrock.d.ts",
-      "import": "./dist/providers/bedrock.js"
-    },
-    "./providers/factory": {
-      "types": "./dist/providers/factory.d.ts",
-      "import": "./dist/providers/factory.js"
+      "types": "./dist/tools/registry.d.ts",
+      "import": "./dist/tools/registry.js"
     }
   },
   "files": [
@@ -78,9 +34,18 @@
   "scripts": {
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "tsc -p tsconfig.json",
+    "build:all": "yarn build && yarn build:models",
+    "build:models": "yarn --cwd packages/models build",
+    "format": "prettier --write src test scripts packages package.json README.md",
+    "format:check": "prettier --check src test scripts packages package.json README.md",
+    "install:models": "yarn --cwd packages/models install",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:all": "yarn typecheck && yarn typecheck:models",
+    "typecheck:models": "yarn --cwd packages/models typecheck",
     "test:unit": "vitest run test/unit",
-    "test": "vitest run",
+    "test": "yarn test:unit && yarn test:models",
+    "test:models": "yarn --cwd packages/models test",
+    "test:scenarios": "yarn build:all && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
     "test:watch": "vitest",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn clean && yarn build",
@@ -88,19 +53,14 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^5.0.66",
-    "@ai-sdk/anthropic": "^4.0.44",
-    "@ai-sdk/azure": "^4.0.52",
-    "@ai-sdk/google": "^4.0.55",
-    "@ai-sdk/openai": "^4.0.50",
-    "@ai-sdk/xai": "^4.0.48",
-    "@openrouter/ai-sdk-provider": "^3.0.0",
-    "ai": "^7.0.66",
-    "ai-sdk-ollama": "^4.0.0",
-    "zod": "^3.24.3"
+    "@langchain/core": "^1.2.9",
+    "@langchain/langgraph": "^1.4.13",
+    "langchain": "^1.5.10",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "prettier": "^3.5.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },

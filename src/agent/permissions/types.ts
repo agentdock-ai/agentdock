@@ -1,7 +1,5 @@
 import type { ToolCallRecord } from "../types.js";
 
-export type ToolPermissionMode = "normal" | "approve_all";
-
 export interface ToolApprovalDecision {
   approvalId: string;
   approved: boolean;

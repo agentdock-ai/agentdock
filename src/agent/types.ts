@@ -1,18 +1,9 @@
-import type { LanguageModel } from "ai";
-import type { CompressionStrategy } from "../compression/strategy.js";
-import type { AgentHooks } from "./hooks.js";
+import type { JSONSchema } from "@langchain/core/utils/json_schema";
 import type { Message } from "./memory.js";
-import type { ToolRegistry } from "../tools/registry.js";
 import type { AgentEvent } from "./events.js";
-import type {
-  ToolApprovalRequest,
-  ToolPermissionMode,
-} from "./permissions/types.js";
-import type { AgentRunStatus } from "./runs/store.js";
+import type { ToolApprovalRequest } from "./permissions/types.js";
 
-export interface AgentContext {
-  [key: string]: unknown;
-}
+export type AgentContext = Record<string, unknown>;
 
 export interface ToolAuthorizationInput {
   toolCall: ToolCallRecord;
@@ -20,13 +11,12 @@ export interface ToolAuthorizationInput {
 }
 
 export type ToolAuthorizationResult =
-  | { allowed: true }
-  | { allowed: false; reason: string };
+  { allowed: true } | { allowed: false; reason: string };
 
 export interface Tool {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  parameters: JSONSchema;
   requiresApproval?: boolean;
   authorize?(
     input: ToolAuthorizationInput,
@@ -43,20 +33,20 @@ export interface ToolExecuteInput {
 export interface ToolCallRecord {
   toolCallId: string;
   name: string;
-  input: unknown;
+  input: Record<string, unknown>;
 }
 
 export interface ToolErrorRecord extends ToolCallRecord {
   error: string;
 }
 
-export interface ToolResultRecord {
-  toolCallId: string;
-  name: string;
-  input: unknown;
+export interface ToolResultRecord extends ToolCallRecord {
   output: unknown;
   isError?: boolean;
 }
+
+export type AgentRunStatus =
+  "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 
 export interface AgentRunResult {
   runId: string;
@@ -69,6 +59,7 @@ export interface AgentRunResult {
   toolErrors: ToolErrorRecord[];
   approvalRequests: ToolApprovalRequest[];
   stepsCompleted: number;
+  error?: string;
 }
 
 export interface StreamAgentResult {
@@ -79,14 +70,14 @@ export interface StreamAgentResult {
 export interface RunAgentOptions {
   runId?: string;
   sessionId?: string;
-  permissionMode?: ToolPermissionMode;
+  workflow?: string;
   maxSteps?: number;
   systemPrompt?: string;
-  model?: LanguageModel;
-  registry?: ToolRegistry;
   abortSignal?: AbortSignal;
   toolTimeout?: number;
-  messages?: Message[];
-  hooks?: AgentHooks;
-  compression?: CompressionStrategy;
+}
+
+export interface AgentSessionRecord {
+  sessionId: string;
+  messages: Message[];
 }

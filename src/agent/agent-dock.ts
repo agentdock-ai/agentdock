@@ -1,81 +1,69 @@
-import { streamText, type LanguageModel, type ModelMessage } from "ai";
-import { createAgentRunResult } from "./runtime/result.js";
-import {
-  buildModelRequest,
-  prepareAgentRun,
-  prepareAgentRunFromHistory,
-} from "./runtime/run-context.js";
-import {
-  clearRunController,
-  registerRunController,
-  stopRunController,
-} from "./runs/runtime.js";
-import {
-  type AgentRunApprovalClaim,
-  type AgentRunRecord,
-} from "./runs/store.js";
-import {
-  type AgentSessionRecord,
-} from "./sessions/store.js";
-import {
-  type AgentStore,
-  InMemoryAgentStore,
-} from "./storage/store.js";
-import { AgentEventType } from "./events.js";
-import {
-  AgentEventStream,
-  serializeApprovalResponses,
-} from "./runtime/events.js";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { MemorySaver, type BaseCheckpointSaver } from "@langchain/langgraph";
 import type {
   ToolApprovalDecision,
+  ToolApprovalRequest,
   ToolApprovalResponse,
 } from "./permissions/types.js";
 import type {
   AgentContext,
   AgentRunResult,
+  AgentSessionRecord,
   RunAgentOptions,
   StreamAgentResult,
   Tool,
 } from "./types.js";
+import { ReActWorkflow } from "./workflows/react-workflow.js";
+import type { AgentWorkflow } from "./workflows/types.js";
+import { isRecord } from "./value.js";
 import { ToolRegistry, type ToolSchema } from "../tools/registry.js";
+
+const DEFAULT_WORKFLOW = "react";
 
 export type AgentDockDefaults = Omit<
   RunAgentOptions,
-  "model" | "registry" | "runId" | "sessionId" | "messages" | "abortSignal"
+  "runId" | "sessionId" | "abortSignal"
 >;
 
-export type AgentDockRunOptions = Omit<
-  RunAgentOptions,
-  "model" | "registry" | "sessionId" | "messages"
-> & { sessionId: string };
-
-export type AgentDockResumeOptions = Omit<AgentDockRunOptions, "sessionId"> & {
-  sessionId?: string;
+export type AgentDockRunOptions = Omit<RunAgentOptions, "sessionId"> & {
+  sessionId: string;
 };
 
+export type AgentDockResumeOptions = Omit<AgentDockRunOptions, "runId">;
+
 export interface AgentDockOptions {
-  model: LanguageModel;
+  model: BaseChatModel;
   registry?: ToolRegistry;
-  store?: AgentStore;
+  checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
 }
 
+interface ActiveRun {
+  sessionId: string;
+  controller: AbortController;
+}
+
 export class AgentDock {
-  readonly model: LanguageModel;
+  readonly model: BaseChatModel;
   readonly registry: ToolRegistry;
 
-  private readonly runStore: AgentStore["runs"];
-  private readonly sessionStore: AgentStore["sessions"];
   private readonly defaults: AgentDockDefaults;
-  private readonly sessionWriteQueues = new Map<string, Promise<void>>();
+  private readonly workflow: AgentWorkflow;
+  private readonly activeRuns = new Map<string, ActiveRun>();
+  private readonly activeSessions = new Map<string, string>();
 
   constructor(options: AgentDockOptions) {
+    assertDockOptions(options);
+    assertRunOptions(options.defaults ?? {}, false);
+
     this.model = options.model;
     this.registry = options.registry ?? new ToolRegistry();
-    const store = options.store ?? new InMemoryAgentStore();
-    this.runStore = store.runs;
-    this.sessionStore = store.sessions;
     this.defaults = options.defaults ?? {};
+    this.workflow = new ReActWorkflow({
+      model: this.model,
+      registry: this.registry,
+      checkpointer: options.checkpointer ?? new MemorySaver(),
+    });
   }
 
   registerTool(tool: Tool): this {
@@ -100,12 +88,10 @@ export class AgentDock {
     return this.registry.schemas();
   }
 
-  async getRun(runId: string): Promise<AgentRunRecord | null> {
-    return this.runStore.get(runId);
-  }
-
   async getSession(sessionId: string): Promise<AgentSessionRecord | null> {
-    return this.sessionStore.get(sessionId);
+    assertNonEmptyString(sessionId, "Agent session ID");
+    const messages = await this.workflow.getMessages(sessionId, this.defaults);
+    return messages.length > 0 ? { sessionId, messages } : null;
   }
 
   async run(
@@ -115,7 +101,7 @@ export class AgentDock {
   ): Promise<AgentRunResult> {
     const session = await this.stream(userPrompt, ctx, options);
     for await (const _event of session.stream) {
-      // Drain the live event stream so the underlying model stream completes.
+      // stream() is the canonical execution path.
     }
     return session.result;
   }
@@ -125,56 +111,41 @@ export class AgentDock {
     ctx: AgentContext,
     options: AgentDockRunOptions,
   ): Promise<StreamAgentResult> {
-    const runId = options.runId ?? crypto.randomUUID();
-    const session = await this.sessionStore.get(options.sessionId);
-    const abortSignal = this.createRunAbortSignal(runId, options.abortSignal);
-    let prepared;
+    assertNonEmptyString(userPrompt, "Agent prompt");
+    assertContext(ctx);
+    assertRunOptions(options, true);
+    const merged = this.mergeOptions(options);
+    this.resolveWorkflow(merged);
+
+    const runId = merged.runId ?? crypto.randomUUID();
+    const sessionId = options.sessionId;
+    const controller = new AbortController();
+    this.claimRun(runId, sessionId, controller);
 
     try {
-      prepared = await prepareAgentRun(userPrompt, ctx, {
-        ...this.buildRunOptions(options),
+      const execution = this.workflow.start({
         runId,
-        abortSignal,
-        messages: session?.messages ?? [],
+        sessionId,
+        userPrompt,
+        ctx,
+        options: merged,
+        signal: createSignal(controller, merged.abortSignal),
       });
-      await this.saveRunningRun(runId, prepared.sessionId, prepared.history);
+      return this.trackExecution(execution, runId, sessionId);
     } catch (error) {
-      clearRunController(runId);
+      this.releaseRun(runId, sessionId);
       throw error;
-    }
-
-    try {
-      const stream = streamText(buildModelRequest(prepared));
-      const result = this.createStreamResult(stream, prepared, runId, 0);
-
-      return {
-        stream: new AgentEventStream({
-          runId,
-          rawStream: stream.fullStream,
-          result,
-          getRun: () => this.getRun(runId),
-          initialEvents: [{ type: AgentEventType.RunStarted }],
-        }),
-        result,
-      };
-    } catch (error) {
-      try {
-        await this.markRunFailed(runId, error);
-        throw error;
-      } finally {
-        clearRunController(runId);
-      }
     }
   }
 
   async resume(
     input: { runId: string; approvals: ToolApprovalDecision[] },
     ctx: AgentContext,
-    options: AgentDockResumeOptions = {},
+    options: AgentDockResumeOptions,
   ): Promise<AgentRunResult> {
     const session = await this.resumeStream(input, ctx, options);
     for await (const _event of session.stream) {
-      // Drain the live event stream so the underlying model stream completes.
+      // stream() is the canonical execution path.
     }
     return session.result;
   }
@@ -182,346 +153,246 @@ export class AgentDock {
   async resumeStream(
     input: { runId: string; approvals: ToolApprovalDecision[] },
     ctx: AgentContext,
-    options: AgentDockResumeOptions = {},
+    options: AgentDockResumeOptions,
   ): Promise<StreamAgentResult> {
-    if (options.sessionId) {
-      const current = await this.runStore.get(input.runId);
-      if (current && current.sessionId !== options.sessionId) {
-        throw new Error(`Agent run does not belong to session: ${options.sessionId}`);
-      }
-    }
-    const claim = await this.claimApprovalRun(input.runId, input.approvals);
-    const history = buildApprovalHistory(claim, input.approvals);
-    const abortSignal = this.createRunAbortSignal(input.runId, options.abortSignal);
-    let prepared;
-    const approvalResponses = buildApprovalResponses(claim, input.approvals);
+    assertResumeInput(input);
+    assertContext(ctx);
+    assertRunOptions(options, true);
+    const merged = this.mergeOptions(options);
+    this.resolveWorkflow(merged);
+
+    const sessionId = options.sessionId;
+    const controller = new AbortController();
+    this.claimRun(input.runId, sessionId, controller);
 
     try {
-      prepared = await prepareAgentRunFromHistory(
-        history,
-        ctx,
-        {
-          ...this.buildRunOptions(options),
-          runId: input.runId,
-          sessionId: claim.record.sessionId,
-          abortSignal,
-        },
-        claim.record.stepsCompleted,
-      );
-      await this.runStore.update(input.runId, { messages: history });
-      await this.persistSessionMessages(
-        claim.record.sessionId,
-        history,
-        claim.record.runId,
-      );
-      const stream = streamText(buildModelRequest(prepared));
-      const result = this.createStreamResult(
-        stream,
-        prepared,
-        input.runId,
-        claim.record.stepsCompleted,
-      );
-
-      return {
-        stream: new AgentEventStream({
-          runId: input.runId,
-          rawStream: stream.fullStream,
-          result,
-          getRun: () => this.getRun(input.runId),
-          initialEvents: [{
-            type: AgentEventType.ApprovalResolved,
-            approvals: serializeApprovalResponses(approvalResponses),
-          }],
-          stepOffset: claim.record.stepsCompleted,
-        }),
-        result,
-      };
-    } catch (error) {
-      try {
-        await this.markRunFailed(input.runId, error);
-        throw error;
-      } finally {
-        clearRunController(input.runId);
+      const checkpointRunId = await this.workflow.getRunId(sessionId, merged);
+      if (checkpointRunId !== input.runId) {
+        throw new Error(
+          "Agent run ID does not match the checkpoint for this session.",
+        );
       }
+      const pending = await this.workflow.getPendingApprovals(
+        sessionId,
+        merged,
+      );
+      const approvals = validateApprovalDecisions(input.approvals, pending);
+      const execution = this.workflow.resume({
+        runId: input.runId,
+        sessionId,
+        ctx,
+        options: merged,
+        signal: createSignal(controller, merged.abortSignal),
+        approvals,
+      });
+      return this.trackExecution(execution, input.runId, sessionId);
+    } catch (error) {
+      this.releaseRun(input.runId, sessionId);
+      throw error;
     }
   }
 
   async stop(runId: string): Promise<boolean> {
-    const record = await this.runStore.get(runId);
-    if (!record) throw new Error(`Agent run not found: ${runId}`);
-    if (
-      record.status === "completed" ||
-      record.status === "failed" ||
-      record.status === "cancelled"
-    ) {
-      return false;
-    }
-
-    stopRunController(runId);
-    return this.runStore.transition(
-      runId,
-      ["running", "waiting_for_approval"],
-      {
-        status: "cancelled",
-        pendingApprovals: [],
-      },
-    );
+    assertNonEmptyString(runId, "Agent run ID");
+    const activeRun = this.activeRuns.get(runId);
+    if (!activeRun) return false;
+    activeRun.controller.abort(new Error("Agent run cancelled."));
+    return true;
   }
 
-  private buildRunOptions(
+  private trackExecution(
+    execution: StreamAgentResult,
+    runId: string,
+    sessionId: string,
+  ): StreamAgentResult {
+    return {
+      stream: execution.stream,
+      result: execution.result.finally(() => this.releaseRun(runId, sessionId)),
+    };
+  }
+
+  private claimRun(
+    runId: string,
+    sessionId: string,
+    controller: AbortController,
+  ): void {
+    if (this.activeRuns.has(runId))
+      throw new Error(`Agent run is already active: ${runId}`);
+    const activeRunId = this.activeSessions.get(sessionId);
+    if (activeRunId)
+      throw new Error(`Agent session already has an active run: ${sessionId}`);
+    this.activeRuns.set(runId, { sessionId, controller });
+    this.activeSessions.set(sessionId, runId);
+  }
+
+  private releaseRun(runId: string, sessionId: string): void {
+    this.activeRuns.delete(runId);
+    if (this.activeSessions.get(sessionId) === runId)
+      this.activeSessions.delete(sessionId);
+  }
+
+  private mergeOptions(
     options: AgentDockRunOptions | AgentDockResumeOptions,
   ): RunAgentOptions {
-    return {
-      ...this.defaults,
-      ...options,
-      model: this.model,
-      registry: this.registry,
-    };
+    return { ...this.defaults, ...options };
   }
 
-  private createRunAbortSignal(
-    runId: string,
-    callerSignal?: AbortSignal,
-  ): AbortSignal {
-    const runSignal = registerRunController(runId);
-    return callerSignal
-      ? AbortSignal.any([callerSignal, runSignal])
-      : runSignal;
-  }
-
-  private async saveRunningRun(
-    runId: string,
-    sessionId: string,
-    messages: AgentRunRecord["messages"],
-  ): Promise<void> {
-    if (await this.runStore.get(runId)) {
-      throw new Error(`Agent run already exists: ${runId}`);
-    }
-
-    await this.persistSessionMessages(sessionId, messages, runId);
-    await this.runStore.save({
-      runId,
-      sessionId,
-      status: "running",
-      messages,
-      pendingApprovals: [],
-      stepsCompleted: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-  }
-
-  private createStreamResult(
-    stream: ReturnType<typeof streamText>,
-    prepared: Awaited<ReturnType<typeof prepareAgentRunFromHistory>>,
-    runId: string,
-    stepsCompleted: number,
-  ): Promise<AgentRunResult> {
-    return Promise.all([
-      stream.text,
-      stream.responseMessages,
-      stream.toolCalls,
-      stream.toolResults,
-      stream.content,
-      stream.steps,
-    ])
-      .then(async ([text, responseMessages, toolCalls, toolResults, content, steps]) => {
-        const output = createAgentRunResult(
-          prepared,
-          text,
-          responseMessages as ModelMessage[],
-          toolCalls,
-          toolResults,
-          content,
-          stepsCompleted + steps.length,
-        );
-        await this.persistResult(output);
-        clearRunController(runId);
-        return output;
-      })
-      .catch(async (error) => {
-        try {
-          const current = await this.runStore.get(runId);
-          if (current?.status === "cancelled") {
-            return this.createCancelledResult(prepared, stepsCompleted);
-          }
-
-          await this.markRunFailed(runId, error);
-          throw error;
-        } finally {
-          clearRunController(runId);
-        }
-      });
-  }
-
-  private createCancelledResult(
-    prepared: Awaited<ReturnType<typeof prepareAgentRunFromHistory>>,
-    stepsCompleted: number,
-  ): AgentRunResult {
-    return createAgentRunResult(
-      prepared,
-      "",
-      [],
-      [],
-      [],
-      [],
-      stepsCompleted,
-      "cancelled",
+  private resolveWorkflow(
+    options: Pick<RunAgentOptions, "workflow">,
+  ): typeof DEFAULT_WORKFLOW {
+    const workflow =
+      options.workflow ?? this.defaults.workflow ?? DEFAULT_WORKFLOW;
+    if (workflow === DEFAULT_WORKFLOW) return workflow;
+    throw new Error(
+      `Unsupported AgentDock workflow: ${workflow}. Supported workflows: ${DEFAULT_WORKFLOW}`,
     );
   }
+}
 
-  private async persistResult(result: AgentRunResult): Promise<void> {
-    const waitingForApproval = result.approvalRequests.length > 0;
-    const persisted = await this.runStore.transition(result.runId, "running", {
-      status: waitingForApproval ? "waiting_for_approval" : "completed",
-      messages: result.messages,
-      pendingApprovals: result.approvalRequests,
-      stepsCompleted: result.stepsCompleted,
-    });
-
-    if (!persisted) {
-      const current = await this.runStore.get(result.runId);
-      if (current?.status === "cancelled") {
-        result.status = "cancelled";
-        return;
-      }
-      throw new Error(`Agent run is no longer active: ${result.runId}`);
-    }
-
-    await this.persistSessionMessages(result.sessionId, result.messages, result.runId);
-    result.status = waitingForApproval ? "waiting_for_approval" : "completed";
+function assertDockOptions(
+  options: unknown,
+): asserts options is AgentDockOptions {
+  if (!isRecord(options) || !isRecord(options.model)) {
+    throw new Error("AgentDock requires a LangChain chat model.");
   }
-
-  private async persistSessionMessages(
-    sessionId: string,
-    messages: AgentSessionRecord["messages"],
-    latestRunId?: string,
-  ): Promise<void> {
-    const previous = this.sessionWriteQueues.get(sessionId) ?? Promise.resolve();
-    const operation = previous
-      .catch(() => {})
-      .then(() => this.writeSessionMessages(sessionId, messages, latestRunId));
-    this.sessionWriteQueues.set(sessionId, operation);
-
-    try {
-      await operation;
-    } finally {
-      if (this.sessionWriteQueues.get(sessionId) === operation) {
-        this.sessionWriteQueues.delete(sessionId);
-      }
-    }
+  if (
+    options.registry !== undefined &&
+    !(options.registry instanceof ToolRegistry)
+  ) {
+    throw new Error("AgentDock registry must be a ToolRegistry instance.");
   }
-
-  private async writeSessionMessages(
-    sessionId: string,
-    messages: AgentSessionRecord["messages"],
-    latestRunId?: string,
-  ): Promise<void> {
-    const current = await this.sessionStore.get(sessionId);
-    if (!current) {
-      try {
-        await this.sessionStore.save({
-          sessionId,
-          messages,
-          ...(latestRunId ? { latestRunId } : {}),
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-      } catch (error) {
-        const created = await this.sessionStore.get(sessionId);
-        if (!created) throw error;
-        await this.sessionStore.update(sessionId, {
-          messages: mergeSessionMessages(created.messages, messages),
-          ...(latestRunId ? { latestRunId } : {}),
-        });
-      }
-      return;
-    }
-
-    await this.sessionStore.update(sessionId, {
-      messages: mergeSessionMessages(current.messages, messages),
-      ...(latestRunId ? { latestRunId } : {}),
-    });
-  }
-
-  private async markRunFailed(runId: string, error: unknown): Promise<void> {
-    const failed = await this.runStore.transition(runId, "running", {
-      status: "failed",
-      error: error instanceof Error ? error.message : "Agent run failed",
-    });
-
-    if (!failed) {
-      const current = await this.runStore.get(runId);
-      if (current?.status === "cancelled") return;
-      if (!current) return;
-      if (current.status === "failed") return;
-      throw new Error(`Agent run is no longer active: ${runId}`);
-    }
-  }
-
-  private async claimApprovalRun(
-    runId: string,
-    decisions: ToolApprovalDecision[],
-  ): Promise<AgentRunApprovalClaim> {
-    const claim = await this.runStore.claimApprovals(runId, decisions);
-    if (!claim) {
-      throw new Error(
-        `Agent run approval claim failed: ${runId} is no longer waiting for the supplied approvals`,
-      );
-    }
-    return claim;
+  if (options.checkpointer !== undefined && !isRecord(options.checkpointer)) {
+    throw new Error("AgentDock checkpointer must be a LangGraph checkpointer.");
   }
 }
 
-function buildApprovalHistory(
-  claim: AgentRunApprovalClaim,
-  decisions: ToolApprovalDecision[],
-): AgentRunRecord["messages"] {
-  return [
-    ...claim.record.messages,
-    {
-      role: "tool",
-      content: "",
-      toolResults: [],
-      approvalResponses: buildApprovalResponses(claim, decisions),
-    },
-  ];
+function assertResumeInput(
+  input: unknown,
+): asserts input is { runId: string; approvals: ToolApprovalDecision[] } {
+  if (!isRecord(input))
+    throw new Error("Agent resume input must be an object.");
+  assertNonEmptyString(input.runId, "Agent run ID");
+  if (!Array.isArray(input.approvals))
+    throw new Error("Approval decisions must be an array.");
 }
 
-function buildApprovalResponses(
-  claim: AgentRunApprovalClaim,
-  decisions: ToolApprovalDecision[],
+function assertContext(ctx: unknown): asserts ctx is AgentContext {
+  if (!isRecord(ctx)) throw new Error("Agent context must be an object.");
+}
+
+function assertRunOptions(
+  options: unknown,
+  requireSessionId: boolean,
+): asserts options is RunAgentOptions {
+  if (!isRecord(options))
+    throw new Error("Agent run options must be an object.");
+  assertOptionalString(options.runId, "Agent run ID");
+  assertOptionalString(options.sessionId, "Agent session ID");
+  assertOptionalString(options.workflow, "Agent workflow");
+  assertOptionalString(options.systemPrompt, "Agent system prompt", false);
+  if (requireSessionId)
+    assertNonEmptyString(options.sessionId, "Agent session ID");
+  if (
+    options.maxSteps !== undefined &&
+    (typeof options.maxSteps !== "number" ||
+      !Number.isSafeInteger(options.maxSteps) ||
+      options.maxSteps <= 0)
+  ) {
+    throw new Error("Agent maxSteps must be a positive integer.");
+  }
+  if (
+    options.toolTimeout !== undefined &&
+    (typeof options.toolTimeout !== "number" ||
+      !Number.isFinite(options.toolTimeout) ||
+      options.toolTimeout <= 0)
+  ) {
+    throw new Error("Agent toolTimeout must be a positive number.");
+  }
+  if (
+    options.abortSignal !== undefined &&
+    !isAbortSignal(options.abortSignal)
+  ) {
+    throw new Error("Agent abortSignal must be an AbortSignal.");
+  }
+}
+
+function validateApprovalDecisions(
+  decisions: unknown,
+  pending: ToolApprovalRequest[],
 ): ToolApprovalResponse[] {
-  const decisionsById = new Map(
-    decisions.map((decision) => [decision.approvalId, decision]),
-  );
+  if (!Array.isArray(decisions))
+    throw new Error("Approval decisions must be an array.");
+  if (pending.length === 0 || decisions.length !== pending.length) {
+    throw new Error("Approval decisions do not match a pending AgentDock run.");
+  }
 
-  return claim.approvals.map((approval) => {
-    const decision = decisionsById.get(approval.approvalId)!;
-    return {
-      approvalId: approval.approvalId,
-      toolCall: approval.toolCall,
+  const byId = new Map<string, ToolApprovalDecision>();
+  for (const decision of decisions) {
+    if (!isRecord(decision))
+      throw new Error("Each approval decision must be an object.");
+    assertNonEmptyString(decision.approvalId, "Approval ID");
+    if (typeof decision.approved !== "boolean") {
+      throw new Error("Approval decision approved must be a boolean.");
+    }
+    if (decision.reason !== undefined && typeof decision.reason !== "string") {
+      throw new Error("Approval decision reason must be a string.");
+    }
+    if (byId.has(decision.approvalId)) {
+      throw new Error("Approval decisions must use unique approval IDs.");
+    }
+    byId.set(decision.approvalId, {
+      approvalId: decision.approvalId,
       approved: decision.approved,
-      ...(decision.reason ? { reason: decision.reason } : {}),
-    };
+      ...(typeof decision.reason === "string"
+        ? { reason: decision.reason }
+        : {}),
+    });
+  }
+
+  return pending.map((request) => {
+    const decision = byId.get(request.approvalId);
+    if (!decision)
+      throw new Error(
+        "Approval decisions do not match a pending AgentDock run.",
+      );
+    return { ...decision, toolCall: request.toolCall };
   });
 }
 
-function mergeSessionMessages(
-  current: AgentSessionRecord["messages"],
-  incoming: AgentSessionRecord["messages"],
-): AgentSessionRecord["messages"] {
-  let commonPrefix = 0;
-  while (
-    commonPrefix < current.length &&
-    commonPrefix < incoming.length &&
-    JSON.stringify(current[commonPrefix]) === JSON.stringify(incoming[commonPrefix])
-  ) {
-    commonPrefix += 1;
+function createSignal(
+  controller: AbortController,
+  signal: AbortSignal | undefined,
+): AbortSignal {
+  return signal
+    ? AbortSignal.any([controller.signal, signal])
+    : controller.signal;
+}
+
+function assertOptionalString(
+  value: unknown,
+  label: string,
+  nonEmpty = true,
+): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || (nonEmpty && !value.trim())) {
+    throw new Error(
+      `${label} must be a${nonEmpty ? " non-empty" : ""} string.`,
+    );
   }
+}
 
-  if (commonPrefix === incoming.length) return current;
-  if (commonPrefix === current.length) return incoming;
+function assertNonEmptyString(
+  value: unknown,
+  label: string,
+): asserts value is string {
+  assertOptionalString(value, label);
+  if (value === undefined) throw new Error(`${label} is required.`);
+}
 
-  return [...current, ...incoming.slice(commonPrefix)];
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return (
+    isRecord(value) &&
+    typeof value.aborted === "boolean" &&
+    typeof value.addEventListener === "function"
+  );
 }

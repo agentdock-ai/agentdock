@@ -1,0 +1,45 @@
+{
+  "name": "@agentdock/models",
+  "version": "0.1.0",
+  "description": "Optional LangChain model resolver for AgentDock",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "directory": "packages/models"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run test",
+    "prepack": "yarn build"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.9",
+    "@langchain/ollama": "^1.3.0",
+    "@langchain/openai": "^1.5.10",
+    "@langchain/openrouter": "^0.4.10"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
