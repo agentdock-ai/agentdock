@@ -122,9 +122,8 @@ The default `MemorySaver` is process-local and intended for development and test
 
 ## V1 boundary
 
-- One built-in workflow: streamed tool-calling (`workflow: "tool-calling"`, the default).
+- One built-in workflow: streamed tool-calling (`dock.toolCalling`, the default).
 - One execution path: `stream()`; `run()` consumes that stream.
-- Custom workflows use the same `AgentWorkflow` and `AgentEvent` contracts.
 - One state owner: the LangGraph checkpointer.
 - One tool/authorization/approval path shared by every future workflow.
 - No bundled model provider wrappers, custom graph engine, context-engine, UI, or plugin system.

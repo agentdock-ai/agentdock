@@ -13,12 +13,10 @@ import type {
   StreamAgentResult,
   Tool,
 } from "./types.js";
-import { ToolCallingWorkflow } from "./workflows/tool-calling-workflow.js";
+import { ToolCallingWorkflow } from "./workflows/tool-calling/workflow.js";
 import type { AgentWorkflow } from "./workflows/types.js";
 import { isRecord } from "./value.js";
 import { ToolRegistry, type ToolSchema } from "../tools/registry.js";
-
-const DEFAULT_WORKFLOW = "tool-calling";
 
 export type AgentDockDefaults = Omit<
   RunAgentOptions,
@@ -31,12 +29,38 @@ export type AgentDockRunOptions = Omit<RunAgentOptions, "sessionId"> & {
 
 export type AgentDockResumeOptions = Omit<AgentDockRunOptions, "runId">;
 
+export interface AgentDockWorkflowClient {
+  stream(
+    userPrompt: string,
+    ctx: AgentContext,
+    options: AgentDockRunOptions,
+  ): Promise<StreamAgentResult>;
+  run(
+    userPrompt: string,
+    ctx: AgentContext,
+    options: AgentDockRunOptions,
+  ): Promise<AgentRunResult>;
+  resume(
+    input: { runId: string; approvals: ToolApprovalDecision[] },
+    ctx: AgentContext,
+    options: AgentDockResumeOptions,
+  ): Promise<AgentRunResult>;
+  resumeStream(
+    input: { runId: string; approvals: ToolApprovalDecision[] },
+    ctx: AgentContext,
+    options: AgentDockResumeOptions,
+  ): Promise<StreamAgentResult>;
+  getSession(
+    sessionId: string,
+    options?: Pick<RunAgentOptions, "systemPrompt" | "maxSteps">,
+  ): Promise<AgentSessionRecord | null>;
+}
+
 export interface AgentDockOptions {
   model: BaseChatModel;
   registry?: ToolRegistry;
   checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
-  workflows?: readonly AgentWorkflow[];
 }
 
 interface ActiveRun {
@@ -47,9 +71,10 @@ interface ActiveRun {
 export class AgentDock {
   readonly model: BaseChatModel;
   readonly registry: ToolRegistry;
+  readonly toolCalling: AgentDockWorkflowClient;
 
   private readonly defaults: AgentDockDefaults;
-  private readonly workflows: Map<string, AgentWorkflow>;
+  private readonly toolCallingWorkflow: AgentWorkflow;
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly activeSessions = new Map<string, string>();
 
@@ -60,16 +85,12 @@ export class AgentDock {
     this.model = options.model;
     this.registry = options.registry ?? new ToolRegistry();
     this.defaults = options.defaults ?? {};
-    this.workflows = new Map();
-    this.registerWorkflow(
-      new ToolCallingWorkflow({
-        model: this.model,
-        registry: this.registry,
-        checkpointer: options.checkpointer ?? new MemorySaver(),
-      }),
-    );
-    for (const workflow of options.workflows ?? [])
-      this.registerWorkflow(workflow);
+    this.toolCallingWorkflow = new ToolCallingWorkflow({
+      model: this.model,
+      registry: this.registry,
+      checkpointer: options.checkpointer ?? new MemorySaver(),
+    });
+    this.toolCalling = this.createWorkflowClient(this.toolCallingWorkflow);
   }
 
   registerTool(tool: Tool): this {
@@ -79,15 +100,6 @@ export class AgentDock {
 
   registerTools(tools: readonly Tool[]): this {
     for (const tool of tools) this.registerTool(tool);
-    return this;
-  }
-
-  registerWorkflow(workflow: AgentWorkflow): this {
-    assertWorkflow(workflow);
-    if (this.workflows.has(workflow.name)) {
-      throw new Error(`Agent workflow already registered: ${workflow.name}`);
-    }
-    this.workflows.set(workflow.name, workflow);
     return this;
   }
 
@@ -103,33 +115,36 @@ export class AgentDock {
     return this.registry.schemas();
   }
 
-  async getSession(
+  getSession(
     sessionId: string,
-    options: Pick<
-      RunAgentOptions,
-      "workflow" | "systemPrompt" | "maxSteps"
-    > = {},
+    options: Pick<RunAgentOptions, "systemPrompt" | "maxSteps"> = {},
   ): Promise<AgentSessionRecord | null> {
-    assertNonEmptyString(sessionId, "Agent session ID");
-    const merged = { ...this.defaults, ...options };
-    const workflow = this.getWorkflow(merged);
-    const messages = await workflow.getMessages(sessionId, merged);
-    return messages.length > 0 ? { sessionId, messages } : null;
+    return this.toolCalling.getSession(sessionId, options);
   }
 
-  async run(
+  run(
     userPrompt: string,
     ctx: AgentContext,
     options: AgentDockRunOptions,
   ): Promise<AgentRunResult> {
-    const session = await this.stream(userPrompt, ctx, options);
-    for await (const _event of session.stream) {
-      // stream() is the canonical execution path.
-    }
-    return session.result;
+    return this.toolCalling.run(userPrompt, ctx, options);
   }
 
-  async stream(
+  stream(
+    userPrompt: string,
+    ctx: AgentContext,
+    options: AgentDockRunOptions,
+  ): Promise<StreamAgentResult> {
+    return this.streamWithWorkflow(
+      this.toolCallingWorkflow,
+      userPrompt,
+      ctx,
+      options,
+    );
+  }
+
+  private async streamWithWorkflow(
+    workflow: AgentWorkflow,
     userPrompt: string,
     ctx: AgentContext,
     options: AgentDockRunOptions,
@@ -138,7 +153,6 @@ export class AgentDock {
     assertContext(ctx);
     assertRunOptions(options, true);
     const merged = this.mergeOptions(options);
-    const workflow = this.getWorkflow(merged);
 
     const runId = merged.runId ?? crypto.randomUUID();
     const sessionId = options.sessionId;
@@ -161,19 +175,29 @@ export class AgentDock {
     }
   }
 
-  async resume(
+  resume(
     input: { runId: string; approvals: ToolApprovalDecision[] },
     ctx: AgentContext,
     options: AgentDockResumeOptions,
   ): Promise<AgentRunResult> {
-    const session = await this.resumeStream(input, ctx, options);
-    for await (const _event of session.stream) {
-      // stream() is the canonical execution path.
-    }
-    return session.result;
+    return this.toolCalling.resume(input, ctx, options);
   }
 
-  async resumeStream(
+  resumeStream(
+    input: { runId: string; approvals: ToolApprovalDecision[] },
+    ctx: AgentContext,
+    options: AgentDockResumeOptions,
+  ): Promise<StreamAgentResult> {
+    return this.resumeStreamWithWorkflow(
+      this.toolCallingWorkflow,
+      input,
+      ctx,
+      options,
+    );
+  }
+
+  private async resumeStreamWithWorkflow(
+    workflow: AgentWorkflow,
     input: { runId: string; approvals: ToolApprovalDecision[] },
     ctx: AgentContext,
     options: AgentDockResumeOptions,
@@ -182,7 +206,6 @@ export class AgentDock {
     assertContext(ctx);
     assertRunOptions(options, true);
     const merged = this.mergeOptions(options);
-    const workflow = this.getWorkflow(merged);
 
     const sessionId = options.sessionId;
     const controller = new AbortController();
@@ -210,6 +233,70 @@ export class AgentDock {
       this.releaseRun(input.runId, sessionId);
       throw error;
     }
+  }
+
+  private createWorkflowClient(
+    workflow: AgentWorkflow,
+  ): AgentDockWorkflowClient {
+    return {
+      stream: (userPrompt, ctx, options) =>
+        this.streamWithWorkflow(workflow, userPrompt, ctx, options),
+      run: (userPrompt, ctx, options) =>
+        this.runWithWorkflow(workflow, userPrompt, ctx, options),
+      resume: (input, ctx, options) =>
+        this.resumeWithWorkflow(workflow, input, ctx, options),
+      resumeStream: (input, ctx, options) =>
+        this.resumeStreamWithWorkflow(workflow, input, ctx, options),
+      getSession: (sessionId, options) =>
+        this.getSessionWithWorkflow(workflow, sessionId, options),
+    };
+  }
+
+  private async runWithWorkflow(
+    workflow: AgentWorkflow,
+    userPrompt: string,
+    ctx: AgentContext,
+    options: AgentDockRunOptions,
+  ): Promise<AgentRunResult> {
+    const session = await this.streamWithWorkflow(
+      workflow,
+      userPrompt,
+      ctx,
+      options,
+    );
+    for await (const _event of session.stream) {
+      // stream() is the canonical execution path.
+    }
+    return session.result;
+  }
+
+  private async resumeWithWorkflow(
+    workflow: AgentWorkflow,
+    input: { runId: string; approvals: ToolApprovalDecision[] },
+    ctx: AgentContext,
+    options: AgentDockResumeOptions,
+  ): Promise<AgentRunResult> {
+    const session = await this.resumeStreamWithWorkflow(
+      workflow,
+      input,
+      ctx,
+      options,
+    );
+    for await (const _event of session.stream) {
+      // resumeStream() is the canonical execution path.
+    }
+    return session.result;
+  }
+
+  private async getSessionWithWorkflow(
+    workflow: AgentWorkflow,
+    sessionId: string,
+    options: Pick<RunAgentOptions, "systemPrompt" | "maxSteps"> = {},
+  ): Promise<AgentSessionRecord | null> {
+    assertNonEmptyString(sessionId, "Agent session ID");
+    const merged = { ...this.defaults, ...options };
+    const messages = await workflow.getMessages(sessionId, merged);
+    return messages.length > 0 ? { sessionId, messages } : null;
   }
 
   async stop(runId: string): Promise<boolean> {
@@ -256,18 +343,6 @@ export class AgentDock {
   ): RunAgentOptions {
     return { ...this.defaults, ...options };
   }
-
-  private getWorkflow(
-    options: Pick<RunAgentOptions, "workflow">,
-  ): AgentWorkflow {
-    const name = options.workflow ?? DEFAULT_WORKFLOW;
-    const workflow = this.workflows.get(name);
-    if (workflow) return workflow;
-
-    throw new Error(
-      `Unsupported AgentDock workflow: ${name}. Supported workflows: ${Array.from(this.workflows.keys()).join(", ")}`,
-    );
-  }
 }
 
 function assertDockOptions(
@@ -284,28 +359,6 @@ function assertDockOptions(
   }
   if (options.checkpointer !== undefined && !isRecord(options.checkpointer)) {
     throw new Error("AgentDock checkpointer must be a LangGraph checkpointer.");
-  }
-  if (options.workflows !== undefined && !Array.isArray(options.workflows)) {
-    throw new Error("AgentDock workflows must be an array.");
-  }
-}
-
-function assertWorkflow(value: unknown): asserts value is AgentWorkflow {
-  if (!isRecord(value)) throw new Error("Agent workflow must be an object.");
-  assertNonEmptyString(value.name, "Agent workflow name");
-  if (value.name !== value.name.trim()) {
-    throw new Error(
-      "Agent workflow name must not have leading or trailing whitespace.",
-    );
-  }
-  if (
-    typeof value.start !== "function" ||
-    typeof value.resume !== "function" ||
-    typeof value.getMessages !== "function" ||
-    typeof value.getRunId !== "function" ||
-    typeof value.getPendingApprovals !== "function"
-  ) {
-    throw new Error("Agent workflow is missing a required method.");
   }
 }
 
@@ -331,7 +384,6 @@ function assertRunOptions(
     throw new Error("Agent run options must be an object.");
   assertOptionalString(options.runId, "Agent run ID");
   assertOptionalString(options.sessionId, "Agent session ID");
-  assertOptionalString(options.workflow, "Agent workflow");
   assertOptionalString(options.systemPrompt, "Agent system prompt", false);
   if (requireSessionId)
     assertNonEmptyString(options.sessionId, "Agent session ID");

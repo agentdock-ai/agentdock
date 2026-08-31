@@ -13,12 +13,12 @@ import {
   modelCallLimitMiddleware,
 } from "langchain";
 import { z } from "zod";
-import { AgentEventType, type AgentEventPayload } from "../events.js";
-import type { Message } from "../memory.js";
+import { AgentEventType, type AgentEventPayload } from "../../events.js";
+import type { Message } from "../../memory.js";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
-} from "../permissions/types.js";
+} from "../../permissions/types.js";
 import type {
   AgentRunResult,
   RunAgentOptions,
@@ -26,9 +26,9 @@ import type {
   ToolCallRecord,
   ToolErrorRecord,
   ToolResultRecord,
-} from "../types.js";
-import type { ToolRegistry } from "../../tools/registry.js";
-import { AgentEventStream } from "./event-stream.js";
+} from "../../types.js";
+import type { ToolRegistry } from "../../../tools/registry.js";
+import { AgentEventStream } from "../event-stream.js";
 import {
   findFinalContent,
   findLastAssistantWithToolCalls,
@@ -39,17 +39,14 @@ import {
   readStepNumber,
   stateHasInterrupt,
   toToolCallRecord,
-} from "./tool-calling-message-adapter.js";
-import {
-  createToolCallingTools,
-  type ToolOutcomes,
-} from "./tool-calling-tools.js";
-import { errorMessage, isRecord, messageText } from "../value.js";
+} from "./message-adapter.js";
+import { createToolCallingTools, type ToolOutcomes } from "./tools.js";
+import { errorMessage, isRecord, messageText } from "../../value.js";
 import type {
   AgentWorkflow,
   WorkflowResumeInput,
   WorkflowStartInput,
-} from "./types.js";
+} from "../types.js";
 
 const AGENT_STATE_SCHEMA = z.object({ agentdockRunId: z.string().optional() });
 

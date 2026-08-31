@@ -8,9 +8,9 @@ import type {
   ToolCallRecord,
   ToolErrorRecord,
   ToolResultRecord,
-} from "../types.js";
-import type { ToolRegistry } from "../../tools/registry.js";
-import { errorMessage, isRecord } from "../value.js";
+} from "../../types.js";
+import type { ToolRegistry } from "../../../tools/registry.js";
+import { errorMessage, isRecord } from "../../value.js";
 
 export interface ToolOutcome {
   result?: ToolResultRecord;

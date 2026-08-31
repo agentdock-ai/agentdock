@@ -2,12 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
-import {
-  AgentDock,
-  AgentEventStream,
-  AgentEventType,
-  ToolRegistry,
-} from "../../src/index.js";
+import { AgentDock, AgentEventType, ToolRegistry } from "../../src/index.js";
 
 async function collect(iterable) {
   const events = [];
@@ -21,76 +16,6 @@ function createAgent(toolCalls, registry = new ToolRegistry()) {
     registry,
     defaults: { maxSteps: 4 },
   });
-}
-
-function createTestWorkflow() {
-  let lastRunId;
-  let resumeCalled = false;
-  const approval = {
-    approvalId: "approval-1",
-    toolCall: {
-      toolCallId: "call-1",
-      name: "custom_tool",
-      input: {},
-    },
-  };
-
-  return {
-    name: "custom",
-    get resumeCalled() {
-      return resumeCalled;
-    },
-    start(input) {
-      lastRunId = input.runId;
-      return createTestExecution(input, "waiting_for_approval", [approval]);
-    },
-    resume(input) {
-      resumeCalled = true;
-      return createTestExecution(input, "completed", []);
-    },
-    getMessages: async () => [],
-    getRunId: async () => lastRunId,
-    getPendingApprovals: async () => [approval],
-  };
-}
-
-function createTestExecution(input, status, approvalRequests) {
-  const stream = new AgentEventStream(input.runId);
-  const result = Promise.resolve().then(() => {
-    stream.emit({
-      type: AgentEventType.RunStarted,
-      sessionId: input.sessionId,
-    });
-    stream.emit({ type: AgentEventType.StreamStarted });
-    if (status === "waiting_for_approval") {
-      stream.emit({
-        type: AgentEventType.RunWaitingForApproval,
-        approvals: approvalRequests,
-      });
-    } else {
-      stream.emit({
-        type: AgentEventType.RunCompleted,
-        content: "Custom workflow completed.",
-        stepsCompleted: 1,
-      });
-    }
-    stream.close();
-
-    return {
-      runId: input.runId,
-      sessionId: input.sessionId,
-      status,
-      content: status === "completed" ? "Custom workflow completed." : "",
-      messages: [],
-      toolCalls: [],
-      toolResults: [],
-      toolErrors: [],
-      approvalRequests,
-      stepsCompleted: status === "completed" ? 1 : 0,
-    };
-  });
-
-  return { stream, result };
 }
 
 test("AgentDock streams the default tool-calling workflow and persists session memory in checkpoints", async () => {
@@ -116,6 +41,21 @@ test("AgentDock streams the default tool-calling workflow and persists session m
     session.messages.map((message) => message.content),
     ["Summarize this request.", "Summarize this request."],
   );
+});
+
+test("AgentDock exposes the default workflow through toolCalling", async () => {
+  const agent = createAgent([[]]);
+  const streamed = await agent.toolCalling.stream(
+    "Use the tool-calling workflow.",
+    {},
+    { sessionId: "session-tool-calling", runId: "run-tool-calling" },
+  );
+
+  await collect(streamed.stream);
+  const result = await streamed.result;
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.content, "Use the tool-calling workflow.");
 });
 
 test("AgentDock executes tool-calling tools through the shared registry and context", async () => {
@@ -155,7 +95,6 @@ test("AgentDock executes tool-calling tools through the shared registry and cont
     {
       sessionId: "session-weather",
       runId: "run-weather",
-      workflow: "tool-calling",
     },
   );
   const events = await collect(streamed.stream);
@@ -350,62 +289,6 @@ test("AgentDock reports authorization denial as a typed tool error", async () =>
   assert.equal(result.status, "completed");
   assert.equal(executions, 0);
   assert.equal(result.toolErrors[0].error, "Current user is not authorized.");
-});
-
-test("AgentDock rejects unsupported workflows before starting a run", async () => {
-  const model = new FakeToolCallingModel({ toolCalls: [[]] });
-  const agent = new AgentDock({ model });
-
-  await assert.rejects(
-    agent.stream(
-      "Use another workflow.",
-      {},
-      {
-        sessionId: "session-unsupported",
-        runId: "run-unsupported",
-        workflow: "plan-execute",
-      },
-    ),
-    /Unsupported AgentDock workflow: plan-execute\. Supported workflows: tool-calling/,
-  );
-  assert.equal(model.index, 0);
-  assert.equal(await agent.stop("run-unsupported"), false);
-});
-
-test("AgentDock routes start and resume through a registered workflow", async () => {
-  const workflow = createTestWorkflow();
-  const agent = new AgentDock({
-    model: new FakeToolCallingModel({ toolCalls: [[]] }),
-    workflows: [workflow],
-  });
-
-  const started = await agent.stream(
-    "Use the custom workflow.",
-    {},
-    { sessionId: "session-custom", runId: "run-custom", workflow: "custom" },
-  );
-  const events = await collect(started.stream);
-  const waiting = await started.result;
-
-  assert.equal(waiting.status, "waiting_for_approval");
-  assert.ok(
-    events.some((event) => event.type === AgentEventType.RunWaitingForApproval),
-  );
-
-  const completed = await agent.resume(
-    {
-      runId: "run-custom",
-      approvals: [{ approvalId: "approval-1", approved: true }],
-    },
-    {},
-    {
-      sessionId: "session-custom",
-      workflow: "custom",
-    },
-  );
-
-  assert.equal(completed.status, "completed");
-  assert.equal(workflow.resumeCalled, true);
 });
 
 test("AgentDock validates public runtime input before starting a model call", async () => {

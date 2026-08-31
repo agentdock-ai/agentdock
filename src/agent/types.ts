@@ -70,7 +70,6 @@ export interface StreamAgentResult {
 export interface RunAgentOptions {
   runId?: string;
   sessionId?: string;
-  workflow?: string;
   maxSteps?: number;
   systemPrompt?: string;
   abortSignal?: AbortSignal;
