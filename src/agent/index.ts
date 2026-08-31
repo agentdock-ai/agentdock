@@ -1,5 +1,12 @@
 export * from "./agent-dock.js";
 export * from "./events.js";
+export { AgentEventStream } from "./workflows/event-stream.js";
+export type {
+  AgentWorkflow,
+  WorkflowInput,
+  WorkflowResumeInput,
+  WorkflowStartInput,
+} from "./workflows/types.js";
 export type {
   AgentContext,
   AgentRunResult,

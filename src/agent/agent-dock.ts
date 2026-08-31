@@ -13,12 +13,12 @@ import type {
   StreamAgentResult,
   Tool,
 } from "./types.js";
-import { ReActWorkflow } from "./workflows/react-workflow.js";
+import { ToolCallingWorkflow } from "./workflows/tool-calling-workflow.js";
 import type { AgentWorkflow } from "./workflows/types.js";
 import { isRecord } from "./value.js";
 import { ToolRegistry, type ToolSchema } from "../tools/registry.js";
 
-const DEFAULT_WORKFLOW = "react";
+const DEFAULT_WORKFLOW = "tool-calling";
 
 export type AgentDockDefaults = Omit<
   RunAgentOptions,
@@ -36,6 +36,7 @@ export interface AgentDockOptions {
   registry?: ToolRegistry;
   checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
+  workflows?: readonly AgentWorkflow[];
 }
 
 interface ActiveRun {
@@ -48,7 +49,7 @@ export class AgentDock {
   readonly registry: ToolRegistry;
 
   private readonly defaults: AgentDockDefaults;
-  private readonly workflow: AgentWorkflow;
+  private readonly workflows: Map<string, AgentWorkflow>;
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly activeSessions = new Map<string, string>();
 
@@ -59,11 +60,16 @@ export class AgentDock {
     this.model = options.model;
     this.registry = options.registry ?? new ToolRegistry();
     this.defaults = options.defaults ?? {};
-    this.workflow = new ReActWorkflow({
-      model: this.model,
-      registry: this.registry,
-      checkpointer: options.checkpointer ?? new MemorySaver(),
-    });
+    this.workflows = new Map();
+    this.registerWorkflow(
+      new ToolCallingWorkflow({
+        model: this.model,
+        registry: this.registry,
+        checkpointer: options.checkpointer ?? new MemorySaver(),
+      }),
+    );
+    for (const workflow of options.workflows ?? [])
+      this.registerWorkflow(workflow);
   }
 
   registerTool(tool: Tool): this {
@@ -73,6 +79,15 @@ export class AgentDock {
 
   registerTools(tools: readonly Tool[]): this {
     for (const tool of tools) this.registerTool(tool);
+    return this;
+  }
+
+  registerWorkflow(workflow: AgentWorkflow): this {
+    assertWorkflow(workflow);
+    if (this.workflows.has(workflow.name)) {
+      throw new Error(`Agent workflow already registered: ${workflow.name}`);
+    }
+    this.workflows.set(workflow.name, workflow);
     return this;
   }
 
@@ -88,9 +103,17 @@ export class AgentDock {
     return this.registry.schemas();
   }
 
-  async getSession(sessionId: string): Promise<AgentSessionRecord | null> {
+  async getSession(
+    sessionId: string,
+    options: Pick<
+      RunAgentOptions,
+      "workflow" | "systemPrompt" | "maxSteps"
+    > = {},
+  ): Promise<AgentSessionRecord | null> {
     assertNonEmptyString(sessionId, "Agent session ID");
-    const messages = await this.workflow.getMessages(sessionId, this.defaults);
+    const merged = { ...this.defaults, ...options };
+    const workflow = this.getWorkflow(merged);
+    const messages = await workflow.getMessages(sessionId, merged);
     return messages.length > 0 ? { sessionId, messages } : null;
   }
 
@@ -115,7 +138,7 @@ export class AgentDock {
     assertContext(ctx);
     assertRunOptions(options, true);
     const merged = this.mergeOptions(options);
-    this.resolveWorkflow(merged);
+    const workflow = this.getWorkflow(merged);
 
     const runId = merged.runId ?? crypto.randomUUID();
     const sessionId = options.sessionId;
@@ -123,7 +146,7 @@ export class AgentDock {
     this.claimRun(runId, sessionId, controller);
 
     try {
-      const execution = this.workflow.start({
+      const execution = workflow.start({
         runId,
         sessionId,
         userPrompt,
@@ -159,25 +182,22 @@ export class AgentDock {
     assertContext(ctx);
     assertRunOptions(options, true);
     const merged = this.mergeOptions(options);
-    this.resolveWorkflow(merged);
+    const workflow = this.getWorkflow(merged);
 
     const sessionId = options.sessionId;
     const controller = new AbortController();
     this.claimRun(input.runId, sessionId, controller);
 
     try {
-      const checkpointRunId = await this.workflow.getRunId(sessionId, merged);
+      const checkpointRunId = await workflow.getRunId(sessionId, merged);
       if (checkpointRunId !== input.runId) {
         throw new Error(
           "Agent run ID does not match the checkpoint for this session.",
         );
       }
-      const pending = await this.workflow.getPendingApprovals(
-        sessionId,
-        merged,
-      );
+      const pending = await workflow.getPendingApprovals(sessionId, merged);
       const approvals = validateApprovalDecisions(input.approvals, pending);
-      const execution = this.workflow.resume({
+      const execution = workflow.resume({
         runId: input.runId,
         sessionId,
         ctx,
@@ -237,14 +257,15 @@ export class AgentDock {
     return { ...this.defaults, ...options };
   }
 
-  private resolveWorkflow(
+  private getWorkflow(
     options: Pick<RunAgentOptions, "workflow">,
-  ): typeof DEFAULT_WORKFLOW {
-    const workflow =
-      options.workflow ?? this.defaults.workflow ?? DEFAULT_WORKFLOW;
-    if (workflow === DEFAULT_WORKFLOW) return workflow;
+  ): AgentWorkflow {
+    const name = options.workflow ?? DEFAULT_WORKFLOW;
+    const workflow = this.workflows.get(name);
+    if (workflow) return workflow;
+
     throw new Error(
-      `Unsupported AgentDock workflow: ${workflow}. Supported workflows: ${DEFAULT_WORKFLOW}`,
+      `Unsupported AgentDock workflow: ${name}. Supported workflows: ${Array.from(this.workflows.keys()).join(", ")}`,
     );
   }
 }
@@ -263,6 +284,28 @@ function assertDockOptions(
   }
   if (options.checkpointer !== undefined && !isRecord(options.checkpointer)) {
     throw new Error("AgentDock checkpointer must be a LangGraph checkpointer.");
+  }
+  if (options.workflows !== undefined && !Array.isArray(options.workflows)) {
+    throw new Error("AgentDock workflows must be an array.");
+  }
+}
+
+function assertWorkflow(value: unknown): asserts value is AgentWorkflow {
+  if (!isRecord(value)) throw new Error("Agent workflow must be an object.");
+  assertNonEmptyString(value.name, "Agent workflow name");
+  if (value.name !== value.name.trim()) {
+    throw new Error(
+      "Agent workflow name must not have leading or trailing whitespace.",
+    );
+  }
+  if (
+    typeof value.start !== "function" ||
+    typeof value.resume !== "function" ||
+    typeof value.getMessages !== "function" ||
+    typeof value.getRunId !== "function" ||
+    typeof value.getPendingApprovals !== "function"
+  ) {
+    throw new Error("Agent workflow is missing a required method.");
   }
 }
 

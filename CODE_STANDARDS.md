@@ -6,6 +6,8 @@
 - Avoid overengineering, speculative abstractions, and unnecessary configuration.
 - Reduce code when the same behavior can be achieved without harming clarity or safety.
 - Code should be understandable without requiring extensive explanation.
+- Prefer named variables and simple `if` statements for conditional configuration.
+- Avoid nested ternaries and spread expressions when building middleware or options.
 
 ## Design
 

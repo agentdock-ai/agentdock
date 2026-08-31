@@ -1,8 +1,8 @@
 # AgentDock
 
-AgentDock is a small TypeScript facade for a streamed LangChain ReAct agent running on LangGraph.
+AgentDock is a small TypeScript facade for a streamed LangChain tool-calling agent running on LangGraph.
 
-It owns the application contract: tool registration, approval policy, normalized events, run lifecycle, and a small public API. LangChain owns models and tools; LangGraph owns the ReAct loop, checkpoints, interrupts, and resume.
+It owns the application contract: tool registration, approval policy, normalized events, run lifecycle, and a small public API. LangChain owns models and tools; LangGraph owns the tool-calling loop, checkpoints, interrupts, and resume.
 
 ## Install
 
@@ -83,7 +83,7 @@ yarn test:scenarios
 Override the model without changing source code when needed:
 
 ```bash
-AGENTDOCK_OPENROUTER_MODEL="provider/model" yarn scenario:openrouter
+AGENTDOCK_OPENROUTER_MODEL="provider/model" yarn test:scenarios
 ```
 
 ## Approval and resume
@@ -122,8 +122,9 @@ The default `MemorySaver` is process-local and intended for development and test
 
 ## V1 boundary
 
-- One workflow: streamed ReAct (`workflow: "react"`, the default).
+- One built-in workflow: streamed tool-calling (`workflow: "tool-calling"`, the default).
 - One execution path: `stream()`; `run()` consumes that stream.
+- Custom workflows use the same `AgentWorkflow` and `AgentEvent` contracts.
 - One state owner: the LangGraph checkpointer.
 - One tool/authorization/approval path shared by every future workflow.
 - No bundled model provider wrappers, custom graph engine, context-engine, UI, or plugin system.

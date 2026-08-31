@@ -28,7 +28,7 @@ import type {
   ToolResultRecord,
 } from "../types.js";
 import type { ToolRegistry } from "../../tools/registry.js";
-import { AgentEventQueue } from "./event-queue.js";
+import { AgentEventStream } from "./event-stream.js";
 import {
   findFinalContent,
   findLastAssistantWithToolCalls,
@@ -39,8 +39,11 @@ import {
   readStepNumber,
   stateHasInterrupt,
   toToolCallRecord,
-} from "./react-message-adapter.js";
-import { createReActTools, type ToolOutcomes } from "./react-tools.js";
+} from "./tool-calling-message-adapter.js";
+import {
+  createToolCallingTools,
+  type ToolOutcomes,
+} from "./tool-calling-tools.js";
 import { errorMessage, isRecord, messageText } from "../value.js";
 import type {
   AgentWorkflow,
@@ -50,7 +53,7 @@ import type {
 
 const AGENT_STATE_SCHEMA = z.object({ agentdockRunId: z.string().optional() });
 
-export interface ReActWorkflowOptions {
+export interface ToolCallingWorkflowOptions {
   model: BaseChatModel;
   registry: ToolRegistry;
   checkpointer: BaseCheckpointSaver;
@@ -66,13 +69,18 @@ interface ExecutionState {
   approvalRequests: ToolApprovalRequest[];
 }
 
-export class ReActWorkflow implements AgentWorkflow {
-  readonly name = "react";
+type ApprovalInterrupts = Record<
+  string,
+  { allowedDecisions: ("approve" | "edit" | "reject")[] }
+>;
+
+export class ToolCallingWorkflow implements AgentWorkflow {
+  readonly name = "tool-calling";
   private readonly model: BaseChatModel;
   private readonly registry: ToolRegistry;
   private readonly checkpointer: BaseCheckpointSaver;
 
-  constructor(options: ReActWorkflowOptions) {
+  constructor(options: ToolCallingWorkflowOptions) {
     this.model = options.model;
     this.registry = options.registry;
     this.checkpointer = options.checkpointer;
@@ -133,21 +141,13 @@ export class ReActWorkflow implements AgentWorkflow {
     input: WorkflowStartInput | WorkflowResumeInput,
     mode: "start" | "resume",
   ): StreamAgentResult {
-    const queue = new AgentEventQueue();
-    let sequence = 0;
-    const emit = (payload: AgentEventPayload): void => {
-      queue.push({
-        ...payload,
-        version: 1,
-        eventId: crypto.randomUUID(),
-        runId: input.runId,
-        sequence: ++sequence,
-        timestamp: new Date().toISOString(),
-      });
-    };
+    const stream = new AgentEventStream(input.runId);
+    const emit = (payload: AgentEventPayload): void => stream.emit(payload);
+    const result = this.execute(input, mode, emit).finally(() =>
+      stream.close(),
+    );
 
-    const result = this.execute(input, mode, emit).finally(() => queue.close());
-    return { stream: queue, result };
+    return { stream, result };
   }
 
   private async execute(
@@ -239,39 +239,52 @@ export class ReActWorkflow implements AgentWorkflow {
     options: Pick<RunAgentOptions, "systemPrompt" | "maxSteps" | "toolTimeout">,
     outcomes: ToolOutcomes,
   ) {
-    const interruptOn: Record<
-      string,
-      { allowedDecisions: ("approve" | "edit" | "reject")[] }
-    > = {};
-    for (const toolDefinition of this.registry.list()) {
-      if (toolDefinition.requiresApproval) {
-        interruptOn[toolDefinition.name] = {
-          allowedDecisions: ["approve", "reject"],
-        };
-      }
-    }
-    const middleware = [
-      ...(Object.keys(interruptOn).length > 0
-        ? [humanInTheLoopMiddleware({ interruptOn })]
-        : []),
-      ...(options.maxSteps === undefined
-        ? []
-        : [
-            modelCallLimitMiddleware({
-              runLimit: options.maxSteps,
-              exitBehavior: "end",
-            }),
-          ]),
-    ];
-
     return createAgent({
       model: this.model,
-      tools: createReActTools(this.registry, options.toolTimeout, outcomes),
+      tools: createToolCallingTools(
+        this.registry,
+        options.toolTimeout,
+        outcomes,
+      ),
       checkpointer: this.checkpointer,
       stateSchema: AGENT_STATE_SCHEMA,
       ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
-      middleware,
+      middleware: this.createMiddleware(options),
     });
+  }
+
+  private createMiddleware(options: Pick<RunAgentOptions, "maxSteps">) {
+    const middleware = [];
+    const interruptOn = this.createApprovalInterrupts();
+
+    if (Object.keys(interruptOn).length > 0) {
+      middleware.push(humanInTheLoopMiddleware({ interruptOn }));
+    }
+
+    if (options.maxSteps !== undefined) {
+      middleware.push(
+        modelCallLimitMiddleware({
+          runLimit: options.maxSteps,
+          exitBehavior: "end",
+        }),
+      );
+    }
+
+    return middleware;
+  }
+
+  private createApprovalInterrupts(): ApprovalInterrupts {
+    const interruptOn: ApprovalInterrupts = {};
+
+    for (const tool of this.registry.list()) {
+      if (tool.requiresApproval !== true) continue;
+
+      interruptOn[tool.name] = {
+        allowedDecisions: ["approve", "reject"],
+      };
+    }
+
+    return interruptOn;
   }
 
   private runConfig(

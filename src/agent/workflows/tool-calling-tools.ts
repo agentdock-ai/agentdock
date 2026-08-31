@@ -19,7 +19,7 @@ export interface ToolOutcome {
 
 export type ToolOutcomes = Map<string, ToolOutcome>;
 
-export function createReActTools(
+export function createToolCallingTools(
   registry: ToolRegistry,
   toolTimeout: number | undefined,
   outcomes: ToolOutcomes,
