@@ -46,7 +46,7 @@ export interface ToolResultRecord extends ToolCallRecord {
 }
 
 export type AgentRunStatus =
-  "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
+  "waiting_for_approval" | "completed" | "failed" | "cancelled";
 
 export interface AgentRunResult {
   runId: string;

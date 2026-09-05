@@ -90,6 +90,8 @@ AGENTDOCK_OPENROUTER_MODEL="provider/model" yarn test:scenarios
 
 Set `requiresApproval: true` on a side-effecting tool. AgentDock emits `approval.required` and returns a `waiting_for_approval` result. LangGraph keeps the graph checkpoint; resume the same session after a decision.
 
+Event sequence numbers are ordered within each returned stream. Resuming a run creates a new stream with its own sequence.
+
 ```ts
 const waiting = await dock.run("Publish the report.", context, {
   sessionId: "session-123",

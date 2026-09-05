@@ -41,8 +41,11 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
   }
 
   [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+    let stopped = false;
+
     return {
       next: (): Promise<IteratorResult<AgentEvent>> => {
+        if (stopped) return Promise.resolve({ value: undefined, done: true });
         const value = this.values.shift();
         if (value) return Promise.resolve({ value, done: false });
         if (this.closed)
@@ -50,6 +53,11 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
         return new Promise((resolve) => {
           this.waiter = resolve;
         });
+      },
+      return: (): Promise<IteratorResult<AgentEvent>> => {
+        stopped = true;
+        this.close();
+        return Promise.resolve({ value: undefined, done: true });
       },
     };
   }

@@ -64,15 +64,15 @@ interface ExecutionState {
   toolErrors: ToolErrorRecord[];
   stepNumbers: Set<number>;
   approvalRequests: ToolApprovalRequest[];
+  textByMessageId: Map<string, string>;
 }
 
 type ApprovalInterrupts = Record<
   string,
-  { allowedDecisions: ("approve" | "edit" | "reject")[] }
+  { allowedDecisions: ("approve" | "reject")[] }
 >;
 
 export class ToolCallingWorkflow implements AgentWorkflow {
-  readonly name = "tool-calling";
   private readonly model: BaseChatModel;
   private readonly registry: ToolRegistry;
   private readonly checkpointer: BaseCheckpointSaver;
@@ -315,11 +315,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     if (!Array.isArray(payload) || payload.length !== 2) return;
     const [message, metadata] = payload;
     if (isBaseMessage(message) && isAIMessage(message)) {
-      this.consumeAssistantMessage(message, metadata, state, emit);
+      this.consumeAssistantMessage(message, metadata, state, emit, false);
       return;
     }
     if (isBaseMessageChunk(message) && isAIMessageChunk(message)) {
-      this.consumeAssistantMessage(message, metadata, state, emit);
+      this.consumeAssistantMessage(message, metadata, state, emit, true);
       return;
     }
     if (isBaseMessage(message) && isToolMessage(message)) {
@@ -351,10 +351,13 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     metadata: unknown,
     state: ExecutionState,
     emit: (payload: AgentEventPayload) => void,
+    isChunk: boolean,
   ): void {
     const messageId = message.id ?? crypto.randomUUID();
     const text = messageText(message.content);
-    if (text) emit({ type: AgentEventType.TextDelta, id: messageId, text });
+    const delta = isChunk ? text : getMessageDelta(state, messageId, text);
+    if (delta)
+      emit({ type: AgentEventType.TextDelta, id: messageId, text: delta });
     for (const rawToolCall of message.tool_calls ?? []) {
       const toolCall = toToolCallRecord(rawToolCall);
       if (this.recordToolCall(toolCall, state))
@@ -401,7 +404,20 @@ function createExecutionState(): ExecutionState {
     toolErrors: [],
     stepNumbers: new Set(),
     approvalRequests: [],
+    textByMessageId: new Map(),
   };
+}
+
+function getMessageDelta(
+  state: ExecutionState,
+  messageId: string,
+  text: string,
+): string {
+  const previous = state.textByMessageId.get(messageId) ?? "";
+  state.textByMessageId.set(messageId, text);
+  if (text.startsWith(previous)) return text.slice(previous.length);
+  if (text === previous) return "";
+  return text;
 }
 
 function createResult(

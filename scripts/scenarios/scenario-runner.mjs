@@ -131,7 +131,7 @@ export class ScenarioRunner {
         this.line(`${this.paint("Run failed", "red")}: ${event.error.message}`);
         return;
       default:
-        return;
+        throw new Error(`Unsupported AgentDock event: ${event.type}`);
     }
   }
 

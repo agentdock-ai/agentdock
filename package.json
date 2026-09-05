@@ -33,7 +33,7 @@
   "sideEffects": false,
   "scripts": {
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
-    "build": "tsc -p tsconfig.json",
+    "build": "yarn clean && tsc -p tsconfig.json",
     "build:all": "yarn build && yarn build:models",
     "build:models": "yarn --cwd packages/models build",
     "format": "prettier --write src test scripts packages package.json README.md",
@@ -48,7 +48,7 @@
     "test:scenarios": "yarn build:all && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
     "test:watch": "vitest",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
-    "prepack": "yarn clean && yarn build",
+    "prepack": "yarn build",
     "prepare": "yarn build",
     "clean": "rm -rf dist"
   },

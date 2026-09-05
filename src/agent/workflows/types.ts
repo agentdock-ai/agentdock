@@ -26,7 +26,6 @@ export interface WorkflowResumeInput extends WorkflowInput {
 }
 
 export interface AgentWorkflow {
-  readonly name: string;
   start(input: WorkflowStartInput): StreamAgentResult;
   resume(input: WorkflowResumeInput): StreamAgentResult;
   getMessages(

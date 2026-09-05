@@ -12,6 +12,7 @@ export interface AgentEventBase {
   version: 1;
   eventId: string;
   runId: string;
+  /** Monotonic ordering within one emitted stream. */
   sequence: number;
   timestamp: string;
 }
@@ -19,7 +20,6 @@ export interface AgentEventBase {
 export interface AgentError {
   code: string;
   message: string;
-  retryable?: boolean;
 }
 
 export const AgentEventType = {
