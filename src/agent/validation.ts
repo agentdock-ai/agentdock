@@ -20,9 +20,45 @@ export function assertDockOptions(
   ) {
     throw new Error("AgentDock registry must be a ToolRegistry instance.");
   }
-  if (options.checkpointer !== undefined && !isRecord(options.checkpointer)) {
+  if (
+    options.checkpointer !== undefined &&
+    !isCheckpointSaver(options.checkpointer)
+  ) {
     throw new Error("AgentDock checkpointer must be a LangGraph checkpointer.");
   }
+  if (options.checkpoint !== undefined) {
+    assertCheckpointConfig(options.checkpoint);
+  }
+  if (options.checkpoint !== undefined && options.checkpointer !== undefined) {
+    throw new Error(
+      "AgentDock checkpoint and checkpointer options cannot be used together.",
+    );
+  }
+}
+
+function assertCheckpointConfig(value: unknown): void {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throw new Error(
+      "AgentDock checkpoint must be a valid configuration object.",
+    );
+  }
+  if (value.type === "memory") return;
+  if (value.type === "file") {
+    assertNonEmptyString(value.path, "AgentDock checkpoint file path");
+    return;
+  }
+  throw new Error(`Unsupported AgentDock checkpoint type: ${value.type}`);
+}
+
+function isCheckpointSaver(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.getTuple === "function" &&
+    typeof value.list === "function" &&
+    typeof value.put === "function" &&
+    typeof value.putWrites === "function" &&
+    typeof value.deleteThread === "function"
+  );
 }
 
 export function assertResumeInput(

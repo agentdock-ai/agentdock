@@ -1,6 +1,11 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { MemorySaver, type BaseCheckpointSaver } from "@langchain/langgraph";
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import type { ToolApprovalDecision } from "./permissions/types.js";
+import {
+  CheckpointManager,
+  type CheckpointManagerOptions,
+} from "./checkpoint/manager.js";
+import type { AgentDockCheckpointConfig } from "./checkpoint/types.js";
 import type {
   AgentContext,
   AgentRunResult,
@@ -63,6 +68,7 @@ export interface AgentDockWorkflowClient {
 export interface AgentDockOptions {
   model: BaseChatModel;
   registry?: ToolRegistry;
+  checkpoint?: AgentDockCheckpointConfig;
   checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
 }
@@ -78,9 +84,16 @@ export class AgentDock {
   readonly toolCalling: AgentDockWorkflowClient;
 
   private readonly defaults: AgentDockDefaults;
+  private readonly checkpointManager: CheckpointManager;
   private readonly toolCallingWorkflow: AgentWorkflow;
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly activeSessions = new Map<string, string>();
+  private readonly activeExecutions = new Map<
+    string,
+    Promise<AgentRunResult>
+  >();
+  private lifecycle: "open" | "closing" | "closed" = "open";
+  private closePromise: Promise<void> | undefined;
 
   constructor(options: AgentDockOptions) {
     assertDockOptions(options);
@@ -89,12 +102,39 @@ export class AgentDock {
     this.model = options.model;
     this.registry = options.registry ?? new ToolRegistry();
     this.defaults = options.defaults ?? {};
+    const checkpointOptions: CheckpointManagerOptions = {
+      checkpoint: options.checkpoint,
+      checkpointer: options.checkpointer,
+    };
+    this.checkpointManager = new CheckpointManager(checkpointOptions);
     this.toolCallingWorkflow = new ToolCallingWorkflow({
       model: this.model,
       registry: this.registry,
-      checkpointer: options.checkpointer ?? new MemorySaver(),
+      checkpointer: this.checkpointManager.saver,
     });
     this.toolCalling = this.createWorkflowClient(this.toolCallingWorkflow);
+  }
+
+  async initialize(): Promise<void> {
+    this.assertOpen();
+    await this.checkpointManager.initialize();
+  }
+
+  close(): Promise<void> {
+    if (this.lifecycle === "closed") return Promise.resolve();
+    if (this.closePromise) return this.closePromise;
+
+    this.lifecycle = "closing";
+    for (const activeRun of this.activeRuns.values()) {
+      activeRun.controller.abort(new Error("AgentDock is closing."));
+    }
+
+    this.closePromise = Promise.allSettled(this.activeExecutions.values())
+      .then(() => this.checkpointManager.close())
+      .then(() => {
+        this.lifecycle = "closed";
+      });
+    return this.closePromise;
   }
 
   registerTool(tool: Tool): this {
@@ -153,6 +193,7 @@ export class AgentDock {
     ctx: AgentContext,
     options: AgentDockRunOptions,
   ): Promise<StreamAgentResult> {
+    await this.prepareOperation();
     assertNonEmptyString(userPrompt, "Agent prompt");
     assertContext(ctx);
     assertRunOptions(options, true);
@@ -297,6 +338,7 @@ export class AgentDock {
     sessionId: string,
     options: Pick<RunAgentOptions, "systemPrompt" | "maxSteps"> = {},
   ): Promise<AgentSessionRecord | null> {
+    await this.prepareOperation();
     assertNonEmptyString(sessionId, "Agent session ID");
     const merged = { ...this.defaults, ...options };
     const messages = await workflow.getMessages(sessionId, merged);
@@ -316,10 +358,27 @@ export class AgentDock {
     runId: string,
     sessionId: string,
   ): StreamAgentResult {
+    const result = execution.result.finally(() => {
+      this.activeExecutions.delete(runId);
+      this.releaseRun(runId, sessionId);
+    });
+    this.activeExecutions.set(runId, result);
     return {
       stream: execution.stream,
-      result: execution.result.finally(() => this.releaseRun(runId, sessionId)),
+      result,
     };
+  }
+
+  private async prepareOperation(): Promise<void> {
+    this.assertOpen();
+    await this.checkpointManager.initialize();
+    this.assertOpen();
+  }
+
+  private assertOpen(): void {
+    if (this.lifecycle !== "open") {
+      throw new Error("AgentDock is closed or closing.");
+    }
   }
 
   private claimRun(

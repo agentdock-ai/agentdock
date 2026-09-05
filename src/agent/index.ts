@@ -1,4 +1,5 @@
 export * from "./agent-dock.js";
+export type { AgentDockCheckpointConfig } from "./checkpoint/types.js";
 export * from "./events.js";
 export type {
   AgentContext,
