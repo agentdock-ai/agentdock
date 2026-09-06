@@ -1,20 +1,18 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { AgentDockModel } from "../../packages/models/dist/index.js";
+import { AgentDockModel } from "../../../models/dist/index.js";
 import { AgentDock } from "../../dist/index.js";
 import {
   requireScenarioEnvironment,
   ScenarioRunner,
 } from "./scenario-runner.mjs";
 
-let executions = 0;
+let receivedInput;
 const runner = new ScenarioRunner({
   agent: new AgentDock({
     model: AgentDockModel.openRouter({
-      model:
-        process.env.AGENTDOCK_OPENROUTER_MODEL ??
-        "deepseek/deepseek-v4-flash-0731",
+      model: "deepseek/deepseek-v4-flash-0731",
       apiKey: requireScenarioEnvironment("OPENROUTER_API_KEY"),
       temperature: 0,
     }),
@@ -23,37 +21,35 @@ const runner = new ScenarioRunner({
       maxSteps: 3,
     },
   }),
-  sessionId: "scenario-approval",
+  sessionId: "scenario-tool-call",
   colors: false,
-  approve: async () => true,
   tools: [
     {
-      name: "publish_report",
-      description: "Publish a report after approval.",
+      name: "get_weather",
+      description: "Return a deterministic weather result.",
       parameters: {
         type: "object",
-        properties: { reportId: { type: "string" } },
-        required: ["reportId"],
+        properties: { city: { type: "string" } },
+        required: ["city"],
         additionalProperties: false,
       },
-      requiresApproval: true,
       execute: async ({ input }) => {
-        executions += 1;
-        return { reportId: input.reportId, published: true };
+        receivedInput = input;
+        return { city: input.city, forecast: "sunny" };
       },
     },
   ],
 });
 
 const result = await runner.run(
-  'Call publish_report exactly once with reportId "report-1", then give a short confirmation.',
-  { runId: "scenario-approval-run" },
+  'Call get_weather exactly once with city "Lahore", then give a short answer.',
+  { runId: "scenario-tool-call-run" },
 );
 
 assert.equal(result.status, "completed");
-assert.equal(executions, 1);
+assert.deepEqual(receivedInput, { city: "Lahore" });
 assert.deepEqual(result.toolResults[0].output, {
-  reportId: "report-1",
-  published: true,
+  city: "Lahore",
+  forecast: "sunny",
 });
-runner.line("Approval scenario passed.");
+runner.line("Tool-call scenario passed.");

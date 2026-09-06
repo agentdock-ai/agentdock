@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { AgentDockModel } from "../../packages/models/dist/index.js";
+import { AgentDockModel } from "../../../models/dist/index.js";
 import { AgentDock } from "../../dist/index.js";
 import {
   requireScenarioEnvironment,

@@ -1,82 +1,38 @@
 {
-  "name": "agentdock",
-  "version": "0.1.0",
-  "description": "Reusable TypeScript agent infrastructure for AgentDock applications",
-  "type": "module",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git"
-  },
-  "homepage": "https://github.com/Muhammad-Zain01/agentdock#readme",
-  "bugs": {
-    "url": "https://github.com/Muhammad-Zain01/agentdock/issues"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./agent": {
-      "types": "./dist/agent/index.d.ts",
-      "import": "./dist/agent/index.js"
-    },
-    "./tools": {
-      "types": "./dist/tools/registry.d.ts",
-      "import": "./dist/tools/registry.js"
-    }
-  },
-  "files": [
-    "dist"
+  "name": "agentdock-workspace",
+  "private": true,
+  "packageManager": "yarn@1.22.22",
+  "workspaces": [
+    "packages/*"
   ],
-  "sideEffects": false,
   "scripts": {
-    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
-    "build": "yarn build:checkpoint && yarn clean && tsc -p tsconfig.json",
-    "build:all": "yarn build && yarn build:packages",
-    "build:packages": "yarn build:checkpoint && yarn build:checkpoint-postgres && yarn build:checkpoint-sqlite && yarn build:checkpoint-mongodb && yarn build:checkpoint-redis && yarn build:models",
-    "build:checkpoint": "tsc -p packages/checkpoint/tsconfig.json",
-    "build:checkpoint-postgres": "tsc -p packages/checkpoint-postgres/tsconfig.json",
-    "build:checkpoint-sqlite": "tsc -p packages/checkpoint-sqlite/tsconfig.json",
-    "build:checkpoint-mongodb": "tsc -p packages/checkpoint-mongodb/tsconfig.json",
-    "build:checkpoint-redis": "tsc -p packages/checkpoint-redis/tsconfig.json",
-    "build:models": "yarn --cwd packages/models build",
-    "format": "prettier --write src test scripts packages package.json README.md",
-    "format:check": "prettier --check src test scripts packages package.json README.md",
-    "install:models": "yarn --cwd packages/models install",
-    "typecheck": "yarn typecheck:checkpoint && tsc -p tsconfig.json --noEmit",
-    "typecheck:all": "yarn typecheck && yarn typecheck:packages",
-    "typecheck:packages": "yarn typecheck:checkpoint && yarn typecheck:checkpoint-postgres && yarn typecheck:checkpoint-sqlite && yarn typecheck:checkpoint-mongodb && yarn typecheck:checkpoint-redis && yarn typecheck:models",
-    "typecheck:checkpoint": "tsc -p packages/checkpoint/tsconfig.json --noEmit",
-    "typecheck:checkpoint-postgres": "tsc -p packages/checkpoint-postgres/tsconfig.json --noEmit",
-    "typecheck:checkpoint-sqlite": "tsc -p packages/checkpoint-sqlite/tsconfig.json --noEmit",
-    "typecheck:checkpoint-mongodb": "tsc -p packages/checkpoint-mongodb/tsconfig.json --noEmit",
-    "typecheck:checkpoint-redis": "tsc -p packages/checkpoint-redis/tsconfig.json --noEmit",
-    "typecheck:models": "yarn --cwd packages/models typecheck",
-    "test:unit": "vitest run test/unit",
-    "test": "yarn test:unit && yarn test:models",
-    "test:models": "yarn --cwd packages/models test",
-    "test:scenarios": "yarn build:all && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
-    "test:watch": "vitest",
-    "pack:artifact": "yarn pack --filename agentdock.tgz",
-    "prepack": "yarn build",
-    "prepare": "yarn build",
-    "clean": "rm -rf dist"
-  },
-  "dependencies": {
-    "@langchain/core": "^1.2.9",
-    "@langchain/langgraph": "^1.4.13",
-    "@agentdock/checkpoint": "file:packages/checkpoint",
-    "@langchain/langgraph-checkpoint": "^1.1.5",
-    "langchain": "^1.5.10",
-    "zod": "^4.5.4"
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "yarn typecheck:checkpoint && yarn typecheck:agentdock && yarn typecheck:checkpoint-postgres && yarn typecheck:checkpoint-sqlite && yarn typecheck:checkpoint-mongodb && yarn typecheck:checkpoint-redis && yarn typecheck:models",
+    "test": "yarn workspace agentdock test && yarn workspace @agentdock/models test",
+    "build": "yarn build:checkpoint && yarn build:agentdock && yarn build:checkpoint-postgres && yarn build:checkpoint-sqlite && yarn build:checkpoint-mongodb && yarn build:checkpoint-redis && yarn build:models",
+    "ci": "yarn format:check && yarn typecheck && yarn test && yarn build",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "yarn build && changeset publish",
+    "typecheck:checkpoint": "yarn workspace @agentdock/checkpoint typecheck",
+    "typecheck:agentdock": "yarn workspace agentdock typecheck",
+    "typecheck:checkpoint-postgres": "yarn workspace @agentdock/checkpoint-postgres typecheck",
+    "typecheck:checkpoint-sqlite": "yarn workspace @agentdock/checkpoint-sqlite typecheck",
+    "typecheck:checkpoint-mongodb": "yarn workspace @agentdock/checkpoint-mongodb typecheck",
+    "typecheck:checkpoint-redis": "yarn workspace @agentdock/checkpoint-redis typecheck",
+    "typecheck:models": "yarn workspace @agentdock/models typecheck",
+    "build:checkpoint": "yarn workspace @agentdock/checkpoint build",
+    "build:agentdock": "yarn workspace agentdock build",
+    "build:checkpoint-postgres": "yarn workspace @agentdock/checkpoint-postgres build",
+    "build:checkpoint-sqlite": "yarn workspace @agentdock/checkpoint-sqlite build",
+    "build:checkpoint-mongodb": "yarn workspace @agentdock/checkpoint-mongodb build",
+    "build:checkpoint-redis": "yarn workspace @agentdock/checkpoint-redis build",
+    "build:models": "yarn workspace @agentdock/models build"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2",
-    "prettier": "^3.5.3",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "@changesets/cli": "^2.29.7",
+    "prettier": "^3.5.3"
   },
   "engines": {
     "node": ">=20"
