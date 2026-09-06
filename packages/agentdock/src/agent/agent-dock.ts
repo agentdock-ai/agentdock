@@ -251,6 +251,7 @@ export class AgentDock {
     assertContext(ctx);
     assertRunOptions(options, true);
     const merged = this.mergeOptions(options);
+    await this.prepareOperation();
 
     const sessionId = options.sessionId;
     const controller = new AbortController();
