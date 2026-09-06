@@ -3,6 +3,7 @@ import {
   type TTLConfig,
 } from "@langchain/langgraph-checkpoint-redis";
 import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import { createClient } from "redis";
 
 export interface RedisCheckpointOptions {
   readonly url: string;
@@ -12,36 +13,42 @@ export interface RedisCheckpointOptions {
 /** AgentDock lifecycle adapter for LangGraph's Redis saver. */
 export class RedisCheckpoint implements CheckpointAdapter {
   readonly saver: RedisSaver;
+  private readonly client: ReturnType<typeof createClient>;
+  private initialized = false;
+  private initialization: Promise<void> | undefined;
   private closed = false;
 
-  private constructor(saver: RedisSaver) {
-    this.saver = saver;
-  }
-
-  static async create(
-    options: RedisCheckpointOptions,
-  ): Promise<RedisCheckpoint> {
+  constructor(options: RedisCheckpointOptions) {
     if (typeof options?.url !== "string" || options.url.trim().length === 0) {
       throw new Error("RedisCheckpoint url must be a non-empty string.");
     }
 
-    try {
-      const saver = await RedisSaver.fromUrl(options.url, options.ttl);
-      return new RedisCheckpoint(saver);
-    } catch (error) {
-      throw withCause("Failed to create Redis checkpoints.", error);
-    }
+    this.client = createClient({ url: options.url });
+    this.saver = new RedisSaver(this.client, options.ttl);
   }
 
   initialize(): Promise<void> {
     if (this.closed) throw new Error("RedisCheckpoint is already closed.");
-    return Promise.resolve();
+    if (this.initialized) return Promise.resolve();
+    if (this.initialization) return this.initialization;
+
+    this.initialization = this.client.connect().then(
+      () => {
+        this.initialized = true;
+      },
+      (error: unknown) => {
+        this.initialization = undefined;
+        throw withCause("Failed to initialize Redis checkpoints.", error);
+      },
+    );
+    return this.initialization;
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    await this.saver.end();
+    await this.initialization?.catch(() => undefined);
+    if (this.client.isOpen) await this.saver.end();
   }
 }
 
