@@ -68,3 +68,14 @@
 - Keep naming, error messages, and patterns consistent across modules.
 - Make the smallest safe change that solves the current problem.
 - Run formatting, typechecking, tests, and relevant builds before considering work complete.
+
+## Optional integrations
+
+- Every external database or vendor integration belongs in its own package under `packages/`.
+- The core `agentdock` package must not install optional database drivers.
+- Backend integrations implement the shared `CheckpointAdapter` contract and are passed as configured class instances, not string backend keys.
+- Provider-specific configuration stays inside the provider package.
+- Do not create a central registry or God class for external providers.
+- Each adapter owns only its backend saver creation, setup, and resource cleanup.
+- The core package may depend on shared checkpoint contracts, but not on every backend integration.
+- Custom integrations must work through the public `CheckpointAdapter` contract or a raw LangGraph `BaseCheckpointSaver`.

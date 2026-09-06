@@ -111,16 +111,20 @@ const completed = await dock.resume(
 );
 ```
 
-Use a durable LangGraph checkpointer in production:
+Use a durable checkpoint adapter in production:
 
 ```ts
+import { PostgresCheckpoint } from "@agentdock/checkpoint-postgres";
+
 const dock = new AgentDock({
   model,
-  checkpointer: productionCheckpointer,
+  checkpoint: new PostgresCheckpoint({
+    connectionString: process.env.DATABASE_URL!,
+  }),
 });
 ```
 
-The default `MemorySaver` is process-local and intended for development and tests.
+The default `MemoryCheckpoint` is process-local and intended for development and tests. Install only the optional backend package you need, for example `yarn add @agentdock/checkpoint-postgres`. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; AgentDock does not close those caller-owned savers.
 
 ## V1 boundary
 

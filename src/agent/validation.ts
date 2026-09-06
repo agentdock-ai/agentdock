@@ -5,6 +5,7 @@ import type {
 } from "./permissions/types.js";
 import type { AgentContext, RunAgentOptions } from "./types.js";
 import type { AgentDockOptions } from "./agent-dock.js";
+import type { CheckpointAdapter } from "@agentdock/checkpoint";
 import { ToolRegistry } from "../tools/registry.js";
 import { isRecord } from "./value.js";
 
@@ -27,7 +28,11 @@ export function assertDockOptions(
     throw new Error("AgentDock checkpointer must be a LangGraph checkpointer.");
   }
   if (options.checkpoint !== undefined) {
-    assertCheckpointConfig(options.checkpoint);
+    if (!isCheckpointAdapter(options.checkpoint)) {
+      throw new Error(
+        "AgentDock checkpoint must be a CheckpointAdapter instance.",
+      );
+    }
   }
   if (options.checkpoint !== undefined && options.checkpointer !== undefined) {
     throw new Error(
@@ -36,18 +41,18 @@ export function assertDockOptions(
   }
 }
 
-function assertCheckpointConfig(value: unknown): void {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    throw new Error(
-      "AgentDock checkpoint must be a valid configuration object.",
-    );
-  }
-  if (value.type === "memory") return;
-  if (value.type === "file") {
-    assertNonEmptyString(value.path, "AgentDock checkpoint file path");
-    return;
-  }
-  throw new Error(`Unsupported AgentDock checkpoint type: ${value.type}`);
+function isCheckpointAdapter(value: unknown): value is CheckpointAdapter {
+  return (
+    isRecord(value) &&
+    isRecord(value.saver) &&
+    typeof value.saver.getTuple === "function" &&
+    typeof value.saver.list === "function" &&
+    typeof value.saver.put === "function" &&
+    typeof value.saver.putWrites === "function" &&
+    typeof value.saver.deleteThread === "function" &&
+    typeof value.initialize === "function" &&
+    typeof value.close === "function"
+  );
 }
 
 function isCheckpointSaver(value: unknown): boolean {

@@ -1,11 +1,12 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
-import type { ToolApprovalDecision } from "./permissions/types.js";
 import {
   CheckpointManager,
+  MemoryCheckpoint,
+  type CheckpointAdapter,
   type CheckpointManagerOptions,
-} from "./checkpoint/manager.js";
-import type { AgentDockCheckpointConfig } from "./checkpoint/types.js";
+} from "@agentdock/checkpoint";
+import type { ToolApprovalDecision } from "./permissions/types.js";
 import type {
   AgentContext,
   AgentRunResult,
@@ -68,7 +69,7 @@ export interface AgentDockWorkflowClient {
 export interface AgentDockOptions {
   model: BaseChatModel;
   registry?: ToolRegistry;
-  checkpoint?: AgentDockCheckpointConfig;
+  checkpoint?: CheckpointAdapter;
   checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
 }
@@ -102,10 +103,9 @@ export class AgentDock {
     this.model = options.model;
     this.registry = options.registry ?? new ToolRegistry();
     this.defaults = options.defaults ?? {};
-    const checkpointOptions: CheckpointManagerOptions = {
-      checkpoint: options.checkpoint,
-      checkpointer: options.checkpointer,
-    };
+    const checkpointOptions: CheckpointManagerOptions = options.checkpointer
+      ? { checkpointer: options.checkpointer }
+      : { checkpoint: options.checkpoint ?? new MemoryCheckpoint() };
     this.checkpointManager = new CheckpointManager(checkpointOptions);
     this.toolCallingWorkflow = new ToolCallingWorkflow({
       model: this.model,

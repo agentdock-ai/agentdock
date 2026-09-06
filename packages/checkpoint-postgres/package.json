@@ -1,0 +1,41 @@
+{
+  "name": "@agentdock/checkpoint-postgres",
+  "version": "0.1.0",
+  "description": "PostgreSQL checkpoint adapter for AgentDock",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "directory": "packages/checkpoint-postgres"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "yarn build"
+  },
+  "dependencies": {
+    "@agentdock/checkpoint": "^0.1.0",
+    "@langchain/langgraph-checkpoint-postgres": "^1.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

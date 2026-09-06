@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
 import { MemorySaver } from "@langchain/langgraph-checkpoint";
+import { MemoryCheckpoint } from "@agentdock/checkpoint";
 import { AgentDock } from "../../src/index.js";
 
 function createAgent(options = {}) {
@@ -11,8 +12,8 @@ function createAgent(options = {}) {
   });
 }
 
-test("AgentDock accepts the memory checkpoint configuration", async () => {
-  const agent = createAgent({ checkpoint: { type: "memory" } });
+test("AgentDock accepts a memory checkpoint adapter", async () => {
+  const agent = createAgent({ checkpoint: new MemoryCheckpoint() });
 
   await agent.initialize();
   await agent.initialize();
@@ -27,19 +28,19 @@ test("AgentDock accepts the memory checkpoint configuration", async () => {
   await agent.close();
 });
 
-test("invalid checkpoint configuration fails at construction", () => {
+test("invalid checkpoint adapters fail at construction", () => {
   assert.throws(
     () =>
       createAgent({
-        checkpoint: { type: "unsupported" },
+        checkpoint: {},
       }),
-    /Unsupported AgentDock checkpoint type: unsupported/,
+    /must be a CheckpointAdapter instance/,
   );
 
   assert.throws(
     () =>
       createAgent({
-        checkpoint: { type: "memory" },
+        checkpoint: new MemoryCheckpoint(),
         checkpointer: new MemorySaver(),
       }),
     /cannot be used together/,

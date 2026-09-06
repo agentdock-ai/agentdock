@@ -1,15 +1,16 @@
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
-import type { AgentDockCheckpointConfig, CheckpointAdapter } from "./types.js";
-import { CheckpointFactoryRegistry } from "./registry.js";
+import { MemoryCheckpoint } from "./memory-checkpoint.js";
+import type { CheckpointAdapter } from "./types.js";
 
 type CheckpointManagerState =
   "new" | "initializing" | "ready" | "closing" | "closed";
 
 export interface CheckpointManagerOptions {
-  checkpoint?: AgentDockCheckpointConfig;
-  checkpointer?: BaseCheckpointSaver;
+  readonly checkpoint?: CheckpointAdapter;
+  readonly checkpointer?: BaseCheckpointSaver;
 }
 
+/** Owns checkpoint adapter lifecycle without coupling workflows to a backend. */
 export class CheckpointManager {
   private readonly adapter: CheckpointAdapter;
   private readonly ownsAdapter: boolean;
@@ -17,25 +18,23 @@ export class CheckpointManager {
   private initialization: Promise<void> | undefined;
   private closing: Promise<void> | undefined;
 
-  constructor(options: CheckpointManagerOptions) {
-    if (
-      options.checkpoint !== undefined &&
-      options.checkpointer !== undefined
-    ) {
+  constructor(options: CheckpointManagerOptions = {}) {
+    if (options.checkpoint && options.checkpointer) {
       throw new Error(
         "AgentDock checkpoint and checkpointer options cannot be used together.",
       );
     }
 
-    if (options.checkpointer !== undefined) {
+    if (options.checkpoint) {
+      this.adapter = options.checkpoint;
+      this.ownsAdapter = true;
+    } else if (options.checkpointer) {
       this.adapter = new ExternalCheckpointAdapter(options.checkpointer);
       this.ownsAdapter = false;
-      return;
+    } else {
+      this.adapter = new MemoryCheckpoint();
+      this.ownsAdapter = true;
     }
-
-    const config = options.checkpoint ?? { type: "memory" as const };
-    this.adapter = new CheckpointFactoryRegistry().create(config);
-    this.ownsAdapter = true;
   }
 
   get saver(): BaseCheckpointSaver {
@@ -63,8 +62,8 @@ export class CheckpointManager {
     return this.initialization;
   }
 
-  async close(): Promise<void> {
-    if (this.state === "closed") return;
+  close(): Promise<void> {
+    if (this.state === "closed") return Promise.resolve();
     if (this.closing) return this.closing;
 
     this.state = "closing";
