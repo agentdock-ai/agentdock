@@ -40,7 +40,8 @@
     "format:check": "prettier --check src test scripts package.json README.md",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:unit": "vitest run test/unit",
-    "test": "yarn test:unit",
+    "test:integration": "vitest run test/integration",
+    "test": "yarn test:unit && yarn test:integration",
     "test:scenarios": "yarn build && yarn workspace @agentdock/models build && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
     "test:watch": "vitest",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
@@ -58,6 +59,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "@agentdock/checkpoint-sqlite": "^0.1.0",
     "prettier": "^3.5.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

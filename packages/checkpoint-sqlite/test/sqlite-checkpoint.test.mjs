@@ -16,6 +16,13 @@ afterEach(async () => {
 });
 
 describe("SqliteCheckpoint", () => {
+  it("rejects an empty database path", () => {
+    assert.throws(
+      () => new SqliteCheckpoint({ path: "" }),
+      /path must be a non-empty string/,
+    );
+  });
+
   it("creates the LangGraph schema during idempotent initialization", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "agentdock-sqlite-"));
     temporaryDirectories.push(directory);

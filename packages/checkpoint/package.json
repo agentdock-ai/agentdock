@@ -23,6 +23,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "yarn build"
   },
@@ -31,7 +32,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20"

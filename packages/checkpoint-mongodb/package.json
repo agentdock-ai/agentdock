@@ -23,16 +23,19 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "yarn build"
   },
   "dependencies": {
     "@agentdock/checkpoint": "^0.1.0",
-    "@langchain/langgraph-checkpoint-mongodb": "^1.4.1"
+    "@langchain/langgraph-checkpoint-mongodb": "^1.4.1",
+    "mongodb": "^6.21.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20"
