@@ -36,4 +36,4 @@ Package versions are managed with Changesets. Add a changeset for a publishable 
 yarn changeset
 ```
 
-The publish workflow validates every push to `main`. Changesets then opens or updates a release pull request; after that pull request is merged, the changed packages are published to npm. Configure the repository's `NPM_TOKEN` secret before enabling publishing.
+Publishing is not enabled yet. Changesets and the release scripts are prepared for a future npm publishing workflow, but no automatic publish job currently runs.
