@@ -48,6 +48,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@agentdock/contracts": "^0.1.0",
     "@agentdock/checkpoint": "^0.1.0",
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",

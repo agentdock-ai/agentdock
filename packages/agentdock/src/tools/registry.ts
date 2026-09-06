@@ -1,12 +1,8 @@
 import type { JSONSchema } from "@langchain/core/utils/json_schema";
 import type { Tool } from "../agent/types.js";
+import type { ToolSchema } from "@agentdock/contracts";
 
-export interface ToolSchema {
-  name: string;
-  description: string;
-  parameters: JSONSchema;
-  requiresApproval: boolean;
-}
+export type { ToolSchema } from "@agentdock/contracts";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();

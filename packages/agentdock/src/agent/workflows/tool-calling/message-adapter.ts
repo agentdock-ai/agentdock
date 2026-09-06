@@ -4,6 +4,7 @@ import {
   isToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
+import type { JsonObject } from "@agentdock/contracts";
 import type { Message } from "../../memory.js";
 import type { ToolCallRecord } from "../../types.js";
 import { isRecord, messageText } from "../../value.js";
@@ -126,10 +127,7 @@ export function readStepNumber(metadata: unknown): number | null {
   return metadata.langgraph_step;
 }
 
-function requireRecord(
-  value: unknown,
-  message: string,
-): Record<string, unknown> {
+function requireRecord(value: unknown, message: string): JsonObject {
   if (!isRecord(value)) throw new Error(message);
-  return value;
+  return value as JsonObject;
 }

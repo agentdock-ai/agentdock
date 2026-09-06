@@ -3,6 +3,7 @@ import {
   type StructuredToolInterface,
   type ToolRuntime,
 } from "@langchain/core/tools";
+import type { JsonObject, JsonValue } from "@agentdock/contracts";
 import type {
   AgentContext,
   ToolCallRecord,
@@ -54,10 +55,11 @@ export function createToolCallingTools(
             ctx: runtime.context,
             signal: withTimeout(runtime.config.signal, toolTimeout),
           });
+          const serializedOutput = serializeToolOutput(output);
           outcomes.set(toolCall.toolCallId, {
-            result: { ...toolCall, output },
+            result: { ...toolCall, output: serializedOutput },
           });
-          return stringifyToolOutput(output);
+          return stringifyToolOutput(serializedOutput);
         } catch (error) {
           outcomes.set(toolCall.toolCallId, {
             error: { ...toolCall, error: errorMessage(error) },
@@ -74,20 +76,21 @@ export function createToolCallingTools(
   );
 }
 
-function requireRecord(
-  value: unknown,
-  message: string,
-): Record<string, unknown> {
+function requireRecord(value: unknown, message: string): JsonObject {
   if (!isRecord(value)) throw new Error(message);
-  return value;
+  return value as JsonObject;
 }
 
-function stringifyToolOutput(output: unknown): string {
-  if (typeof output === "string") return output;
+function serializeToolOutput(output: unknown): JsonValue {
   const serialized = JSON.stringify(output);
   if (serialized === undefined)
     throw new Error("Tool output must be JSON serializable.");
-  return serialized;
+  return JSON.parse(serialized) as JsonValue;
+}
+
+function stringifyToolOutput(output: JsonValue): string {
+  if (typeof output === "string") return output;
+  return JSON.stringify(output);
 }
 
 function withTimeout(

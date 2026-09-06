@@ -79,3 +79,12 @@
 - Each adapter owns only its backend saver creation, setup, and resource cleanup.
 - The core package may depend on shared checkpoint contracts, but not on every backend integration.
 - Custom integrations must work through the public `CheckpointAdapter` contract or a raw LangGraph `BaseCheckpointSaver`.
+
+## Shared contracts
+
+- Framework-independent frontend/backend data contracts belong in `@agentdock/contracts`.
+- The contracts package must not depend on LangChain, LangGraph, database drivers, or Node.js runtime APIs.
+- Keep function-bearing runtime types, workflow types, and provider-specific types inside their owning package.
+- Contracts must be JSON-compatible and versioned when they cross a transport boundary.
+- The `agentdock` package may re-export contracts for compatibility, but contracts remain the preferred dependency for frontend and transport packages.
+- Do not duplicate shared public type definitions across packages.

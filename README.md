@@ -5,6 +5,7 @@ This repository contains the independently publishable AgentDock packages.
 ## Packages
 
 - `agentdock` — core AgentDock runtime.
+- `@agentdock/contracts` — framework-independent frontend/backend contracts.
 - `@agentdock/checkpoint` — shared checkpoint contract and memory adapter.
 - `@agentdock/checkpoint-postgres` — PostgreSQL checkpoint adapter.
 - `@agentdock/checkpoint-sqlite` — SQLite checkpoint adapter.
