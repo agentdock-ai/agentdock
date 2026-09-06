@@ -92,3 +92,120 @@ test("persists a pending approval across AgentDock recreation", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("rejects incomplete or stale approval decisions against SQLite checkpoints", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "agentdock-agent-"));
+  const databasePath = path.join(directory, "checkpoints.sqlite");
+  let executions = 0;
+
+  try {
+    const registry = new ToolRegistry();
+    for (const name of ["write_first", "write_second"]) {
+      registry.register({
+        name,
+        description: `${name} protected data.`,
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+          additionalProperties: false,
+        },
+        requiresApproval: true,
+        execute: async () => {
+          executions += 1;
+          return "written";
+        },
+      });
+    }
+
+    const firstAgent = new AgentDock({
+      model: new FakeToolCallingModel({
+        toolCalls: [[
+          { name: "write_first", args: { value: "one" }, id: "call-first" },
+          { name: "write_second", args: { value: "two" }, id: "call-second" },
+        ]],
+      }),
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    });
+
+    const waiting = await firstAgent.run(
+      "Write both values.",
+      {},
+      { sessionId: "session-approvals", runId: "run-approvals" },
+    );
+    assert.equal(waiting.status, "waiting_for_approval");
+    assert.deepEqual(
+      waiting.approvalRequests.map((request) => request.approvalId),
+      ["call-first", "call-second"],
+    );
+    await firstAgent.close();
+
+    const secondAgent = new AgentDock({
+      model: new FakeToolCallingModel({ toolCalls: [[]] }),
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    });
+    const firstApproval = {
+      approvalId: "call-first",
+      approved: true,
+    };
+
+    await assert.rejects(
+      secondAgent.resume(
+        { runId: "run-approvals", approvals: [firstApproval] },
+        {},
+        { sessionId: "session-approvals" },
+      ),
+      /Approval decisions do not match a pending AgentDock run/,
+    );
+    await assert.rejects(
+      secondAgent.resume(
+        {
+          runId: "run-approvals",
+          approvals: [
+            firstApproval,
+            { approvalId: "stale-approval", approved: true },
+          ],
+        },
+        {},
+        { sessionId: "session-approvals" },
+      ),
+      /Approval decisions do not match a pending AgentDock run/,
+    );
+    assert.equal(executions, 0);
+
+    const resumed = await secondAgent.resume(
+      {
+        runId: "run-approvals",
+        approvals: [
+          firstApproval,
+          { approvalId: "call-second", approved: true },
+        ],
+      },
+      {},
+      { sessionId: "session-approvals" },
+    );
+
+    assert.equal(resumed.status, "completed");
+    assert.equal(executions, 2);
+
+    await assert.rejects(
+      secondAgent.resume(
+        {
+          runId: "run-approvals",
+          approvals: [
+            firstApproval,
+            { approvalId: "call-second", approved: true },
+          ],
+        },
+        {},
+        { sessionId: "session-approvals" },
+      ),
+      /Approval decisions do not match a pending AgentDock run/,
+    );
+    await secondAgent.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
