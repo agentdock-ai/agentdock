@@ -18,7 +18,7 @@ test("Phase 0 fixtures preserve repeated chunks and omitted message IDs", async 
     response: "xx",
   });
   const generations = [];
-  for await (const generation of model._stream([], {}))
+  for await (const generation of model._streamResponseChunks([], {}))
     generations.push(generation.message);
 
   assert.deepEqual(

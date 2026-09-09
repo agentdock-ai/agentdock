@@ -343,6 +343,87 @@ test("close is bounded and reports runs that ignore cancellation", async () => {
   assert.deepEqual(agent.getUnfinishedRunIds(), []);
 });
 
+test("close reports a run whose coordinator release never settles", async () => {
+  const coordinator = {
+    acquire: async () => ({ release: () => new Promise(() => {}) }),
+  };
+  const agent = createAgent([[]], new ToolRegistry(), { coordinator });
+  await agent.stream(
+    "Finish but hold the lease.",
+    {},
+    { sessionId: "late-release", runId: "late-release" },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const started = Date.now();
+  await agent.close({ gracePeriodMs: 20 });
+
+  assert.ok(Date.now() - started < 500);
+  assert.deepEqual(agent.getUnfinishedRunIds(), ["late-release"]);
+});
+
+test("coordinator release failure is surfaced and does not leave a local lock", async () => {
+  let releases = 0;
+  const coordinator = {
+    acquire: async () => ({
+      release: () => {
+        releases += 1;
+        throw new Error("release failed");
+      },
+    }),
+  };
+  const agent = createAgent([[]], new ToolRegistry(), { coordinator });
+
+  await assert.rejects(
+    agent.run(
+      "Release this run.",
+      {},
+      { sessionId: "release-failure", runId: "release-failure" },
+    ),
+    /release failed/,
+  );
+  assert.equal(releases, 1);
+
+  await agent.close();
+});
+
+test("close is bounded when authorization ignores cancellation", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "authorization_never_settles",
+    description: "Authorization never settles.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    authorize: createNeverSettlingAuthorization(),
+    execute: async () => "unreachable",
+  });
+  const agent = createAgent(
+    [
+      [
+        {
+          name: "authorization_never_settles",
+          args: {},
+          id: "call-auth-close",
+        },
+      ],
+    ],
+    registry,
+  );
+  const execution = await agent.stream(
+    "Close during authorization.",
+    {},
+    { sessionId: "authorization-close", runId: "authorization-close" },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const started = Date.now();
+  await agent.close({ gracePeriodMs: 20 });
+  const result = await execution.result;
+
+  assert.ok(Date.now() - started < 500);
+  assert.equal(result.status, "cancelled");
+});
+
 test("a shared coordinator protects a session across AgentDock instances", async () => {
   const coordinator = new MapCoordinator();
   const first = createAgent([[]], new ToolRegistry(), { coordinator });

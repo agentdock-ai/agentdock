@@ -61,10 +61,18 @@ export function createToolCallArgumentChunks({
 
 export function createScriptedChatModel({
   chunks = [],
+  streamSequences,
   response = "",
+  responses,
   responseId,
 } = {}) {
-  return new ScriptedChatModel({ chunks, response, responseId });
+  return new ScriptedChatModel({
+    chunks,
+    streamSequences,
+    response,
+    responses,
+    responseId,
+  });
 }
 
 export function createCooperativeTimeoutTool({ onStart, onAbort } = {}) {
@@ -131,11 +139,15 @@ export function splitIntoChunks(value, chunkCount) {
 }
 
 class ScriptedChatModel extends BaseChatModel {
-  constructor({ chunks, response, responseId }) {
+  constructor({ chunks, streamSequences, response, responses, responseId }) {
     super({});
     this.chunks = chunks;
+    this.streamSequences = streamSequences;
     this.response = response;
+    this.responses = responses;
     this.responseId = responseId;
+    this.streamIndex = 0;
+    this.responseIndex = 0;
   }
 
   bindTools() {
@@ -146,18 +158,24 @@ class ScriptedChatModel extends BaseChatModel {
     return "agentdock-scripted";
   }
 
-  async *_stream() {
-    for (const chunk of this.chunks) {
+  async *_streamResponseChunks() {
+    const chunks = this.streamSequences
+      ? (this.streamSequences[this.streamIndex++] ?? [])
+      : this.chunks;
+    for (const chunk of chunks) {
       yield new ChatGenerationChunk({ message: chunk });
     }
   }
 
   async _generate() {
+    const response = this.responses
+      ? (this.responses[this.responseIndex++] ?? "")
+      : this.response;
     return {
       generations: [
         {
           message: new AIMessage({
-            content: this.response,
+            content: response,
             ...(this.responseId === undefined ? {} : { id: this.responseId }),
           }),
         },

@@ -491,10 +491,34 @@ export class AgentDock {
     execution: StreamAgentResult,
     runId: string,
   ): StreamAgentResult {
-    const result = execution.result.finally(async () => {
-      this.activeExecutions.delete(runId);
-      await this.releaseRunByKey(runId, this.activeRuns.get(runId)?.sessionId);
-    });
+    const release = () =>
+      this.releaseRunByKey(runId, this.activeRuns.get(runId)?.sessionId);
+    const result = execution.result
+      .then(
+        async (value) => {
+          await release();
+          return value;
+        },
+        async (error: unknown) => {
+          try {
+            await release();
+          } catch (releaseError) {
+            const executionMessage =
+              error instanceof Error ? error.message : String(error);
+            const releaseMessage =
+              releaseError instanceof Error
+                ? releaseError.message
+                : String(releaseError);
+            throw new Error(
+              `Agent run failed: ${executionMessage}; coordinator release failed: ${releaseMessage}`,
+            );
+          }
+          throw error;
+        },
+      )
+      .finally(() => {
+        this.activeExecutions.delete(runId);
+      });
     this.activeExecutions.set(runId, result);
     return {
       stream: execution.stream,
@@ -549,8 +573,11 @@ export class AgentDock {
     if (sessionKey === undefined) return;
     const active = this.activeRuns.get(runId);
     if (!active || active.sessionId !== sessionKey) return;
-    this.activeRuns.delete(runId);
-    await active.release();
+    try {
+      await active.release();
+    } finally {
+      this.activeRuns.delete(runId);
+    }
   }
 
   private mergeOptions(

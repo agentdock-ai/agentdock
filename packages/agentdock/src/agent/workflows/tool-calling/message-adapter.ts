@@ -3,8 +3,14 @@ import {
   isBaseMessage,
   isToolMessage,
   type BaseMessage,
+  type ToolMessage,
 } from "@langchain/core/messages";
-import { cloneJsonObject, type JsonObject } from "@agentdock/contracts";
+import {
+  cloneJsonObject,
+  cloneJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from "@agentdock/contracts";
 import type { Message } from "../../memory.js";
 import type {
   ToolCallRecord,
@@ -41,13 +47,29 @@ export function readStateToolRecords(state: unknown): PersistedToolRecord[] {
 export function collectToolCalls(messages: BaseMessage[]): ToolCallRecord[] {
   const calls = new Map<string, ToolCallRecord>();
   for (const message of messages) {
-    if (!isAIMessage(message)) continue;
-    for (const rawToolCall of message.tool_calls ?? []) {
-      const toolCall = toToolCallRecord(rawToolCall);
-      calls.set(toolCall.toolCallId, toolCall);
+    if (isAIMessage(message)) {
+      for (const rawToolCall of message.tool_calls ?? []) {
+        addToolCall(calls, toToolCallRecord(rawToolCall));
+      }
+      continue;
+    }
+    if (isToolMessage(message)) {
+      const toolCall = readToolMessageToolCall(message);
+      if (toolCall) addToolCall(calls, toolCall);
     }
   }
   return [...calls.values()];
+}
+
+export function collectLatestToolCalls(
+  messages: BaseMessage[],
+): ToolCallRecord[] {
+  for (const message of [...messages].reverse()) {
+    if (!isAIMessage(message) || (message.tool_calls?.length ?? 0) === 0)
+      continue;
+    return (message.tool_calls ?? []).map(toToolCallRecord);
+  }
+  return [];
 }
 
 export function collectToolResults(messages: Message[]): {
@@ -95,16 +117,6 @@ export function stateHasInterrupt(state: unknown): boolean {
   );
 }
 
-export function findLastAssistantWithToolCalls(
-  messages: BaseMessage[],
-): BaseMessage | null {
-  for (const message of [...messages].reverse()) {
-    if (isAIMessage(message) && (message.tool_calls?.length ?? 0) > 0)
-      return message;
-  }
-  return null;
-}
-
 export function normalizeMessages(
   messages: BaseMessage[],
   toolCallsById: Map<string, ToolCallRecord>,
@@ -123,10 +135,19 @@ export function normalizeMessages(
       continue;
     }
     if (isToolMessage(message)) {
-      const toolCall = toolCallsById.get(message.tool_call_id);
-      if (!toolCall) continue;
+      const toolCall =
+        toolCallsById.get(message.tool_call_id) ??
+        readToolMessageToolCall(message);
+      if (!toolCall) {
+        throw new Error(
+          `Tool message references an unknown tool call: ${message.tool_call_id}`,
+        );
+      }
       const record = toolRecords.get(message.tool_call_id);
       const messageContent = messageText(message.content);
+      const messageOutput = readToolMessageOutput(
+        message.artifact === undefined ? message.content : message.artifact,
+      );
       const messageIsError =
         message.status === "error" ||
         messageContent.startsWith("Error invoking tool");
@@ -137,7 +158,7 @@ export function normalizeMessages(
           toolResults: [
             {
               ...record.error,
-              output: record.result?.output ?? messageContent,
+              output: record.result?.output ?? messageOutput,
               isError: true,
             },
           ],
@@ -151,7 +172,7 @@ export function normalizeMessages(
         toolResults: [
           record?.result ?? {
             ...toolCall,
-            output: messageContent,
+            output: messageOutput,
             ...(messageIsError ? { isError: true } : {}),
           },
         ],
@@ -176,6 +197,50 @@ export function normalizeMessages(
     }
   }
   return normalized;
+}
+
+function readToolMessageOutput(content: unknown): JsonValue {
+  try {
+    return cloneJsonValue(content, "Tool message output");
+  } catch {
+    return messageText(content);
+  }
+}
+
+function readToolMessageToolCall(message: ToolMessage): ToolCallRecord | null {
+  const metadata = isRecord(message.additional_kwargs)
+    ? message.additional_kwargs.agentdockToolCall
+    : undefined;
+  if (!isRecord(metadata)) return null;
+  try {
+    return {
+      toolCallId: message.tool_call_id,
+      name:
+        typeof metadata.name === "string"
+          ? metadata.name
+          : (message.name ?? ""),
+      input: cloneJsonObject(metadata.args ?? {}, "Tool message input"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function addToolCall(
+  calls: Map<string, ToolCallRecord>,
+  toolCall: ToolCallRecord,
+): void {
+  const existing = calls.get(toolCall.toolCallId);
+  if (
+    existing &&
+    (existing.name !== toolCall.name ||
+      JSON.stringify(existing.input) !== JSON.stringify(toolCall.input))
+  ) {
+    throw new Error(
+      `Model returned conflicting finalized tool calls for ID: ${toolCall.toolCallId}`,
+    );
+  }
+  calls.set(toolCall.toolCallId, toolCall);
 }
 
 export function findFinalContent(messages: Message[]): string {

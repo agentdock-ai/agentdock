@@ -8,7 +8,6 @@ import {
 } from "@langchain/core/messages";
 import {
   findFinalContent,
-  findLastAssistantWithToolCalls,
   isStreamChunk,
   normalizeMessages,
   readStateMessages,
@@ -79,21 +78,11 @@ test("reads checkpoint state safely and finds final assistant content", () => {
     findFinalContent(normalizeMessages([assistant], new Map())),
     "Final answer.",
   );
-  assert.equal(findLastAssistantWithToolCalls([assistant]), null);
   assert.deepEqual(readStateMessages({}), []);
   assert.equal(readStateRunId({}), null);
 });
 
-test("detects interrupted state and assistant tool calls", () => {
-  const assistant = new AIMessage({
-    content: "",
-    tool_calls: [{ id: "call-1", name: "publish", args: {} }],
-  });
-
-  assert.equal(
-    findLastAssistantWithToolCalls([new HumanMessage("hello"), assistant]),
-    assistant,
-  );
+test("detects interrupted state", () => {
   assert.equal(
     stateHasInterrupt({ tasks: [{ interrupts: [{ value: "approval" }] }] }),
     true,
@@ -154,4 +143,57 @@ test("reconstructs persisted structured tool outputs without changing strings", 
   );
 
   assert.deepEqual(normalized[1].toolResults[0].output, { ok: true });
+});
+
+test("preserves every JSON output type from a checkpointed tool message", () => {
+  const outputs = [
+    "plain text",
+    '{"looks":"like JSON"}',
+    { city: "Lahore" },
+    ["one", 2],
+    null,
+    42,
+    true,
+  ];
+  for (const [index, output] of outputs.entries()) {
+    const toolCall = {
+      toolCallId: `call-output-${index}`,
+      name: "output_tool",
+      input: {},
+    };
+    const messages = normalizeMessages(
+      [
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            { id: toolCall.toolCallId, name: toolCall.name, args: {} },
+          ],
+        }),
+        new ToolMessage({
+          content: typeof output === "string" ? output : JSON.stringify(output),
+          artifact: output,
+          tool_call_id: toolCall.toolCallId,
+        }),
+      ],
+      new Map([[toolCall.toolCallId, toolCall]]),
+    );
+
+    assert.deepEqual(messages[1].toolResults[0].output, output);
+  }
+});
+
+test("reports a malformed tool message instead of silently dropping it", () => {
+  assert.throws(
+    () =>
+      normalizeMessages(
+        [
+          new ToolMessage({
+            content: "orphaned",
+            tool_call_id: "missing-call",
+          }),
+        ],
+        new Map(),
+      ),
+    /Tool message references an unknown tool call: missing-call/,
+  );
 });

@@ -93,6 +93,109 @@ test("persists a pending approval across AgentDock recreation", async () => {
   }
 });
 
+test("restarts SQLite approval phases without replaying prior actions", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "agentdock-agent-"));
+  const databasePath = path.join(directory, "checkpoints.sqlite");
+  const executions = [];
+  const registry = new ToolRegistry();
+
+  try {
+    registry.register({
+      name: "first_protected",
+      description: "First protected action.",
+      parameters: { type: "object", properties: {} },
+      requiresApproval: true,
+      execute: async () => {
+        executions.push("first");
+        return "first done";
+      },
+    });
+    registry.register({
+      name: "middle_unprotected",
+      description: "Middle unprotected action.",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        executions.push("middle");
+        return "middle done";
+      },
+    });
+    registry.register({
+      name: "last_protected",
+      description: "Last protected action.",
+      parameters: { type: "object", properties: {} },
+      requiresApproval: true,
+      execute: async () => {
+        executions.push("last");
+        return "last done";
+      },
+    });
+
+    const model = new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "first_protected", args: {}, id: "call-first" }],
+        [{ name: "middle_unprotected", args: {}, id: "call-middle" }],
+        [{ name: "last_protected", args: {}, id: "call-last" }],
+        [],
+      ],
+    });
+    const firstAgent = new AgentDock({
+      model,
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    });
+    const firstWaiting = await firstAgent.run(
+      "Run the three actions.",
+      {},
+      { sessionId: "session-sqlite-phases", runId: "run-sqlite-phases" },
+    );
+    assert.deepEqual(
+      firstWaiting.approvalRequests.map((request) => request.approvalId),
+      ["call-first"],
+    );
+    await firstAgent.close();
+
+    const secondAgent = new AgentDock({
+      model,
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    });
+    const secondWaiting = await secondAgent.resume(
+      {
+        runId: "run-sqlite-phases",
+        approvals: [{ approvalId: "call-first", approved: true }],
+      },
+      {},
+      { sessionId: "session-sqlite-phases" },
+    );
+    assert.deepEqual(
+      secondWaiting.approvalRequests.map((request) => request.approvalId),
+      ["call-last"],
+    );
+    assert.deepEqual(executions, ["first", "middle"]);
+    await secondAgent.close();
+
+    const thirdAgent = new AgentDock({
+      model,
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    });
+    const completed = await thirdAgent.resume(
+      {
+        runId: "run-sqlite-phases",
+        approvals: [{ approvalId: "call-last", approved: true }],
+      },
+      {},
+      { sessionId: "session-sqlite-phases" },
+    );
+
+    assert.equal(completed.status, "completed");
+    assert.deepEqual(executions, ["first", "middle", "last"]);
+    await thirdAgent.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejects incomplete or stale approval decisions against SQLite checkpoints", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "agentdock-agent-"));
   const databasePath = path.join(directory, "checkpoints.sqlite");

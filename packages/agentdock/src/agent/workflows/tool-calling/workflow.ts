@@ -42,10 +42,10 @@ import type { ToolRegistry } from "../../../tools/registry.js";
 import { AgentEventStream } from "../event-stream.js";
 import {
   findFinalContent,
-  findLastAssistantWithToolCalls,
   isStreamChunk,
   normalizeMessages,
   collectToolCalls,
+  collectLatestToolCalls,
   collectToolResults,
   readStateMessages,
   readStateRunId,
@@ -55,6 +55,10 @@ import {
   stateHasInterrupt,
   toToolCallRecord,
 } from "./message-adapter.js";
+import {
+  readApprovalRequestsFromCheckpoint,
+  readApprovalRequestsFromPayload,
+} from "./interrupts.js";
 import {
   authorizeToolCall,
   createToolCallingTools,
@@ -162,19 +166,17 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     const state = await agent.getState(
       this.runConfig(sessionId, {}, undefined, options.sessionNamespace),
     );
-    if (!stateHasInterrupt(state)) return [];
-
-    const lastAssistant = findLastAssistantWithToolCalls(
-      readStateMessages(state),
+    const config = this.runConfig(
+      sessionId,
+      {},
+      undefined,
+      options.sessionNamespace,
     );
-    if (!lastAssistant || !isAIMessage(lastAssistant)) return [];
-    return (lastAssistant.tool_calls ?? [])
-      .map(toToolCallRecord)
-      .filter(
-        (toolCall) =>
-          this.registry.get(toolCall.name)?.requiresApproval === true,
-      )
-      .map((toolCall) => ({ approvalId: toolCall.toolCallId, toolCall }));
+    const checkpoint = await this.checkpointer.getTuple(config);
+    return readApprovalRequestsFromCheckpoint(
+      checkpoint ? { pendingWrites: checkpoint.pendingWrites } : state,
+      collectLatestToolCalls(readStateMessages(state)),
+    );
   }
 
   async deleteSession(
@@ -319,11 +321,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       );
       const content = findFinalContent(messages);
       emitCompletedMessages(messages, state, emit);
-      if (state.approvalRequests.length > 0 || stateHasInterrupt(graphState)) {
-        const approvalRequests =
-          state.approvalRequests.length > 0
-            ? state.approvalRequests
-            : await this.getPendingApprovals(input.sessionId, input.options);
+      if (stateHasInterrupt(graphState)) {
+        const approvalRequests = await this.getPendingApprovals(
+          input.sessionId,
+          input.options,
+        );
         emit({
           type: AgentEventType.InterruptRequired,
           interrupt: {
@@ -452,16 +454,30 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     const current = failedResult(input, state, status, error);
     try {
       const graphState = await agent.getState(config);
-      const result = mergeRunResults(readRunSnapshot(graphState), current);
+      const result = mergeRunResults(
+        readRunSnapshot(graphState),
+        failedResultFromGraphState(input, state, graphState, status, error),
+      );
       const records = mergeToolRecords(
         readStateToolRecords(graphState),
         createPersistedToolRecords(state),
       );
-      await agent.updateState(config, {
-        agentdockRunSnapshot: cloneJsonObject(result, "AgentDock run snapshot"),
-        agentdockToolRecords: cloneJsonValue(records, "AgentDock tool records"),
-        agentdockEventSequence: eventSequence,
-      });
+      try {
+        await agent.updateState(config, {
+          agentdockRunSnapshot: cloneJsonObject(
+            result,
+            "AgentDock run snapshot",
+          ),
+          agentdockToolRecords: cloneJsonValue(
+            records,
+            "AgentDock tool records",
+          ),
+          agentdockEventSequence: eventSequence,
+        });
+      } catch {
+        // An aborted graph signal can reject checkpoint mutation. The reconstructed
+        // logical result remains valid and is returned to the caller.
+      }
       return result;
     } catch {
       return current;
@@ -645,7 +661,9 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       emit({ type: AgentEventType.UsageUpdated, usage: state.usage });
     }
     const text = messageText(message.content);
-    const delta = isChunk ? text : getMessageDelta(state, messageId, text);
+    const delta = isChunk
+      ? getChunkDelta(state, messageId, text)
+      : getMessageDelta(state, messageId, text);
     if (delta) {
       if (!state.startedMessageIds.has(messageId)) {
         state.startedMessageIds.add(messageId);
@@ -690,49 +708,27 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     }
 
     if (!("__interrupt__" in payload)) return;
-    const approvals = this.readCurrentApprovalRequests(payload, state);
+    const approvals = readApprovalRequestsFromPayload(
+      payload,
+      state.latestToolCalls,
+    );
     if (approvals.length === 0) return;
     state.approvalRequests = approvals;
-  }
-
-  private readCurrentApprovalRequests(
-    payload: Record<string, unknown>,
-    state: ExecutionState,
-  ): ToolApprovalRequest[] {
-    const interrupts = payload.__interrupt__;
-    if (!Array.isArray(interrupts)) return [];
-
-    const actionRequests = interrupts.flatMap((interrupt) => {
-      if (!isRecord(interrupt) || !isRecord(interrupt.value)) return [];
-      const actions = interrupt.value.actionRequests;
-      return Array.isArray(actions) ? actions : [];
-    });
-    const currentCalls = [...state.latestToolCalls];
-    const approvals: ToolApprovalRequest[] = [];
-
-    for (const action of actionRequests) {
-      if (!isRecord(action) || typeof action.name !== "string") continue;
-      const index = currentCalls.findIndex(
-        (toolCall) =>
-          toolCall.name === action.name &&
-          isEquivalentJson(toolCall.input, action.args),
-      );
-      if (index < 0) continue;
-      const [toolCall] = currentCalls.splice(index, 1);
-      if (this.registry.get(toolCall!.name)?.requiresApproval !== true) {
-        continue;
-      }
-      approvals.push({ approvalId: toolCall!.toolCallId, toolCall: toolCall! });
-    }
-
-    return approvals;
   }
 
   private recordToolCall(
     toolCall: ToolCallRecord,
     state: ExecutionState,
   ): boolean {
-    if (state.toolCallsById.has(toolCall.toolCallId)) return false;
+    const existing = state.toolCallsById.get(toolCall.toolCallId);
+    if (existing) {
+      if (!isEquivalentToolCall(existing, toolCall)) {
+        throw new Error(
+          `Model returned conflicting finalized tool calls for ID: ${toolCall.toolCallId}`,
+        );
+      }
+      return false;
+    }
     state.toolCallsById.set(toolCall.toolCallId, toolCall);
     state.toolCalls.push(toolCall);
     return true;
@@ -774,17 +770,17 @@ function getAnonymousMessageId(
 
 function normalizeStateMessages(state: unknown): Message[] {
   const messages = readStateMessages(state);
-  const toolCalls = new Map(
-    collectToolCalls(messages).map((toolCall) => [
-      toolCall.toolCallId,
-      toolCall,
-    ]),
-  );
   const records = new Map(
     readStateToolRecords(state).map((record) => [
       record.toolCall.toolCallId,
       record,
     ]),
+  );
+  const toolCalls = new Map(
+    mergeById(
+      collectToolCalls(messages),
+      [...records.values()].map((record) => record.toolCall),
+    ).map((toolCall) => [toolCall.toolCallId, toolCall]),
   );
   return normalizeMessages(messages, toolCalls, records);
 }
@@ -797,6 +793,13 @@ function isEquivalentJson(left: unknown, right: unknown): boolean {
   }
 }
 
+function isEquivalentToolCall(
+  left: ToolCallRecord,
+  right: ToolCallRecord,
+): boolean {
+  return left.name === right.name && isEquivalentJson(left.input, right.input);
+}
+
 function getMessageDelta(
   state: ExecutionState,
   messageId: string,
@@ -806,6 +809,18 @@ function getMessageDelta(
   state.textByMessageId.set(messageId, text);
   if (text.startsWith(previous)) return text.slice(previous.length);
   if (text === previous) return "";
+  return text;
+}
+
+function getChunkDelta(
+  state: ExecutionState,
+  messageId: string,
+  text: string,
+): string {
+  if (text) {
+    const previous = state.textByMessageId.get(messageId) ?? "";
+    state.textByMessageId.set(messageId, previous + text);
+  }
   return text;
 }
 
@@ -963,6 +978,48 @@ function failedResult(
     toolErrors: state.toolErrors,
     approvalRequests: [],
     stepsCompleted: state.stepNumbers.size,
+    error,
+  };
+}
+
+function failedResultFromGraphState(
+  input: WorkflowStartInput | WorkflowResumeInput,
+  state: ExecutionState,
+  graphState: unknown,
+  status: "cancelled" | "failed",
+  error: string,
+): AgentRunResult {
+  const graphMessages = readStateMessages(graphState);
+  const toolCalls = mergeById(
+    collectToolCalls(graphMessages),
+    mergeById(state.resolvedToolCalls, state.toolCalls),
+  );
+  const persistedRecords = mergeToolRecords(
+    readStateToolRecords(graphState),
+    createPersistedToolRecords(state),
+  );
+  const messages = normalizeMessages(
+    graphMessages,
+    new Map(toolCalls.map((toolCall) => [toolCall.toolCallId, toolCall])),
+    new Map(
+      persistedRecords.map((record) => [record.toolCall.toolCallId, record]),
+    ),
+  );
+  const messageResults = collectToolResults(messages);
+  return {
+    runId: input.runId,
+    sessionId: input.sessionId,
+    status,
+    content: findFinalContent(messages),
+    messages,
+    toolCalls,
+    toolResults: mergeById(messageResults.results, state.toolResults),
+    toolErrors: mergeById(messageResults.errors, state.toolErrors),
+    approvalRequests: [],
+    stepsCompleted: Math.max(
+      state.stepNumbers.size,
+      countLogicalSteps(messages),
+    ),
     error,
   };
 }
@@ -1255,7 +1312,7 @@ function mergeRunResults(
     toolCalls: mergeById(previous.toolCalls, current.toolCalls),
     toolResults: mergeById(previous.toolResults, current.toolResults),
     toolErrors: mergeById(previous.toolErrors, current.toolErrors),
-    stepsCompleted: previous.stepsCompleted + current.stepsCompleted,
+    stepsCompleted: Math.max(previous.stepsCompleted, current.stepsCompleted),
     approvalRequests:
       current.status === "waiting_for_approval" ? current.approvalRequests : [],
   };

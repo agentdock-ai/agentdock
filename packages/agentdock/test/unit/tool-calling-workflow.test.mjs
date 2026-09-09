@@ -3,6 +3,11 @@ import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 import { AgentDock, AgentEventType, ToolRegistry } from "../../src/index.js";
+import {
+  createToolCallArgumentChunks,
+  createScriptedChatModel,
+  createScriptedMessageChunks,
+} from "../helpers/stream-fixtures.mjs";
 
 class InitializationScopedSaver extends MemorySaver {
   expectedOwner = null;
@@ -60,6 +65,130 @@ function createAgent(toolCalls, registry = new ToolRegistry()) {
     defaults: { maxSteps: 4 },
   });
 }
+
+test.each([
+  ["identical chunks", ["same", "same", "same"], "samesamesame"],
+  ["repeated spaces", ["a", " ", " ", "b"], "a  b"],
+  ["repeated punctuation", ["!", "!", "!"], "!!!"],
+  ["repeated words", ["go ", "go ", "go"], "go go go"],
+  ["unicode", ["你", "你", "👋"], "你你👋"],
+  ["empty chunks", ["", "hello", "", " world"], "hello world"],
+])(
+  "preserves every streamed text delta for %s",
+  async (_label, chunks, expected) => {
+    const agent = new AgentDock({
+      model: createScriptedChatModel({
+        chunks: createScriptedMessageChunks(chunks, { includeIds: false }),
+        response: expected,
+      }),
+    });
+    const streamed = await agent.stream(
+      "Stream this answer.",
+      {},
+      { sessionId: `session-stream-${_label}`, runId: `run-stream-${_label}` },
+    );
+    const events = await collect(streamed.stream);
+    const result = await streamed.result;
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.content, expected);
+    assert.equal(
+      events
+        .filter((event) => event.type === AgentEventType.MessagePartDelta)
+        .map((event) => event.part.text)
+        .join(""),
+      expected,
+    );
+    assert.equal(
+      new Set(
+        events
+          .filter((event) => event.type === AgentEventType.MessagePartDelta)
+          .map((event) => event.messageId),
+      ).size,
+      1,
+    );
+  },
+);
+
+test("does not publish a partial tool call before its final arguments are available", async () => {
+  const registry = new ToolRegistry();
+  let executions = 0;
+  registry.register({
+    name: "lookup_weather",
+    description: "Look up weather.",
+    parameters: {
+      type: "object",
+      properties: { city: { type: "string" } },
+      required: ["city"],
+      additionalProperties: false,
+    },
+    execute: async ({ input }) => {
+      executions += 1;
+      return { city: input.city, forecast: "sunny" };
+    },
+  });
+  const model = createScriptedChatModel({
+    streamSequences: [
+      createToolCallArgumentChunks({
+        name: "lookup_weather",
+        toolCallId: "call-partial",
+        input: { city: "Lahore" },
+        chunkCount: 3,
+      }),
+      [],
+    ],
+    responses: ["", "The weather is sunny."],
+  });
+  const agent = new AgentDock({ model, registry, defaults: { maxSteps: 2 } });
+
+  const streamed = await agent.stream(
+    "What is the weather?",
+    {},
+    { sessionId: "session-partial-tool", runId: "run-partial-tool" },
+  );
+  const events = await collect(streamed.stream);
+  const result = await streamed.result;
+
+  const called = events.filter(
+    (event) => event.type === AgentEventType.ToolCalled,
+  );
+  assert.equal(called.length, 1);
+  assert.deepEqual(called[0].toolCall.input, { city: "Lahore" });
+  assert.equal(executions, 1);
+  assert.equal(result.toolCalls[0].toolCallId, "call-partial");
+});
+
+test("run and stream return the same normalized final assistant content", async () => {
+  const chunks = ["Hello", " ", "world", "!"];
+  const create = () =>
+    new AgentDock({
+      model: createScriptedChatModel({
+        chunks: createScriptedMessageChunks(chunks, { includeIds: false }),
+        response: "Hello world!",
+      }),
+    });
+  const streamed = await create().stream(
+    "Say hello.",
+    {},
+    {
+      sessionId: "session-stream-equivalence",
+      runId: "run-stream-equivalence",
+    },
+  );
+  await collect(streamed.stream);
+  const streamResult = await streamed.result;
+  const runResult = await create().run(
+    "Say hello.",
+    {},
+    { sessionId: "session-run-equivalence", runId: "run-run-equivalence" },
+  );
+
+  assert.equal(streamResult.content, runResult.content);
+  assert.deepEqual(
+    streamResult.messages.map((message) => [message.role, message.content]),
+    runResult.messages.map((message) => [message.role, message.content]),
+  );
+});
 
 test("AgentDock streams the default tool-calling workflow and persists session memory in checkpoints", async () => {
   const agent = createAgent([[]]);
@@ -299,6 +428,322 @@ test("AgentDock resumes multiple sequential approval boundaries", async () => {
     completed.toolResults.map((result) => result.toolCallId),
     ["call-first", "call-second"],
   );
+});
+
+test("AgentDock resumes three approval boundaries after recreating the runtime", async () => {
+  const checkpointer = new MemorySaver();
+  const registry = new ToolRegistry();
+  const executions = [];
+  const calls = ["call-one", "call-two", "call-three"];
+  for (const name of ["one", "two", "three"]) {
+    registry.register({
+      name: `step_${name}`,
+      description: `Step ${name}.`,
+      parameters: { type: "object", properties: {} },
+      requiresApproval: true,
+      execute: async () => {
+        executions.push(name);
+        return `${name} complete`;
+      },
+    });
+  }
+
+  const createPhaseAgent = (toolCalls) =>
+    new AgentDock({
+      model: new FakeToolCallingModel({ toolCalls }),
+      registry,
+      checkpointer,
+    });
+
+  const first = await createPhaseAgent([
+    [{ name: "step_one", args: {}, id: calls[0] }],
+  ]).run(
+    "Run all steps.",
+    {},
+    { sessionId: "session-three-boundaries", runId: "run-three-boundaries" },
+  );
+  assert.deepEqual(
+    first.approvalRequests.map((request) => request.approvalId),
+    [calls[0]],
+  );
+
+  const second = await createPhaseAgent([
+    [{ name: "step_two", args: {}, id: calls[1] }],
+  ]).resume(
+    {
+      runId: "run-three-boundaries",
+      approvals: [{ approvalId: calls[0], approved: true }],
+    },
+    {},
+    { sessionId: "session-three-boundaries" },
+  );
+  assert.deepEqual(
+    second.approvalRequests.map((request) => request.approvalId),
+    [calls[1]],
+  );
+
+  const third = await createPhaseAgent([
+    [{ name: "step_three", args: {}, id: calls[2] }],
+  ]).resume(
+    {
+      runId: "run-three-boundaries",
+      approvals: [{ approvalId: calls[1], approved: true }],
+    },
+    {},
+    { sessionId: "session-three-boundaries" },
+  );
+  assert.deepEqual(
+    third.approvalRequests.map((request) => request.approvalId),
+    [calls[2]],
+  );
+
+  const completed = await createPhaseAgent([[]]).resume(
+    {
+      runId: "run-three-boundaries",
+      approvals: [{ approvalId: calls[2], approved: true }],
+    },
+    {},
+    { sessionId: "session-three-boundaries" },
+  );
+
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(executions, ["one", "two", "three"]);
+  assert.deepEqual(completed.approvalRequests, []);
+});
+
+test("AgentDock keeps a checkpointed approval bound to its finalized call after registry changes", async () => {
+  const checkpointer = new MemorySaver();
+  const registry = new ToolRegistry();
+  let executions = 0;
+  registry.register({
+    name: "mutable_action",
+    description: "An action whose policy changes after pausing.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => {
+      executions += 1;
+      return "done";
+    },
+  });
+  const first = new AgentDock({
+    model: new FakeToolCallingModel({
+      toolCalls: [[{ name: "mutable_action", args: {}, id: "call-mutable" }]],
+    }),
+    registry,
+    checkpointer,
+  });
+  const waiting = await first.run(
+    "Run the mutable action.",
+    {},
+    { sessionId: "session-mutable-approval", runId: "run-mutable-approval" },
+  );
+
+  registry.clear();
+  registry.register({
+    name: "mutable_action",
+    description: "The same action has updated metadata.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => {
+      executions += 1;
+      return "done after metadata change";
+    },
+  });
+  const resumed = await new AgentDock({
+    model: new FakeToolCallingModel({ toolCalls: [[]] }),
+    registry,
+    checkpointer,
+  }).resume(
+    {
+      runId: "run-mutable-approval",
+      approvals: [
+        { approvalId: waiting.approvalRequests[0].approvalId, approved: true },
+      ],
+    },
+    {},
+    { sessionId: "session-mutable-approval" },
+  );
+
+  assert.equal(resumed.status, "completed");
+  assert.equal(executions, 1);
+});
+
+test("logical cancellation preserves activity from an earlier approval phase", async () => {
+  const registry = new ToolRegistry();
+  let secondStarted;
+  const secondStartedPromise = new Promise((resolve) => {
+    secondStarted = resolve;
+  });
+  registry.register({
+    name: "approved_first",
+    description: "First approved action.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => "first complete",
+  });
+  registry.register({
+    name: "cancelled_second",
+    description: "Second action that waits for cancellation.",
+    parameters: { type: "object", properties: {} },
+    execute: async ({ signal }) => {
+      secondStarted();
+      await new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      });
+      return resolve;
+    },
+  });
+  const agent = new AgentDock({
+    model: new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "approved_first", args: {}, id: "call-approved-first" }],
+        [{ name: "cancelled_second", args: {}, id: "call-cancelled-second" }],
+      ],
+    }),
+    registry,
+  });
+
+  const waiting = await agent.run(
+    "Run both actions.",
+    {},
+    {
+      sessionId: "session-cancel-after-approval",
+      runId: "run-cancel-after-approval",
+    },
+  );
+  const resumed = await agent.resumeStream(
+    {
+      runId: "run-cancel-after-approval",
+      approvals: [{ approvalId: "call-approved-first", approved: true }],
+    },
+    {},
+    { sessionId: "session-cancel-after-approval" },
+  );
+  await secondStartedPromise;
+  assert.equal(await agent.stop("run-cancel-after-approval"), true);
+  await collect(resumed.stream);
+  const cancelled = await resumed.result;
+
+  assert.equal(waiting.status, "waiting_for_approval");
+  assert.equal(cancelled.status, "cancelled");
+  assert.ok(
+    cancelled.toolResults.some(
+      (result) => result.toolCallId === "call-approved-first",
+    ),
+  );
+  assert.ok(
+    cancelled.messages.some(
+      (message) =>
+        message.role === "tool" && message.content === "first complete",
+    ),
+  );
+});
+
+test("session reconstruction preserves structured output while waiting for a later approval", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "structured_first",
+    description: "Return structured data.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ city: "Lahore", forecast: "sunny" }),
+  });
+  registry.register({
+    name: "approved_second",
+    description: "Require approval after structured output.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => "second complete",
+  });
+  const agent = new AgentDock({
+    model: new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "structured_first", args: {}, id: "call-structured-first" }],
+        [{ name: "approved_second", args: {}, id: "call-approved-second" }],
+      ],
+    }),
+    registry,
+  });
+
+  const waiting = await agent.run(
+    "Return weather and then publish it.",
+    {},
+    {
+      sessionId: "session-structured-waiting",
+      runId: "run-structured-waiting",
+    },
+  );
+  const session = await agent.getSession("session-structured-waiting");
+  const toolMessage = session.messages.find(
+    (message) =>
+      message.role === "tool" &&
+      message.toolResults[0]?.toolCallId === "call-structured-first",
+  );
+
+  assert.equal(waiting.status, "waiting_for_approval");
+  assert.deepEqual(toolMessage.toolResults[0].output, {
+    city: "Lahore",
+    forecast: "sunny",
+  });
+});
+
+test("logical resume preserves earlier results when a later tool fails", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "successful_first",
+    description: "Return a successful first result.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => "first result",
+  });
+  registry.register({
+    name: "failing_second",
+    description: "Fail after the approval phase.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      throw new Error("second tool failed");
+    },
+  });
+  const agent = new AgentDock({
+    model: new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "successful_first", args: {}, id: "call-successful-first" }],
+        [{ name: "failing_second", args: {}, id: "call-failing-second" }],
+        [],
+      ],
+    }),
+    registry,
+  });
+
+  await agent.run(
+    "Run and preserve both outcomes.",
+    {},
+    { sessionId: "session-logical-error", runId: "run-logical-error" },
+  );
+  const result = await agent.resume(
+    {
+      runId: "run-logical-error",
+      approvals: [{ approvalId: "call-successful-first", approved: true }],
+    },
+    {},
+    { sessionId: "session-logical-error" },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.ok(
+    result.toolResults.some(
+      (toolResult) => toolResult.toolCallId === "call-successful-first",
+    ),
+  );
+  assert.ok(
+    result.toolErrors.some(
+      (toolError) =>
+        toolError.toolCallId === "call-failing-second" &&
+        toolError.error === "second tool failed",
+    ),
+  );
+  assert.ok(result.messages.some((message) => message.role === "tool"));
 });
 
 test("AgentDock keeps logical event ordering across an approval restart", async () => {

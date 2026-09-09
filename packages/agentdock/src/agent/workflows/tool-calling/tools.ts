@@ -3,6 +3,7 @@ import {
   type StructuredToolInterface,
   type ToolRuntime,
 } from "@langchain/core/tools";
+import { ToolMessage } from "@langchain/core/messages";
 import {
   cloneJsonObject,
   cloneJsonValue,
@@ -98,7 +99,22 @@ export function createToolCallingTools(
           outcomes.set(toolCall.toolCallId, {
             result: { ...toolCall, output: serializedOutput },
           });
-          return stringifyToolOutput(serializedOutput);
+          return new ToolMessage({
+            content:
+              typeof serializedOutput === "string"
+                ? serializedOutput
+                : JSON.stringify(serializedOutput),
+            artifact: serializedOutput,
+            additional_kwargs: {
+              agentdockToolCall: {
+                id: toolCall.toolCallId,
+                name: toolCall.name,
+                args: input,
+              },
+            },
+            tool_call_id: toolCall.toolCallId,
+            name: toolDefinition.name,
+          });
         } catch (error) {
           outcomes.set(toolCall.toolCallId, {
             error: {
@@ -153,11 +169,6 @@ function requireRecord(value: unknown, message: string): JsonObject {
 
 function serializeToolOutput(output: unknown): JsonValue {
   return cloneJsonValue(output, "Tool output");
-}
-
-function stringifyToolOutput(output: JsonValue): string {
-  if (typeof output === "string") return output;
-  return JSON.stringify(output);
 }
 
 async function executeWithDeadline<T>(
