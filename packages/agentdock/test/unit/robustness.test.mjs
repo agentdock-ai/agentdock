@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { AIMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import {
   AgentDock,
@@ -9,6 +10,10 @@ import {
   createAgentDock,
   defineTool,
 } from "../../src/index.js";
+import {
+  createNeverSettlingAuthorization,
+  createUncooperativeTool,
+} from "../helpers/stream-fixtures.mjs";
 
 function createAgent(toolCalls, registry = new ToolRegistry(), options = {}) {
   return new AgentDock({
@@ -16,6 +21,12 @@ function createAgent(toolCalls, registry = new ToolRegistry(), options = {}) {
     registry,
     ...options,
   });
+}
+
+async function collect(stream) {
+  const events = [];
+  for await (const event of stream) events.push(event);
+  return events;
 }
 
 test("strict context validation rejects non-JSON values with a path", async () => {
@@ -118,6 +129,67 @@ test("defineTool infers and validates typed input at the execution boundary", as
   await agent.close();
 });
 
+test("tool progress is emitted through the canonical stream before completion", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "progress_tool",
+    description: "Reports progress.",
+    parameters: { type: "object", properties: {} },
+    execute: async ({ reportProgress }) => {
+      reportProgress("started");
+      reportProgress("finished");
+      return "done";
+    },
+  });
+  const agent = createAgent(
+    [[{ name: "progress_tool", args: {}, id: "call-progress" }], []],
+    registry,
+  );
+
+  const execution = await agent.stream(
+    "Run the progress tool.",
+    {},
+    { sessionId: "progress-session", runId: "progress-run" },
+  );
+  const eventsPromise = collect(execution.stream);
+  const result = await execution.result;
+  const events = await eventsPromise;
+
+  assert.equal(result.status, "completed");
+  const progress = events.filter((event) => event.type === "tool.progress");
+  assert.deepEqual(
+    progress.map((event) => event.content[0].text),
+    ["started", "finished"],
+  );
+  assert.ok(
+    events.findIndex((event) => event.type === "tool.progress") <
+      events.findIndex((event) => event.type === "tool.completed"),
+  );
+  await agent.close();
+});
+
+test("usage metadata is emitted and attached to the terminal event", async () => {
+  const agent = new AgentDock({ model: new UsageModel() });
+  const execution = await agent.stream(
+    "Report usage.",
+    {},
+    { sessionId: "usage-session", runId: "usage-run" },
+  );
+  const eventsPromise = collect(execution.stream);
+  await execution.result;
+  const events = await eventsPromise;
+  const usage = events.find((event) => event.type === "usage.updated");
+  const completed = events.at(-1);
+
+  assert.deepEqual(usage.usage, {
+    inputTokens: 3,
+    outputTokens: 2,
+    totalTokens: 5,
+  });
+  assert.deepEqual(completed.usage, usage.usage);
+  await agent.close();
+});
+
 test("unauthorized protected tools do not create approval interrupts", async () => {
   const registry = new ToolRegistry();
   let executions = 0;
@@ -156,7 +228,7 @@ test("authorization timeout is distinct from tool timeout", async () => {
     name: "authorization_wait",
     description: "Authorization never settles.",
     parameters: { type: "object", properties: {} },
-    authorize: async () => new Promise(() => {}),
+    authorize: createNeverSettlingAuthorization(),
     execute: async () => "unreachable",
   });
   const agent = createAgent(
@@ -232,10 +304,7 @@ test("tool timeout returns by deadline even when the tool ignores abort", async 
     name: "uncooperative",
     description: "Never settles.",
     parameters: { type: "object", properties: {} },
-    execute: async () => {
-      started();
-      return new Promise(() => {});
-    },
+    execute: createUncooperativeTool({ onStarted: () => started() }),
   });
   const agent = createAgent(
     [[{ name: "uncooperative", args: {}, id: "call-timeout" }], []],
@@ -293,6 +362,154 @@ test("a shared coordinator protects a session across AgentDock instances", async
     /already has an active run/,
   );
   await firstRun.result;
+  await first.close();
+  await second.close();
+});
+
+test("coordinator releases after success, failure, cancellation, and timeout", async () => {
+  const coordinator = new TrackingCoordinator();
+  const success = createAgent([[]], new ToolRegistry(), { coordinator });
+  await success.run(
+    "Succeed.",
+    {},
+    { sessionId: "coord-success", runId: "coord-success" },
+  );
+
+  const failure = new AgentDock({ model: new ThrowingModel(), coordinator });
+  const failed = await failure.run(
+    "Fail.",
+    {},
+    { sessionId: "coord-failure", runId: "coord-failure" },
+  );
+  assert.equal(failed.status, "failed");
+
+  const cancelledSignal = new AbortController();
+  cancelledSignal.abort(new Error("cancel before execution"));
+  const cancellation = createAgent([[]], new ToolRegistry(), { coordinator });
+  const cancelled = await cancellation.run(
+    "Cancel.",
+    {},
+    {
+      sessionId: "coord-cancelled",
+      runId: "coord-cancelled",
+      abortSignal: cancelledSignal.signal,
+    },
+  );
+  assert.equal(cancelled.status, "cancelled");
+
+  const timeoutRegistry = new ToolRegistry();
+  timeoutRegistry.register({
+    name: "coord_timeout",
+    description: "Never settles.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => new Promise(() => {}),
+  });
+  const timeout = createAgent(
+    [[{ name: "coord_timeout", args: {}, id: "coord-timeout-call" }], []],
+    timeoutRegistry,
+    { coordinator },
+  );
+  const timedOut = await timeout.run(
+    "Timeout.",
+    {},
+    {
+      sessionId: "coord-timeout",
+      runId: "coord-timeout",
+      toolTimeout: 20,
+    },
+  );
+  assert.equal(timedOut.toolErrors[0].code, "tool_timeout");
+
+  assert.deepEqual(coordinator.releasedRunIds.sort(), [
+    "coord-cancelled",
+    "coord-failure",
+    "coord-success",
+    "coord-timeout",
+  ]);
+  await success.close();
+  await failure.close();
+  await cancellation.close();
+  await timeout.close({ gracePeriodMs: 1 });
+});
+
+test("coordinator acquisition failure prevents execution and does not leave a local lock", async () => {
+  let executions = 0;
+  const coordinator = {
+    acquire: async () => {
+      throw new Error("coordinator unavailable");
+    },
+  };
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "must_not_run",
+    description: "Must not execute.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      executions += 1;
+      return "unexpected";
+    },
+  });
+  const agent = createAgent(
+    [[{ name: "must_not_run", args: {}, id: "must-not-run" }], []],
+    registry,
+    { coordinator },
+  );
+
+  await assert.rejects(
+    agent.run(
+      "Do not execute.",
+      {},
+      { sessionId: "coordinator-failure", runId: "coordinator-failure" },
+    ),
+    /coordinator unavailable/,
+  );
+  assert.equal(executions, 0);
+  await agent.close();
+});
+
+test("coordinator waits for asynchronous release before resolving a run", async () => {
+  const coordinator = new DelayedReleaseCoordinator(25);
+  const agent = createAgent([[]], new ToolRegistry(), { coordinator });
+
+  const started = Date.now();
+  await agent.run(
+    "Release slowly.",
+    {},
+    { sessionId: "delayed-release", runId: "delayed-release" },
+  );
+  assert.ok(Date.now() - started >= 20);
+
+  await agent.run(
+    "Run again.",
+    {},
+    { sessionId: "delayed-release", runId: "delayed-release-2" },
+  );
+  assert.deepEqual(coordinator.releasedRunIds, [
+    "delayed-release",
+    "delayed-release-2",
+  ]);
+  await agent.close();
+});
+
+test("the coordinator rejects an active run ID even across sessions", async () => {
+  const coordinator = new MapCoordinator();
+  const first = createAgent([[]], new ToolRegistry(), { coordinator });
+  const second = createAgent([[]], new ToolRegistry(), { coordinator });
+  const active = await first.stream(
+    "Hold this run.",
+    {},
+    { sessionId: "run-id-a", runId: "same-run-id" },
+  );
+
+  await assert.rejects(
+    second.run(
+      "Duplicate run.",
+      {},
+      { sessionId: "run-id-b", runId: "same-run-id" },
+    ),
+    /run already active/,
+  );
+  await active.result;
   await first.close();
   await second.close();
 });
@@ -380,6 +597,89 @@ class MapCoordinator {
         this.sessions.delete(sessionKey);
       },
     };
+  }
+}
+
+class TrackingCoordinator extends MapCoordinator {
+  releasedRunIds = [];
+
+  async acquire(input) {
+    const lease = await super.acquire(input);
+    return {
+      release: () => {
+        this.releasedRunIds.push(input.runId);
+        lease.release();
+      },
+    };
+  }
+}
+
+class DelayedReleaseCoordinator extends MapCoordinator {
+  releasedRunIds = [];
+
+  constructor(delayMs) {
+    super();
+    this.delayMs = delayMs;
+  }
+
+  async acquire(input) {
+    const lease = await super.acquire(input);
+    return {
+      release: async () => {
+        await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+        this.releasedRunIds.push(input.runId);
+        lease.release();
+      },
+    };
+  }
+}
+
+class UsageModel extends BaseChatModel {
+  constructor() {
+    super({});
+  }
+
+  bindTools() {
+    return this;
+  }
+
+  _llmType() {
+    return "usage-model";
+  }
+
+  async _generate() {
+    return {
+      generations: [
+        {
+          message: new AIMessage({
+            content: "Usage response.",
+            usage_metadata: {
+              input_tokens: 3,
+              output_tokens: 2,
+              total_tokens: 5,
+            },
+          }),
+        },
+      ],
+    };
+  }
+}
+
+class ThrowingModel extends BaseChatModel {
+  constructor() {
+    super({});
+  }
+
+  bindTools() {
+    return this;
+  }
+
+  _llmType() {
+    return "throwing-model";
+  }
+
+  async _generate() {
+    throw new Error("model failed");
   }
 }
 

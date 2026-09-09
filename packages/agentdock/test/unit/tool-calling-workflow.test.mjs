@@ -273,6 +273,7 @@ test("AgentDock resumes multiple sequential approval boundaries", async () => {
     { sessionId: "session-sequential-approval" },
   );
   assert.equal(secondWaiting.status, "waiting_for_approval");
+  assert.equal(secondWaiting.stepsCompleted, 2);
   assert.deepEqual(
     secondWaiting.approvalRequests.map((request) => request.approvalId),
     ["call-second"],
@@ -288,6 +289,7 @@ test("AgentDock resumes multiple sequential approval boundaries", async () => {
   );
 
   assert.equal(completed.status, "completed");
+  assert.equal(completed.stepsCompleted, 3);
   assert.deepEqual(executions, ["first_action", "second_action"]);
   assert.deepEqual(
     completed.toolCalls.map((toolCall) => toolCall.toolCallId),
@@ -297,6 +299,63 @@ test("AgentDock resumes multiple sequential approval boundaries", async () => {
     completed.toolResults.map((result) => result.toolCallId),
     ["call-first", "call-second"],
   );
+});
+
+test("AgentDock keeps logical event ordering across an approval restart", async () => {
+  const checkpointer = new MemorySaver();
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "publish_once",
+    description: "Publish once.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => "published",
+  });
+  const firstAgent = new AgentDock({
+    model: new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "publish_once", args: {}, id: "call-publish-once" }],
+      ],
+    }),
+    registry,
+    checkpointer,
+  });
+
+  const first = await firstAgent.stream(
+    "Publish once.",
+    {},
+    { sessionId: "session-event-order", runId: "run-event-order" },
+  );
+  const firstEventsPromise = collect(first.stream);
+  const waiting = await first.result;
+  const firstEvents = await firstEventsPromise;
+  await firstAgent.close();
+
+  const secondAgent = new AgentDock({
+    model: new FakeToolCallingModel({ toolCalls: [[]] }),
+    registry,
+    checkpointer,
+  });
+  const second = await secondAgent.resumeStream(
+    {
+      runId: "run-event-order",
+      approvals: [
+        { approvalId: waiting.approvalRequests[0].approvalId, approved: true },
+      ],
+    },
+    {},
+    { sessionId: "session-event-order" },
+  );
+  const secondEventsPromise = collect(second.stream);
+  await second.result;
+  const secondEvents = await secondEventsPromise;
+
+  assert.ok(firstEvents.length > 0);
+  assert.ok(secondEvents.length > 0);
+  assert.ok(
+    secondEvents[0].logicalSequence > firstEvents.at(-1).logicalSequence,
+  );
+  await secondAgent.close();
 });
 
 test("AgentDock resumes a checkpoint from a recreated instance", async () => {

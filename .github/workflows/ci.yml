@@ -17,3 +17,51 @@ jobs:
       - run: corepack enable
       - run: yarn install --frozen-lockfile
       - run: yarn ci
+
+  persistence:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentdock
+          POSTGRES_PASSWORD: agentdock
+          POSTGRES_DB: agentdock
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentdock -d agentdock"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mongodb:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile
+      - run: yarn test:integration:services
+        env:
+          AGENTDOCK_TEST_POSTGRES_URL: postgresql://agentdock:agentdock@localhost:5432/agentdock
+          AGENTDOCK_TEST_MONGODB_URL: mongodb://localhost:27017
+          AGENTDOCK_TEST_REDIS_URL: redis://localhost:6379

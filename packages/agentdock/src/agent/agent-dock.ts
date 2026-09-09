@@ -491,9 +491,9 @@ export class AgentDock {
     execution: StreamAgentResult,
     runId: string,
   ): StreamAgentResult {
-    const result = execution.result.finally(() => {
+    const result = execution.result.finally(async () => {
       this.activeExecutions.delete(runId);
-      void this.releaseRunByKey(runId, this.activeRuns.get(runId)?.sessionId);
+      await this.releaseRunByKey(runId, this.activeRuns.get(runId)?.sessionId);
     });
     this.activeExecutions.set(runId, result);
     return {

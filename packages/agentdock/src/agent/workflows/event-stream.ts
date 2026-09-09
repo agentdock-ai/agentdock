@@ -4,6 +4,7 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
   private readonly values: AgentEvent[] = [];
   private waiter: ((result: IteratorResult<AgentEvent>) => void) | null = null;
   private sequence = 0;
+  private logicalSequence = 0;
   private closed = false;
 
   constructor(
@@ -13,16 +14,34 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
   ) {}
 
   emit(input: AgentEventInput): void {
+    const sequence = ++this.sequence;
+    const logicalSequence = ++this.logicalSequence;
     this.push({
       ...input,
       eventId: crypto.randomUUID(),
       runId: this.runId,
       sessionId: this.sessionId,
       phaseId: this.phaseId,
-      logicalSequence: this.sequence + 1,
-      sequence: ++this.sequence,
+      logicalSequence,
+      sequence,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  setLogicalSequenceStart(sequence: number): void {
+    if (this.sequence !== 0) {
+      throw new Error("Agent event sequence cannot start after emission.");
+    }
+    if (!Number.isSafeInteger(sequence) || sequence < 0) {
+      throw new Error(
+        "Agent logical sequence start must be a non-negative integer.",
+      );
+    }
+    this.logicalSequence = sequence;
+  }
+
+  getLogicalSequence(): number {
+    return this.logicalSequence;
   }
 
   close(): void {

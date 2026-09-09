@@ -10,6 +10,7 @@
     "format:check": "prettier --check .",
     "typecheck": "yarn build:contracts && yarn build:checkpoint && yarn typecheck:contracts && yarn typecheck:checkpoint && yarn typecheck:agentdock && yarn typecheck:checkpoint-postgres && yarn typecheck:checkpoint-sqlite && yarn typecheck:checkpoint-mongodb && yarn typecheck:checkpoint-redis && yarn typecheck:models",
     "test": "yarn workspace @agentdock/contracts test && yarn workspace @agentdock/checkpoint test && yarn workspace agentdock test && yarn workspace @agentdock/checkpoint-postgres test && yarn workspace @agentdock/checkpoint-sqlite test && yarn workspace @agentdock/checkpoint-mongodb test && yarn workspace @agentdock/checkpoint-redis test && yarn workspace @agentdock/models test",
+    "test:integration:services": "yarn build && yarn workspace agentdock test:integration",
     "build": "yarn build:contracts && yarn build:checkpoint && yarn build:agentdock && yarn build:checkpoint-postgres && yarn build:checkpoint-sqlite && yarn build:checkpoint-mongodb && yarn build:checkpoint-redis && yarn build:models",
     "ci": "yarn format:check && yarn typecheck && yarn test && yarn build",
     "changeset": "changeset",

@@ -45,6 +45,7 @@ export interface ToolExecuteInput {
   input: Record<string, unknown>;
   ctx: AgentContext;
   signal?: AbortSignal;
+  reportProgress?: (text: string) => void;
 }
 
 export interface StreamAgentResult {

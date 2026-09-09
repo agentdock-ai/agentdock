@@ -19,6 +19,7 @@ export interface DefineToolOptions<Schema extends z.ZodObject> {
     input: z.output<Schema>,
     ctx: AgentContext,
     signal?: AbortSignal,
+    reportProgress?: (text: string) => void,
   ) => unknown | Promise<unknown>;
 }
 
@@ -38,14 +39,14 @@ export function defineTool<Schema extends z.ZodObject>(
       ? { requiresApproval: options.requiresApproval }
       : {}),
     ...(options.authorize ? { authorize: options.authorize } : {}),
-    execute: async ({ input, ctx, signal }) => {
+    execute: async ({ input, ctx, signal, reportProgress }) => {
       const parsed = options.input.safeParse(input);
       if (!parsed.success) {
         throw new Error(
           `Invalid input for tool ${options.name}: ${parsed.error.message}`,
         );
       }
-      return options.run(parsed.data, ctx, signal);
+      return options.run(parsed.data, ctx, signal, reportProgress);
     },
   };
 }

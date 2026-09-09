@@ -20,6 +20,7 @@ import {
   AgentEventType,
   type AgentEventInput,
   type ContentPart,
+  type AgentUsage,
 } from "../../events.js";
 import type { Message } from "../../memory.js";
 import type { AgentContext } from "../../types.js";
@@ -71,7 +72,10 @@ const AGENT_STATE_SCHEMA = z.object({
   agentdockRunId: z.string().optional(),
   agentdockRunSnapshot: z.unknown().optional(),
   agentdockToolRecords: z.unknown().optional(),
+  agentdockEventSequence: z.number().optional(),
 });
+
+const EVENT_SEQUENCE_CHECKPOINT_STRIDE = 1_000_000;
 
 export interface ToolCallingWorkflowOptions {
   model: BaseChatModel;
@@ -93,6 +97,8 @@ interface ExecutionState {
   startedMessageIds: Set<string>;
   assistantMessageIds: string[];
   anonymousMessageIds: Map<string, string>;
+  usageMessageIds: Set<string>;
+  usage?: AgentUsage;
 }
 
 type ApprovalInterrupts = Record<
@@ -219,7 +225,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
   ): StreamAgentResult {
     const stream = new AgentEventStream(input.runId, input.sessionId);
     const emit = (event: AgentEventInput): void => stream.emit(event);
-    const result = this.execute(input, mode, emit).finally(() =>
+    const result = this.execute(input, mode, stream, emit).finally(() =>
       stream.close(),
     );
 
@@ -229,6 +235,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
   private async execute(
     input: WorkflowStartInput | WorkflowResumeInput,
     mode: "start" | "resume",
+    eventStream: AgentEventStream,
     emit: (event: AgentEventInput) => void,
   ): Promise<AgentRunResult> {
     const state = createExecutionState();
@@ -236,6 +243,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       input.options,
       state.toolOutcomes,
       input.ctx,
+      emit,
     );
     const config = this.runConfig(
       input.sessionId,
@@ -244,26 +252,30 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       input.options.sessionNamespace,
     );
 
-    emit({ type: AgentEventType.RunStarted });
-    if (mode === "resume" && "approvals" in input) {
-      state.resolvedToolCalls.push(
-        ...input.approvals.map((approval) => approval.toolCall),
-      );
-      emit({
-        type: AgentEventType.InterruptResolved,
-        interruptId: createApprovalInterruptId(
-          input.runId,
-          input.approvals.map((approval) => approval.approvalId),
-        ),
-        decisions: input.approvals.map((approval) => ({
-          approvalId: approval.approvalId,
-          approved: approval.approved,
-          ...(approval.reason ? { reason: approval.reason } : {}),
-        })),
-      });
-    }
-
     try {
+      const initialGraphState = await agent.getState(config);
+      eventStream.setLogicalSequenceStart(
+        readStateEventSequence(initialGraphState, input.runId),
+      );
+      emit({ type: AgentEventType.RunStarted });
+      if (mode === "resume" && "approvals" in input) {
+        state.resolvedToolCalls.push(
+          ...input.approvals.map((approval) => approval.toolCall),
+        );
+        emit({
+          type: AgentEventType.InterruptResolved,
+          interruptId: createApprovalInterruptId(
+            input.runId,
+            input.approvals.map((approval) => approval.approvalId),
+          ),
+          decisions: input.approvals.map((approval) => ({
+            approvalId: approval.approvalId,
+            approved: approval.approved,
+            ...(approval.reason ? { reason: approval.reason } : {}),
+          })),
+        });
+      }
+
       const stream =
         "userPrompt" in input
           ? await agent.stream(
@@ -345,6 +357,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           graphState,
           result,
           persistedRecords,
+          eventStream.getLogicalSequence(),
         );
       }
 
@@ -352,6 +365,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         type: AgentEventType.RunCompleted,
         finishReason: "stop",
         content: [{ type: "text", text: content }],
+        ...(state.usage ? { usage: state.usage } : {}),
       });
       const result = createResult(
         input,
@@ -370,6 +384,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         graphState,
         result,
         persistedRecords,
+        eventStream.getLogicalSequence(),
       );
     } catch (error) {
       const message = errorMessage(error);
@@ -382,6 +397,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           state,
           "cancelled",
           message,
+          eventStream.getLogicalSequence(),
         );
       }
       emit({
@@ -396,6 +412,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         state,
         "failed",
         message,
+        eventStream.getLogicalSequence(),
       );
     }
   }
@@ -406,6 +423,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     graphState: unknown,
     current: AgentRunResult,
     currentRecords: PersistedToolRecord[],
+    eventSequence: number,
   ): Promise<AgentRunResult> {
     if (current.status === "waiting_for_approval") return current;
     const previous = readRunSnapshot(graphState);
@@ -417,6 +435,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     await agent.updateState(config, {
       agentdockRunSnapshot: cloneJsonObject(result, "AgentDock run snapshot"),
       agentdockToolRecords: cloneJsonValue(records, "AgentDock tool records"),
+      agentdockEventSequence: eventSequence,
     });
     return result;
   }
@@ -428,6 +447,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     state: ExecutionState,
     status: "cancelled" | "failed",
     error: string,
+    eventSequence: number,
   ): Promise<AgentRunResult> {
     const current = failedResult(input, state, status, error);
     try {
@@ -440,6 +460,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       await agent.updateState(config, {
         agentdockRunSnapshot: cloneJsonObject(result, "AgentDock run snapshot"),
         agentdockToolRecords: cloneJsonValue(records, "AgentDock tool records"),
+        agentdockEventSequence: eventSequence,
       });
       return result;
     } catch {
@@ -454,6 +475,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     >,
     outcomes: ToolOutcomes,
     ctx: AgentContext = {},
+    emit?: (event: AgentEventInput) => void,
   ) {
     return createAgent({
       model: this.model,
@@ -462,6 +484,14 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         options.toolTimeout,
         options.authorizationTimeout,
         outcomes,
+        emit
+          ? ({ toolCallId, text }) =>
+              emit({
+                type: AgentEventType.ToolProgress,
+                toolCallId,
+                content: [{ type: "text", text }],
+              })
+          : undefined,
       ),
       checkpointer: this.checkpointer,
       stateSchema: AGENT_STATE_SCHEMA,
@@ -590,7 +620,13 @@ export class ToolCallingWorkflow implements AgentWorkflow {
   }
 
   private consumeAssistantMessage(
-    message: { id?: string; content: unknown; tool_calls?: unknown[] },
+    message: {
+      id?: string;
+      content: unknown;
+      tool_calls?: unknown[];
+      usage_metadata?: unknown;
+      response_metadata?: unknown;
+    },
     metadata: unknown,
     state: ExecutionState,
     emit: (event: AgentEventInput) => void,
@@ -599,6 +635,15 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     const messageId = message.id ?? getAnonymousMessageId(state, metadata);
     if (!state.assistantMessageIds.includes(messageId))
       state.assistantMessageIds.push(messageId);
+    const usage = readAgentUsage(
+      message.usage_metadata,
+      message.response_metadata,
+    );
+    if (usage && !state.usageMessageIds.has(messageId)) {
+      state.usageMessageIds.add(messageId);
+      state.usage = mergeUsage(state.usage, usage);
+      emit({ type: AgentEventType.UsageUpdated, usage: state.usage });
+    }
     const text = messageText(message.content);
     const delta = isChunk ? text : getMessageDelta(state, messageId, text);
     if (delta) {
@@ -709,6 +754,8 @@ function createExecutionState(): ExecutionState {
     startedMessageIds: new Set(),
     assistantMessageIds: [],
     anonymousMessageIds: new Map(),
+    usageMessageIds: new Set(),
+    usage: undefined,
   };
 }
 
@@ -760,6 +807,83 @@ function getMessageDelta(
   if (text.startsWith(previous)) return text.slice(previous.length);
   if (text === previous) return "";
   return text;
+}
+
+function readAgentUsage(
+  usageMetadata: unknown,
+  responseMetadata: unknown,
+): AgentUsage | null {
+  const source =
+    findUsageRecord(usageMetadata) ?? findUsageRecord(responseMetadata);
+  if (!source) return null;
+
+  const inputTokens = readUsageNumber(
+    source.input_tokens ?? source.inputTokens ?? source.prompt_tokens,
+  );
+  const outputTokens = readUsageNumber(
+    source.output_tokens ?? source.outputTokens ?? source.completion_tokens,
+  );
+  const totalTokens = readUsageNumber(
+    source.total_tokens ?? source.totalTokens,
+  );
+  if (
+    inputTokens === undefined &&
+    outputTokens === undefined &&
+    totalTokens === undefined
+  ) {
+    return null;
+  }
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+  };
+}
+
+function findUsageRecord(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  if (isRecord(value.usage_metadata)) return value.usage_metadata;
+  if (isRecord(value.tokenUsage)) return value.tokenUsage;
+  if (isRecord(value.usage)) return value.usage;
+  return value;
+}
+
+function readUsageNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function mergeUsage(
+  previous: AgentUsage | undefined,
+  current: AgentUsage,
+): AgentUsage {
+  const inputTokens = addUsageNumber(
+    previous?.inputTokens,
+    current.inputTokens,
+  );
+  const outputTokens = addUsageNumber(
+    previous?.outputTokens,
+    current.outputTokens,
+  );
+  const totalTokens = addUsageNumber(
+    previous?.totalTokens,
+    current.totalTokens,
+  );
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+  };
+}
+
+function addUsageNumber(
+  previous: number | undefined,
+  current: number | undefined,
+): number | undefined {
+  if (previous === undefined) return current;
+  if (current === undefined) return previous;
+  return previous + current;
 }
 
 function createApprovalInterruptId(
@@ -815,7 +939,10 @@ function createResult(
     toolResults: currentToolResults,
     toolErrors: currentToolErrors,
     approvalRequests,
-    stepsCompleted: state.stepNumbers.size,
+    stepsCompleted: Math.max(
+      state.stepNumbers.size,
+      countLogicalSteps(messages),
+    ),
   };
 }
 
@@ -851,6 +978,19 @@ function createPersistedToolRecords(
       ...(outcome?.error ? { error: outcome.error } : {}),
     };
   });
+}
+
+function countLogicalSteps(messages: Message[]): number {
+  let lastUserMessage = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      lastUserMessage = index;
+      break;
+    }
+  }
+  return messages
+    .slice(lastUserMessage + 1)
+    .filter((message) => message.role === "assistant").length;
 }
 
 function createPersistedToolRecordsFromMessages(
@@ -954,6 +1094,30 @@ function readRunSnapshot(state: unknown): AgentRunResult | null {
     stepsCompleted,
     ...(typeof snapshot.error === "string" ? { error: snapshot.error } : {}),
   };
+}
+
+function readStateEventSequence(state: unknown, runId: string): number {
+  if (readStateRunId(state) !== runId) return 0;
+  if (!isRecord(state) || !isRecord(state.values)) return 0;
+  const sequence = state.values.agentdockEventSequence;
+  const persistedSequence =
+    typeof sequence === "number" &&
+    Number.isSafeInteger(sequence) &&
+    sequence >= 0
+      ? sequence
+      : 0;
+  const checkpointStep =
+    isRecord(state.metadata) &&
+    typeof state.metadata.step === "number" &&
+    Number.isSafeInteger(state.metadata.step) &&
+    state.metadata.step >= 0
+      ? state.metadata.step
+      : -1;
+  const checkpointSequence =
+    checkpointStep < 0
+      ? 0
+      : (checkpointStep + 1) * EVENT_SEQUENCE_CHECKPOINT_STRIDE;
+  return Math.max(persistedSequence, checkpointSequence);
 }
 
 function isRunStatus(value: unknown): value is AgentRunStatus {

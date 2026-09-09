@@ -59,6 +59,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "@agentdock/checkpoint-mongodb": "^0.1.0",
+    "@agentdock/checkpoint-postgres": "^0.1.0",
+    "@agentdock/checkpoint-redis": "^0.1.0",
     "@agentdock/checkpoint-sqlite": "^0.1.0",
     "prettier": "^3.5.3",
     "typescript": "^7.0.2",

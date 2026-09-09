@@ -140,6 +140,8 @@ export interface AgentReducerState {
   usage: AgentUsage | null;
   finishReason: string | null;
   lastSequence: number;
+  lastLogicalSequence: number;
+  lastPhaseId: string | null;
   eventIds: string[];
 }
 
@@ -156,6 +158,8 @@ export function createAgentReducerState(): AgentReducerState {
     usage: null,
     finishReason: null,
     lastSequence: 0,
+    lastLogicalSequence: 0,
+    lastPhaseId: null,
     eventIds: [],
   };
 }
@@ -171,8 +175,16 @@ export function reduceAgentEvent(
   if (state.sessionId !== null && state.sessionId !== event.sessionId) {
     throw new Error("Agent event session ID does not match reducer state.");
   }
-  if (event.sequence <= state.lastSequence) {
-    throw new Error("Agent event sequence must increase monotonically.");
+  if (event.logicalSequence <= state.lastLogicalSequence) {
+    throw new Error(
+      "Agent event logical sequence must increase monotonically.",
+    );
+  }
+  if (
+    state.lastPhaseId === event.phaseId &&
+    event.sequence <= state.lastSequence
+  ) {
+    throw new Error("Agent event sequence must increase within a phase.");
   }
 
   const next: AgentReducerState = {
@@ -180,6 +192,8 @@ export function reduceAgentEvent(
     runId: event.runId,
     sessionId: event.sessionId,
     lastSequence: event.sequence,
+    lastLogicalSequence: event.logicalSequence,
+    lastPhaseId: event.phaseId,
     eventIds: [...state.eventIds, event.eventId],
   };
 

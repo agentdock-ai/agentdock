@@ -43,3 +43,29 @@ test("AgentEventStream drops queued events when the consumer stops", async () =>
 
   assert.deepEqual(await iterator.next(), { value: undefined, done: true });
 });
+
+test("AgentEventStream continues the logical sequence across phases", async () => {
+  const first = new AgentEventStream("run-phases", "session-phases");
+  first.emit({ type: AgentEventType.RunStarted });
+  const firstEvent = (await first[Symbol.asyncIterator]().next()).value;
+  first.close();
+
+  const second = new AgentEventStream("run-phases", "session-phases");
+  second.setLogicalSequenceStart(firstEvent.logicalSequence);
+  second.emit({
+    type: AgentEventType.RunCompleted,
+    finishReason: "stop",
+    content: [],
+  });
+  const secondEvent = (await second[Symbol.asyncIterator]().next()).value;
+
+  assert.equal(firstEvent.sequence, 1);
+  assert.equal(secondEvent.sequence, 1);
+  assert.equal(secondEvent.logicalSequence, 2);
+  assert.notEqual(firstEvent.phaseId, secondEvent.phaseId);
+  assert.throws(
+    () => second.setLogicalSequenceStart(10),
+    /cannot start after emission/,
+  );
+  second.close();
+});

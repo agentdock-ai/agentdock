@@ -27,11 +27,17 @@ export interface ToolOutcome {
 
 export type ToolOutcomes = Map<string, ToolOutcome>;
 
+export interface ToolProgress {
+  toolCallId: string;
+  text: string;
+}
+
 export function createToolCallingTools(
   registry: ToolRegistry,
   toolTimeout: number | undefined,
   authorizationTimeout: number | undefined,
   outcomes: ToolOutcomes,
+  onProgress?: (progress: ToolProgress) => void,
 ): StructuredToolInterface[] {
   return registry.list().map((toolDefinition) =>
     tool(
@@ -68,12 +74,21 @@ export function createToolCallingTools(
             }
           }
 
+          const reportProgress = onProgress
+            ? (text: string): void => {
+                if (typeof text !== "string") {
+                  throw new Error("Tool progress must be a string.");
+                }
+                onProgress({ toolCallId: toolCall.toolCallId, text });
+              }
+            : undefined;
           const output = await executeWithDeadline(
             (signal) =>
               toolDefinition.execute({
                 input,
                 ctx: runtime.context,
                 signal,
+                ...(reportProgress ? { reportProgress } : {}),
               }),
             runtime.config.signal,
             toolTimeout,

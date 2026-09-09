@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
 import { AgentDock, ToolRegistry } from "../../src/index.js";
+import { createCooperativeTimeoutTool } from "../helpers/stream-fixtures.mjs";
 
 test("AgentDock closes active runs after aborting their tool work", async () => {
   const registry = new ToolRegistry();
@@ -13,14 +14,7 @@ test("AgentDock closes active runs after aborting their tool work", async () => 
     name: "wait_for_close",
     description: "Wait until AgentDock closes.",
     parameters: { type: "object", properties: {} },
-    execute: async ({ signal }) => {
-      notifyStarted();
-      await new Promise((_, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), {
-          once: true,
-        });
-      });
-    },
+    execute: createCooperativeTimeoutTool({ onStart: notifyStarted }),
   });
 
   const agent = new AgentDock({
@@ -57,14 +51,7 @@ test("AgentDock makes close idempotent while a run is active", async () => {
     name: "wait_for_idempotent_close",
     description: "Wait until AgentDock closes.",
     parameters: { type: "object", properties: {} },
-    execute: async ({ signal }) => {
-      notifyStarted();
-      await new Promise((_, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), {
-          once: true,
-        });
-      });
-    },
+    execute: createCooperativeTimeoutTool({ onStart: notifyStarted }),
   });
 
   const agent = new AgentDock({

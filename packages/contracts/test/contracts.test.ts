@@ -153,6 +153,47 @@ describe("AgentDock contracts", () => {
     ).toThrow(/sequence must increase/);
   });
 
+  it("accepts a new phase only when the logical sequence advances", () => {
+    const base = {
+      runId: "run-phases",
+      sessionId: "session-phases",
+      timestamp: new Date(0).toISOString(),
+    };
+    const first: AgentEvent = {
+      ...base,
+      eventId: "phase-1",
+      phaseId: "phase-a",
+      sequence: 1,
+      logicalSequence: 1,
+      type: AgentEventType.RunStarted,
+    };
+    const second: AgentEvent = {
+      ...base,
+      eventId: "phase-2",
+      phaseId: "phase-b",
+      sequence: 1,
+      logicalSequence: 2,
+      type: AgentEventType.RunCompleted,
+      finishReason: "stop",
+      content: [],
+    };
+
+    const state = reduceAgentEvent(
+      reduceAgentEvent(createAgentReducerState(), first),
+      second,
+    );
+    expect(state.lastSequence).toBe(1);
+    expect(state.lastLogicalSequence).toBe(2);
+    expect(state.lastPhaseId).toBe("phase-b");
+    expect(() =>
+      reduceAgentEvent(state, {
+        ...second,
+        eventId: "phase-3",
+        logicalSequence: 3,
+      }),
+    ).toThrow(/sequence must increase within a phase/);
+  });
+
   it("rejects non-JSON contract values and preserves nested JSON values", () => {
     expect(cloneJsonValue({ nested: [true, null, 3] })).toEqual({
       nested: [true, null, 3],
