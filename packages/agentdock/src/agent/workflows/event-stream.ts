@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentEventPayload } from "../events.js";
+import type { AgentEvent, AgentEventInput } from "../events.js";
 
 export class AgentEventStream implements AsyncIterable<AgentEvent> {
   private readonly values: AgentEvent[] = [];
@@ -6,14 +6,20 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
   private sequence = 0;
   private closed = false;
 
-  constructor(private readonly runId: string) {}
+  constructor(
+    private readonly runId: string,
+    private readonly sessionId = "",
+    private readonly phaseId = crypto.randomUUID(),
+  ) {}
 
-  emit(payload: AgentEventPayload): void {
+  emit(input: AgentEventInput): void {
     this.push({
-      ...payload,
-      version: 1,
+      ...input,
       eventId: crypto.randomUUID(),
       runId: this.runId,
+      sessionId: this.sessionId,
+      phaseId: this.phaseId,
+      logicalSequence: this.sequence + 1,
       sequence: ++this.sequence,
       timestamp: new Date().toISOString(),
     });

@@ -15,6 +15,7 @@ export interface ToolCallRecord {
 
 export interface ToolErrorRecord extends ToolCallRecord {
   error: string;
+  code?: string;
 }
 
 export interface ToolResultRecord extends ToolCallRecord {

@@ -5,6 +5,7 @@ import type {
 } from "../permissions/types.js";
 import type {
   AgentContext,
+  AgentSessionHistory,
   RunAgentOptions,
   StreamAgentResult,
 } from "../types.js";
@@ -30,14 +31,34 @@ export interface AgentWorkflow {
   resume(input: WorkflowResumeInput): StreamAgentResult;
   getMessages(
     sessionId: string,
-    options?: Pick<RunAgentOptions, "systemPrompt" | "maxSteps">,
+    options?: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    >,
   ): Promise<Message[]>;
   getRunId(
     sessionId: string,
-    options?: Pick<RunAgentOptions, "systemPrompt" | "maxSteps">,
+    options?: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    >,
   ): Promise<string | null>;
   getPendingApprovals(
     sessionId: string,
-    options?: Pick<RunAgentOptions, "systemPrompt" | "maxSteps">,
+    options?: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    >,
   ): Promise<ToolApprovalRequest[]>;
+  getSessionHistory(
+    sessionId: string,
+    options?: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    >,
+  ): Promise<AgentSessionHistory>;
+  deleteSession(
+    sessionId: string,
+    options?: Pick<RunAgentOptions, "sessionNamespace">,
+  ): Promise<void>;
 }

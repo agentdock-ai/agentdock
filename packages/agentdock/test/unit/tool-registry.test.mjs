@@ -76,6 +76,14 @@ test("rejects invalid tool boundaries", () => {
 test("rejects invalid nested schemas and duplicate tools", () => {
   const registry = new ToolRegistry();
   assert.throws(
+    () => registry.register(createTool({ parameters: { type: "string" } })),
+    /Tool parameters must have an object root type/,
+  );
+  assert.throws(
+    () => registry.register(createTool({ parameters: true })),
+    /Tool parameters must be a JSON schema object/,
+  );
+  assert.throws(
     () =>
       registry.register(
         createTool({

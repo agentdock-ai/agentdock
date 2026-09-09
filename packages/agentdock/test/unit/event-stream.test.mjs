@@ -10,14 +10,15 @@ test("AgentEventStream adds ordered event metadata and closes cleanly", async ()
 
   stream.emit({
     type: AgentEventType.RunStarted,
-    sessionId: "session-stream",
   });
 
   const event = (await pending).value;
   assert.equal(event.type, AgentEventType.RunStarted);
   assert.equal(event.runId, "run-stream");
+  assert.equal(event.sessionId, "");
+  assert.equal(event.logicalSequence, 1);
+  assert.match(event.phaseId, /^[0-9a-f-]{36}$/);
   assert.equal(event.sequence, 1);
-  assert.equal(event.version, 1);
   assert.match(event.eventId, /^[0-9a-f-]{36}$/);
   assert.ok(event.timestamp);
 
@@ -30,14 +31,14 @@ test("AgentEventStream drops queued events when the consumer stops", async () =>
   const iterator = stream[Symbol.asyncIterator]();
 
   stream.emit({
-    type: AgentEventType.StreamStarted,
+    type: AgentEventType.RunStarted,
   });
   await iterator.return();
 
   stream.emit({
     type: AgentEventType.RunCompleted,
-    content: "ignored",
-    stepsCompleted: 0,
+    finishReason: "stop",
+    content: [{ type: "text", text: "ignored" }],
   });
 
   assert.deepEqual(await iterator.next(), { value: undefined, done: true });

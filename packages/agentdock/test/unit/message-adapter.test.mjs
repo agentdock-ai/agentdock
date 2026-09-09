@@ -122,3 +122,36 @@ test("validates model tool calls and stream metadata", () => {
   assert.equal(readStepNumber({ langgraph_step: 3 }), 3);
   assert.equal(readStepNumber({ langgraph_step: "3" }), null);
 });
+
+test("reconstructs persisted structured tool outputs without changing strings", () => {
+  const toolCall = {
+    toolCallId: "call-structured",
+    name: "structured",
+    input: {},
+  };
+  const messages = [
+    new AIMessage({
+      content: "",
+      tool_calls: [{ id: toolCall.toolCallId, name: toolCall.name, args: {} }],
+    }),
+    new ToolMessage({
+      content: "[object Object]",
+      tool_call_id: toolCall.toolCallId,
+    }),
+  ];
+  const normalized = normalizeMessages(
+    messages,
+    new Map([[toolCall.toolCallId, toolCall]]),
+    new Map([
+      [
+        toolCall.toolCallId,
+        {
+          toolCall,
+          result: { ...toolCall, output: { ok: true } },
+        },
+      ],
+    ]),
+  );
+
+  assert.deepEqual(normalized[1].toolResults[0].output, { ok: true });
+});

@@ -13,3 +13,10 @@ const agent = new AgentDock({
 ```
 
 Install a backend package such as `@agentdock/checkpoint-postgres` when durable storage is required.
+
+Adapters own their resources only when passed through `checkpoint`. A raw
+`checkpointer` is caller-owned and is never closed by AgentDock. Every adapter must
+support idempotent initialization and close, restart persistence, pending approval
+resume, tool-message serialization, deletion through `deleteThread()`, and cleanup
+after failures. PostgreSQL, MongoDB, and Redis service-backed tests are optional CI
+integration jobs; local unit tests do not require those services.

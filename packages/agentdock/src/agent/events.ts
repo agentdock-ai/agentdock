@@ -2,9 +2,12 @@ import { AgentEventType as AgentEventTypeValue } from "@agentdock/contracts";
 
 export const AgentEventType = AgentEventTypeValue;
 export type {
-  AgentError,
   AgentEvent,
   AgentEventBase,
-  AgentEventPayload,
+  AgentEventInput,
+  AgentReducerState,
+  ContentPart,
+  AgentInterrupt,
+  AgentUsage,
 } from "@agentdock/contracts";
 export type AgentEventType = import("@agentdock/contracts").AgentEventType;

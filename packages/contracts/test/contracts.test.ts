@@ -7,18 +7,22 @@ import {
   type AgentSessionRecord,
   type ToolApprovalRequest,
   type ToolApprovalResponse,
+  createAgentReducerState,
+  reduceAgentEvent,
+  cloneJsonValue,
 } from "../src/index.js";
 
 describe("AgentDock contracts", () => {
-  it("defines a versioned, JSON-serializable event contract", () => {
+  it("defines a JSON-serializable event contract", () => {
     const event: AgentEvent = {
-      version: 1,
       eventId: "event-1",
       runId: "run-1",
+      sessionId: "session-1",
+      phaseId: "phase-1",
+      logicalSequence: 1,
       sequence: 1,
       timestamp: new Date(0).toISOString(),
       type: AgentEventType.RunStarted,
-      sessionId: "session-1",
     };
 
     expect(JSON.parse(JSON.stringify(event))).toEqual(event);
@@ -73,5 +77,98 @@ describe("AgentDock contracts", () => {
       run,
       resume,
     });
+  });
+
+  it("rebuilds a structured event stream and suppresses reconnect duplicates", () => {
+    const base = {
+      runId: "run-2",
+      sessionId: "session-2",
+      phaseId: "phase-1",
+      timestamp: new Date(0).toISOString(),
+    };
+    const events: AgentEvent[] = [
+      {
+        ...base,
+        eventId: "event-1",
+        sequence: 1,
+        logicalSequence: 1,
+        type: AgentEventType.RunStarted,
+      },
+      {
+        ...base,
+        eventId: "event-2",
+        sequence: 2,
+        logicalSequence: 2,
+        type: AgentEventType.MessageStarted,
+        messageId: "message-1",
+        role: "assistant",
+      },
+      {
+        ...base,
+        eventId: "event-3",
+        sequence: 3,
+        logicalSequence: 3,
+        type: AgentEventType.MessagePartDelta,
+        messageId: "message-1",
+        part: { type: "text", text: "Hello" },
+      },
+      {
+        ...base,
+        eventId: "event-4",
+        sequence: 4,
+        logicalSequence: 4,
+        type: AgentEventType.RunCompleted,
+        finishReason: "stop",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    ];
+
+    const state = events.reduce(reduceAgentEvent, createAgentReducerState());
+    const duplicate = reduceAgentEvent(state, events[3]);
+    expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+    expect(duplicate).toEqual(state);
+    expect(state.status).toBe("completed");
+    expect(state.messages[0]?.content).toEqual([
+      { type: "text", text: "Hello" },
+    ]);
+  });
+
+  it("rejects out-of-order events while accepting multiple message IDs", () => {
+    const base = {
+      runId: "run-order",
+      sessionId: "session-order",
+      phaseId: "phase-1",
+      timestamp: new Date(0).toISOString(),
+    };
+    const first: AgentEvent = {
+      ...base,
+      eventId: "order-1",
+      sequence: 1,
+      logicalSequence: 1,
+      type: AgentEventType.RunStarted,
+    };
+    const state = reduceAgentEvent(createAgentReducerState(), first);
+    expect(() =>
+      reduceAgentEvent(state, { ...first, eventId: "order-2" }),
+    ).toThrow(/sequence must increase/);
+  });
+
+  it("rejects non-JSON contract values and preserves nested JSON values", () => {
+    expect(cloneJsonValue({ nested: [true, null, 3] })).toEqual({
+      nested: [true, null, 3],
+    });
+    expect(() => cloneJsonValue(1n)).toThrow(/JSON-serializable/);
+    expect(() => cloneJsonValue({ callback: () => undefined })).toThrow(
+      /JSON-serializable/,
+    );
+    expect(() => cloneJsonValue({ value: Symbol("x") })).toThrow(
+      /JSON-serializable/,
+    );
+    expect(() => cloneJsonValue({ value: undefined })).toThrow(
+      /JSON-serializable/,
+    );
+    expect(() => cloneJsonValue(new Date())).toThrow(/JSON objects and arrays/);
+    expect(() => cloneJsonValue(new Map())).toThrow(/JSON objects and arrays/);
+    expect(() => cloneJsonValue(new Set())).toThrow(/JSON objects and arrays/);
   });
 });

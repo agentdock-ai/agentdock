@@ -76,6 +76,13 @@ test("AgentDock streams the default tool-calling workflow and persists session m
   assert.equal(result.content, "Summarize this request.");
   assert.equal(events[0].type, AgentEventType.RunStarted);
   assert.equal(events.at(-1).type, AgentEventType.RunCompleted);
+  assert.equal(events[0].sessionId, "session-stream");
+  assert.ok(
+    events.some((event) => event.type === AgentEventType.MessagePartDelta),
+  );
+  assert.ok(
+    events.some((event) => event.type === AgentEventType.MessageCompleted),
+  );
   assert.deepEqual(
     events.map((event) => event.sequence),
     events.map((_, index) => index + 1),
@@ -157,7 +164,9 @@ test("AgentDock executes tool-calling tools through the shared registry and cont
   ]);
   assert.deepEqual(result.toolResults[0].output, { forecast: "sunny" });
   assert.ok(events.some((event) => event.type === AgentEventType.ToolCalled));
-  assert.ok(events.some((event) => event.type === AgentEventType.ToolResult));
+  assert.ok(
+    events.some((event) => event.type === AgentEventType.ToolCompleted),
+  );
 });
 
 test("AgentDock pauses approved tools in a LangGraph checkpoint and resumes once", async () => {
@@ -214,6 +223,80 @@ test("AgentDock pauses approved tools in a LangGraph checkpoint and resumes once
   assert.equal(resumed.status, "completed");
   assert.equal(executions, 1);
   assert.equal(resumed.toolResults[0].output, "published");
+});
+
+test("AgentDock resumes multiple sequential approval boundaries", async () => {
+  const registry = new ToolRegistry();
+  const executions = [];
+  for (const name of ["first_action", "second_action"]) {
+    registry.register({
+      name,
+      description: `${name} requires approval.`,
+      parameters: { type: "object", properties: {} },
+      requiresApproval: true,
+      execute: async () => {
+        executions.push(name);
+        return `${name} done`;
+      },
+    });
+  }
+  const agent = new AgentDock({
+    model: new FakeToolCallingModel({
+      toolCalls: [
+        [{ name: "first_action", args: {}, id: "call-first" }],
+        [{ name: "second_action", args: {}, id: "call-second" }],
+        [],
+      ],
+    }),
+    registry,
+  });
+
+  const firstWaiting = await agent.run(
+    "Run both actions.",
+    {},
+    {
+      sessionId: "session-sequential-approval",
+      runId: "run-sequential-approval",
+    },
+  );
+  assert.deepEqual(
+    firstWaiting.approvalRequests.map((request) => request.approvalId),
+    ["call-first"],
+  );
+
+  const secondWaiting = await agent.resume(
+    {
+      runId: "run-sequential-approval",
+      approvals: [{ approvalId: "call-first", approved: true }],
+    },
+    {},
+    { sessionId: "session-sequential-approval" },
+  );
+  assert.equal(secondWaiting.status, "waiting_for_approval");
+  assert.deepEqual(
+    secondWaiting.approvalRequests.map((request) => request.approvalId),
+    ["call-second"],
+  );
+
+  const completed = await agent.resume(
+    {
+      runId: "run-sequential-approval",
+      approvals: [{ approvalId: "call-second", approved: true }],
+    },
+    {},
+    { sessionId: "session-sequential-approval" },
+  );
+
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(executions, ["first_action", "second_action"]);
+  assert.deepEqual(
+    completed.toolCalls.map((toolCall) => toolCall.toolCallId),
+    ["call-first", "call-second"],
+  );
+  assert.deepEqual(
+    completed.toolResults.map((result) => result.toolCallId),
+    ["call-first", "call-second"],
+  );
 });
 
 test("AgentDock resumes a checkpoint from a recreated instance", async () => {
@@ -298,7 +381,7 @@ test("AgentDock reports tool exceptions as typed tool errors", async () => {
   assert.equal(result.status, "completed");
   assert.equal(result.toolErrors[0].error, "Tool is unavailable.");
   assert.equal(result.toolResults[0].isError, true);
-  assert.ok(events.some((event) => event.type === AgentEventType.ToolError));
+  assert.ok(events.some((event) => event.type === AgentEventType.ToolFailed));
 });
 
 test("AgentDock reports authorization denial as a typed tool error", async () => {

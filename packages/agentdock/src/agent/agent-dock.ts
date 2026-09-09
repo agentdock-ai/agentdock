@@ -10,11 +10,17 @@ import type { ToolApprovalDecision } from "./permissions/types.js";
 import type {
   AgentContext,
   AgentRunResult,
+  AgentSessionHistory,
   AgentSessionRecord,
   RunAgentOptions,
   StreamAgentResult,
   Tool,
 } from "./types.js";
+import {
+  createSessionKey,
+  defaultRunCoordinator,
+  type RunCoordinator,
+} from "./coordinator.js";
 import { ToolCallingWorkflow } from "./workflows/tool-calling/workflow.js";
 import type { AgentWorkflow } from "./workflows/types.js";
 import { ToolRegistry, type ToolSchema } from "../tools/registry.js";
@@ -62,8 +68,26 @@ export interface AgentDockWorkflowClient {
   ): Promise<StreamAgentResult>;
   getSession(
     sessionId: string,
-    options?: Pick<RunAgentOptions, "systemPrompt" | "maxSteps">,
+    options?: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    >,
   ): Promise<AgentSessionRecord | null>;
+  getSessionHistory(
+    sessionId: string,
+    options?: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    >,
+  ): Promise<AgentSessionHistory>;
+  deleteSession(
+    sessionId: string,
+    options?: Pick<RunAgentOptions, "sessionNamespace">,
+  ): Promise<void>;
+}
+
+export interface AgentDockCloseOptions {
+  gracePeriodMs?: number;
 }
 
 export interface AgentDockOptions {
@@ -72,11 +96,13 @@ export interface AgentDockOptions {
   checkpoint?: CheckpointAdapter;
   checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
+  coordinator?: RunCoordinator;
 }
 
 interface ActiveRun {
   sessionId: string;
   controller: AbortController;
+  release: () => Promise<void> | void;
 }
 
 export class AgentDock {
@@ -87,14 +113,15 @@ export class AgentDock {
   private readonly defaults: AgentDockDefaults;
   private readonly checkpointManager: CheckpointManager;
   private readonly toolCallingWorkflow: AgentWorkflow;
+  private readonly coordinator: RunCoordinator;
   private readonly activeRuns = new Map<string, ActiveRun>();
-  private readonly activeSessions = new Map<string, string>();
   private readonly activeExecutions = new Map<
     string,
     Promise<AgentRunResult>
   >();
   private lifecycle: "open" | "closing" | "closed" = "open";
   private closePromise: Promise<void> | undefined;
+  private unfinishedRunIds: string[] = [];
 
   constructor(options: AgentDockOptions) {
     assertDockOptions(options);
@@ -103,6 +130,7 @@ export class AgentDock {
     this.model = options.model;
     this.registry = options.registry ?? new ToolRegistry();
     this.defaults = options.defaults ?? {};
+    this.coordinator = options.coordinator ?? defaultRunCoordinator;
     const checkpointOptions: CheckpointManagerOptions = options.checkpointer
       ? { checkpointer: options.checkpointer }
       : { checkpoint: options.checkpoint ?? new MemoryCheckpoint() };
@@ -120,21 +148,55 @@ export class AgentDock {
     await this.checkpointManager.initialize();
   }
 
-  close(): Promise<void> {
-    if (this.lifecycle === "closed") return Promise.resolve();
+  close(options: AgentDockCloseOptions = {}): Promise<void> {
+    if (this.lifecycle === "closed")
+      return this.closePromise ?? Promise.resolve();
     if (this.closePromise) return this.closePromise;
+
+    if (
+      options.gracePeriodMs !== undefined &&
+      (!Number.isFinite(options.gracePeriodMs) || options.gracePeriodMs < 0)
+    ) {
+      return Promise.reject(
+        new Error(
+          "AgentDock close gracePeriodMs must be a non-negative number.",
+        ),
+      );
+    }
 
     this.lifecycle = "closing";
     for (const activeRun of this.activeRuns.values()) {
       activeRun.controller.abort(new Error("AgentDock is closing."));
     }
 
-    this.closePromise = Promise.allSettled(this.activeExecutions.values())
-      .then(() => this.checkpointManager.close())
+    const executions = [...this.activeExecutions.entries()];
+    const gracePeriodMs = options.gracePeriodMs ?? 5_000;
+    const allSettled = Promise.allSettled(
+      executions.map(([, execution]) => execution),
+    );
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const boundedWait = new Promise<void>((resolve) => {
+      graceTimer = setTimeout(resolve, gracePeriodMs);
+      void allSettled.then(() => {
+        if (graceTimer !== undefined) clearTimeout(graceTimer);
+        resolve();
+      });
+    });
+    this.closePromise = boundedWait
+      .then(() => {
+        this.unfinishedRunIds = executions
+          .filter(([runId]) => this.activeExecutions.has(runId))
+          .map(([runId]) => runId);
+        return waitForClose(this.checkpointManager.close(), gracePeriodMs);
+      })
       .then(() => {
         this.lifecycle = "closed";
       });
     return this.closePromise;
+  }
+
+  getUnfinishedRunIds(): readonly string[] {
+    return [...this.unfinishedRunIds];
   }
 
   registerTool(tool: Tool): this {
@@ -161,9 +223,46 @@ export class AgentDock {
 
   getSession(
     sessionId: string,
-    options: Pick<RunAgentOptions, "systemPrompt" | "maxSteps"> = {},
+    options: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    > = {},
   ): Promise<AgentSessionRecord | null> {
     return this.toolCalling.getSession(sessionId, options);
+  }
+
+  getSessionHistory(
+    sessionId: string,
+    options: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    > = {},
+  ): Promise<AgentSessionHistory> {
+    return this.toolCalling.getSessionHistory(sessionId, options);
+  }
+
+  async deleteSession(
+    sessionId: string,
+    options: Pick<RunAgentOptions, "sessionNamespace"> = {},
+  ): Promise<void> {
+    this.assertOpen();
+    assertNonEmptyString(sessionId, "Agent session ID");
+    const sessionKey = createSessionKey(sessionId, options.sessionNamespace);
+    if (
+      [...this.activeRuns.values()].some((run) => run.sessionId === sessionKey)
+    ) {
+      throw new Error(`Agent session has an active run: ${sessionId}`);
+    }
+    const lease = await this.coordinator.acquire({
+      sessionKey,
+      runId: `delete-${crypto.randomUUID()}`,
+    });
+    try {
+      await this.checkpointManager.initialize();
+      await this.toolCalling.deleteSession(sessionId, options);
+    } finally {
+      await lease.release();
+    }
   }
 
   run(
@@ -202,7 +301,7 @@ export class AgentDock {
     const runId = merged.runId ?? crypto.randomUUID();
     const sessionId = options.sessionId;
     const controller = new AbortController();
-    this.claimRun(runId, sessionId, controller);
+    await this.claimRun(runId, sessionId, controller, merged.sessionNamespace);
 
     try {
       const execution = workflow.start({
@@ -213,9 +312,9 @@ export class AgentDock {
         options: merged,
         signal: createSignal(controller, merged.abortSignal),
       });
-      return this.trackExecution(execution, runId, sessionId);
+      return this.trackExecution(execution, runId);
     } catch (error) {
-      this.releaseRun(runId, sessionId);
+      await this.releaseRun(runId, sessionId, merged.sessionNamespace);
       throw error;
     }
   }
@@ -255,7 +354,12 @@ export class AgentDock {
 
     const sessionId = options.sessionId;
     const controller = new AbortController();
-    this.claimRun(input.runId, sessionId, controller);
+    await this.claimRun(
+      input.runId,
+      sessionId,
+      controller,
+      merged.sessionNamespace,
+    );
 
     try {
       const checkpointRunId = await workflow.getRunId(sessionId, merged);
@@ -274,9 +378,9 @@ export class AgentDock {
         signal: createSignal(controller, merged.abortSignal),
         approvals,
       });
-      return this.trackExecution(execution, input.runId, sessionId);
+      return this.trackExecution(execution, input.runId);
     } catch (error) {
-      this.releaseRun(input.runId, sessionId);
+      await this.releaseRun(input.runId, sessionId, merged.sessionNamespace);
       throw error;
     }
   }
@@ -295,6 +399,10 @@ export class AgentDock {
         this.resumeStreamWithWorkflow(workflow, input, ctx, options),
       getSession: (sessionId, options) =>
         this.getSessionWithWorkflow(workflow, sessionId, options),
+      getSessionHistory: (sessionId, options) =>
+        this.getSessionHistoryWithWorkflow(workflow, sessionId, options),
+      deleteSession: (sessionId, options) =>
+        this.deleteSessionWithWorkflow(workflow, sessionId, options),
     };
   }
 
@@ -337,13 +445,38 @@ export class AgentDock {
   private async getSessionWithWorkflow(
     workflow: AgentWorkflow,
     sessionId: string,
-    options: Pick<RunAgentOptions, "systemPrompt" | "maxSteps"> = {},
+    options: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    > = {},
   ): Promise<AgentSessionRecord | null> {
     await this.prepareOperation();
     assertNonEmptyString(sessionId, "Agent session ID");
     const merged = { ...this.defaults, ...options };
     const messages = await workflow.getMessages(sessionId, merged);
     return messages.length > 0 ? { sessionId, messages } : null;
+  }
+
+  private async deleteSessionWithWorkflow(
+    workflow: AgentWorkflow,
+    sessionId: string,
+    options: Pick<RunAgentOptions, "sessionNamespace"> = {},
+  ): Promise<void> {
+    await workflow.deleteSession(sessionId, options);
+  }
+
+  private async getSessionHistoryWithWorkflow(
+    workflow: AgentWorkflow,
+    sessionId: string,
+    options: Pick<
+      RunAgentOptions,
+      "systemPrompt" | "maxSteps" | "sessionNamespace"
+    > = {},
+  ): Promise<AgentSessionHistory> {
+    await this.prepareOperation();
+    assertNonEmptyString(sessionId, "Agent session ID");
+    const merged = { ...this.defaults, ...options };
+    return workflow.getSessionHistory(sessionId, merged);
   }
 
   async stop(runId: string): Promise<boolean> {
@@ -357,11 +490,10 @@ export class AgentDock {
   private trackExecution(
     execution: StreamAgentResult,
     runId: string,
-    sessionId: string,
   ): StreamAgentResult {
     const result = execution.result.finally(() => {
       this.activeExecutions.delete(runId);
-      this.releaseRun(runId, sessionId);
+      void this.releaseRunByKey(runId, this.activeRuns.get(runId)?.sessionId);
     });
     this.activeExecutions.set(runId, result);
     return {
@@ -382,24 +514,43 @@ export class AgentDock {
     }
   }
 
-  private claimRun(
+  private async claimRun(
     runId: string,
     sessionId: string,
     controller: AbortController,
-  ): void {
-    if (this.activeRuns.has(runId))
-      throw new Error(`Agent run is already active: ${runId}`);
-    const activeRunId = this.activeSessions.get(sessionId);
-    if (activeRunId)
-      throw new Error(`Agent session already has an active run: ${sessionId}`);
-    this.activeRuns.set(runId, { sessionId, controller });
-    this.activeSessions.set(sessionId, runId);
+    sessionNamespace: string | undefined,
+  ): Promise<void> {
+    const lease = await this.coordinator.acquire({
+      sessionKey: createSessionKey(sessionId, sessionNamespace),
+      runId,
+    });
+    this.activeRuns.set(runId, {
+      sessionId: createSessionKey(sessionId, sessionNamespace),
+      controller,
+      release: lease.release,
+    });
   }
 
-  private releaseRun(runId: string, sessionId: string): void {
+  private async releaseRun(
+    runId: string,
+    sessionId: string,
+    sessionNamespace: string | undefined,
+  ): Promise<void> {
+    await this.releaseRunByKey(
+      runId,
+      createSessionKey(sessionId, sessionNamespace),
+    );
+  }
+
+  private async releaseRunByKey(
+    runId: string,
+    sessionKey: string | undefined,
+  ): Promise<void> {
+    if (sessionKey === undefined) return;
+    const active = this.activeRuns.get(runId);
+    if (!active || active.sessionId !== sessionKey) return;
     this.activeRuns.delete(runId);
-    if (this.activeSessions.get(sessionId) === runId)
-      this.activeSessions.delete(sessionId);
+    await active.release();
   }
 
   private mergeOptions(
@@ -407,4 +558,24 @@ export class AgentDock {
   ): RunAgentOptions {
     return { ...this.defaults, ...options };
   }
+}
+
+function waitForClose(
+  closing: Promise<void>,
+  gracePeriodMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(resolve, gracePeriodMs);
+    void closing.then(
+      () => {
+        if (timer !== undefined) clearTimeout(timer);
+        resolve();
+      },
+      (error: unknown) => {
+        if (timer !== undefined) clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

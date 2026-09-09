@@ -120,10 +120,12 @@ test("rejects incomplete or stale approval decisions against SQLite checkpoints"
 
     const firstAgent = new AgentDock({
       model: new FakeToolCallingModel({
-        toolCalls: [[
-          { name: "write_first", args: { value: "one" }, id: "call-first" },
-          { name: "write_second", args: { value: "two" }, id: "call-second" },
-        ]],
+        toolCalls: [
+          [
+            { name: "write_first", args: { value: "one" }, id: "call-first" },
+            { name: "write_second", args: { value: "two" }, id: "call-second" },
+          ],
+        ],
       }),
       registry,
       checkpoint: new SqliteCheckpoint({ path: databasePath }),

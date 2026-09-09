@@ -85,12 +85,15 @@ export class ScenarioRunner {
       case AgentEventType.RunStarted:
         this.line(this.paint("Run started", "blue"));
         return;
-      case AgentEventType.StreamStarted:
-        this.line(this.paint("Stream started", "blue"));
+      case AgentEventType.MessageStarted:
+      case AgentEventType.MessageCompleted:
+      case AgentEventType.ToolProgress:
+      case AgentEventType.UsageUpdated:
         return;
-      case AgentEventType.TextDelta:
+      case AgentEventType.MessagePartDelta:
         this.#textActive = true;
-        this.write(this.paint(event.text, "green"));
+        if (event.part.type === "text")
+          this.write(this.paint(event.part.text, "green"));
         return;
       case AgentEventType.ToolCalled:
         this.line(
@@ -98,26 +101,23 @@ export class ScenarioRunner {
         );
         this.line(formatValue(event.toolCall.input));
         return;
-      case AgentEventType.ToolResult:
+      case AgentEventType.ToolCompleted:
         this.line(
           `${this.paint("Tool result", "green")}: ${formatValue(event.result.output)}`,
         );
         return;
-      case AgentEventType.ToolError:
+      case AgentEventType.ToolFailed:
         this.line(`${this.paint("Tool error", "red")}: ${event.error.error}`);
         return;
-      case AgentEventType.ApprovalRequired:
+      case AgentEventType.InterruptRequired:
         this.line(
-          `${this.paint("Approval requested", "yellow")}: ${event.approvals.length} tool call(s)`,
+          `${this.paint("Approval requested", "yellow")}: ${event.interrupt.actions.length} tool call(s)`,
         );
         return;
-      case AgentEventType.ApprovalResolved:
+      case AgentEventType.InterruptResolved:
         this.line(
-          `${this.paint("Approval resolved", "magenta")}: ${event.approvals.length} decision(s)`,
+          `${this.paint("Approval resolved", "magenta")}: ${event.decisions.length} decision(s)`,
         );
-        return;
-      case AgentEventType.RunWaitingForApproval:
-        this.line(this.paint("Run waiting for approval", "yellow"));
         return;
       case AgentEventType.RunCompleted:
         this.line(this.paint("Run completed", "green"));

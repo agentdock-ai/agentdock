@@ -6,6 +6,7 @@ import type {
 import type { AgentContext, RunAgentOptions } from "./types.js";
 import type { AgentDockOptions } from "./agent-dock.js";
 import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import { cloneJsonObject } from "@agentdock/contracts";
 import { ToolRegistry } from "../tools/registry.js";
 import { isRecord } from "./value.js";
 
@@ -33,6 +34,13 @@ export function assertDockOptions(
         "AgentDock checkpoint must be a CheckpointAdapter instance.",
       );
     }
+  }
+  if (
+    options.coordinator !== undefined &&
+    (!isRecord(options.coordinator) ||
+      typeof options.coordinator.acquire !== "function")
+  ) {
+    throw new Error("AgentDock coordinator must implement acquire().");
   }
   if (options.checkpoint !== undefined && options.checkpointer !== undefined) {
     throw new Error(
@@ -78,6 +86,7 @@ export function assertResumeInput(
 
 export function assertContext(ctx: unknown): asserts ctx is AgentContext {
   if (!isRecord(ctx)) throw new Error("Agent context must be an object.");
+  cloneJsonObject(ctx, "Agent context");
 }
 
 export function assertRunOptions(
@@ -88,6 +97,7 @@ export function assertRunOptions(
     throw new Error("Agent run options must be an object.");
   assertOptionalString(options.runId, "Agent run ID");
   assertOptionalString(options.sessionId, "Agent session ID");
+  assertOptionalString(options.sessionNamespace, "Agent session namespace");
   assertOptionalString(options.systemPrompt, "Agent system prompt", false);
   if (requireSessionId)
     assertNonEmptyString(options.sessionId, "Agent session ID");
@@ -106,6 +116,14 @@ export function assertRunOptions(
       options.toolTimeout <= 0)
   ) {
     throw new Error("Agent toolTimeout must be a positive number.");
+  }
+  if (
+    options.authorizationTimeout !== undefined &&
+    (typeof options.authorizationTimeout !== "number" ||
+      !Number.isFinite(options.authorizationTimeout) ||
+      options.authorizationTimeout <= 0)
+  ) {
+    throw new Error("Agent authorizationTimeout must be a positive number.");
   }
   if (
     options.abortSignal !== undefined &&

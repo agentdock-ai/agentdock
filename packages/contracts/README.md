@@ -13,3 +13,12 @@ import type {
 ```
 
 Runtime implementation types such as `BaseChatModel`, `BaseCheckpointSaver`, tool functions, and LangGraph workflow state remain in the `agentdock` package.
+
+The event contract provides structured content parts, explicit lifecycle events,
+generic interrupt records, usage and finish metadata, and `reduceAgentEvent()` for
+rebuilding a UI-safe snapshot. The reducer rejects out-of-order events and ignores
+duplicate event IDs so reconnects are deterministic.
+
+All public contract values are strict JSON. `cloneJsonValue()` and
+`cloneJsonObject()` reject cycles, `undefined`, functions, symbols, `BigInt`,
+`Date`, `Map`, `Set`, and non-finite numbers.

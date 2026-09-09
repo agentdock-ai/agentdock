@@ -73,3 +73,20 @@ test("AgentDock rejects operations after close", async () => {
     /AgentDock is closed or closing/,
   );
 });
+
+test("AgentDock bounds an owned adapter close", async () => {
+  let closeCalls = 0;
+  const agent = createAgent({
+    checkpoint: {
+      saver: new MemorySaver(),
+      initialize: async () => {},
+      close: async () => {
+        closeCalls += 1;
+        await new Promise(() => {});
+      },
+    },
+  });
+
+  await agent.close({ gracePeriodMs: 10 });
+  assert.equal(closeCalls, 1);
+});

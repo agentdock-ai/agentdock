@@ -1,6 +1,10 @@
-import type { JSONSchema } from "@langchain/core/utils/json_schema";
 import type { Tool } from "../agent/types.js";
-import type { ToolSchema } from "@agentdock/contracts";
+import {
+  cloneJsonObject,
+  isJsonObject,
+  type JsonObject,
+  type ToolSchema,
+} from "@agentdock/contracts";
 
 export type { ToolSchema } from "@agentdock/contracts";
 
@@ -37,6 +41,16 @@ export class ToolRegistry {
   clear(): void {
     this.tools.clear();
   }
+}
+
+/** Validates model arguments against the supported JSON Schema subset. */
+export function validateToolInput(
+  parameters: JsonObject,
+  input: JsonObject,
+  toolName: string,
+): JsonObject {
+  validateInputNode(parameters, input, "$", toolName);
+  return input;
 }
 
 const JSON_SCHEMA_TYPES = new Set([
@@ -98,9 +112,12 @@ function requireNonEmptyString(value: unknown, label: string): string {
 function validateParameters(
   parameters: unknown,
   name: string,
-): asserts parameters is JSONSchema {
-  if (!isRecord(parameters)) {
+): asserts parameters is JsonObject {
+  if (!isJsonObject(parameters)) {
     throw new Error(`Tool parameters must be a JSON schema object: ${name}`);
+  }
+  if (parameters.type !== "object") {
+    throw new Error(`Tool parameters must have an object root type: ${name}`);
   }
 
   validateSchemaNode(parameters, name, "$", false);
@@ -194,12 +211,8 @@ function validateSchemaArray(
   value.forEach(validateItem);
 }
 
-function cloneParameters(parameters: JSONSchema, name: string): JSONSchema {
-  try {
-    return structuredClone(parameters);
-  } catch {
-    throw new Error(`Tool parameters must be JSON-serializable: ${name}`);
-  }
+function cloneParameters(parameters: JsonObject, name: string): JsonObject {
+  return cloneJsonObject(parameters, `Tool parameters: ${name}`);
 }
 
 function isToolExecute(value: unknown): value is Tool["execute"] {
@@ -219,6 +232,128 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function cloneTool(tool: Tool): Tool {
   return {
     ...tool,
-    parameters: structuredClone(tool.parameters),
+    parameters: cloneParameters(tool.parameters, tool.name),
   };
+}
+
+function validateInputNode(
+  schema: Record<string, unknown>,
+  value: unknown,
+  path: string,
+  toolName: string,
+): void {
+  if (schema.const !== undefined && !sameJson(schema.const, value)) {
+    throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+  }
+  if (
+    Array.isArray(schema.enum) &&
+    !schema.enum.some((item) => sameJson(item, value))
+  ) {
+    throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+  }
+
+  for (const keyword of ["allOf", "anyOf", "oneOf"]) {
+    const alternatives = schema[keyword];
+    if (!Array.isArray(alternatives)) continue;
+    const matches = alternatives.filter((alternative) => {
+      try {
+        if (!isRecord(alternative)) return false;
+        validateInputNode(alternative, value, path, toolName);
+        return true;
+      } catch {
+        return false;
+      }
+    }).length;
+    if (keyword === "allOf" && matches !== alternatives.length) {
+      throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+    }
+    if (keyword === "anyOf" && matches === 0) {
+      throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+    }
+    if (keyword === "oneOf" && matches !== 1) {
+      throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+    }
+  }
+
+  const type = schema.type;
+  if (typeof type === "string" && !matchesType(type, value)) {
+    throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+  }
+
+  if (type === "object" || schema.properties !== undefined) {
+    if (!isRecord(value)) {
+      throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+    }
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const property of required) {
+      if (typeof property === "string" && !(property in value)) {
+        throw new Error(
+          `Missing required input ${path}.${property} for tool ${toolName}.`,
+        );
+      }
+    }
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    for (const [property, propertyValue] of Object.entries(value)) {
+      const propertySchema = properties[property];
+      if (propertySchema === undefined) {
+        if (schema.additionalProperties === false) {
+          throw new Error(
+            `Unexpected input ${path}.${property} for tool ${toolName}.`,
+          );
+        }
+        if (isRecord(schema.additionalProperties)) {
+          validateInputNode(
+            schema.additionalProperties,
+            propertyValue,
+            `${path}.${property}`,
+            toolName,
+          );
+        }
+        continue;
+      }
+      if (isRecord(propertySchema)) {
+        validateInputNode(
+          propertySchema,
+          propertyValue,
+          `${path}.${property}`,
+          toolName,
+        );
+      }
+    }
+  }
+
+  if (type === "array" || schema.items !== undefined) {
+    if (!Array.isArray(value)) {
+      throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+    }
+    if (isRecord(schema.items)) {
+      value.forEach((item, index) =>
+        validateInputNode(
+          schema.items as Record<string, unknown>,
+          item,
+          `${path}[${index}]`,
+          toolName,
+        ),
+      );
+    }
+  }
+}
+
+function matchesType(type: string, value: unknown): boolean {
+  if (type === "null") return value === null;
+  if (type === "array") return Array.isArray(value);
+  if (type === "object") return isRecord(value);
+  if (type === "integer")
+    return typeof value === "number" && Number.isInteger(value);
+  if (type === "number")
+    return typeof value === "number" && Number.isFinite(value);
+  return typeof value === type;
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
 }

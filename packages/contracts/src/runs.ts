@@ -14,9 +14,11 @@ export interface AgentRunRequest {
   prompt: string;
   context: AgentContext;
   runId?: string;
+  sessionNamespace?: string;
   maxSteps?: number;
   systemPrompt?: string;
   toolTimeout?: number;
+  authorizationTimeout?: number;
 }
 
 export interface AgentResumeRequest {

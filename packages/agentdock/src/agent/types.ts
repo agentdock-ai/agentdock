@@ -1,9 +1,9 @@
-import type { JSONSchema } from "@langchain/core/utils/json_schema";
 import type {
   AgentContext,
   AgentEvent,
   AgentRunRequest,
   AgentRunResult,
+  JsonObject,
   ToolCallRecord,
 } from "@agentdock/contracts";
 
@@ -12,6 +12,7 @@ export type {
   AgentRunResult,
   AgentRunStatus,
   AgentSessionRecord,
+  AgentSessionHistory,
   Message,
   ToolApprovalDecision,
   ToolApprovalRequest,
@@ -32,7 +33,7 @@ export type ToolAuthorizationResult =
 export interface Tool {
   name: string;
   description: string;
-  parameters: JSONSchema;
+  parameters: JsonObject;
   requiresApproval?: boolean;
   authorize?(
     input: ToolAuthorizationInput,
@@ -53,7 +54,12 @@ export interface StreamAgentResult {
 
 export interface RunAgentOptions extends Pick<
   AgentRunRequest,
-  "runId" | "maxSteps" | "systemPrompt" | "toolTimeout"
+  | "runId"
+  | "maxSteps"
+  | "systemPrompt"
+  | "toolTimeout"
+  | "authorizationTimeout"
+  | "sessionNamespace"
 > {
   sessionId?: string;
   abortSignal?: AbortSignal;
