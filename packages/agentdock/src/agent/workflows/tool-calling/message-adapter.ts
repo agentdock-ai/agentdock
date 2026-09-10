@@ -8,6 +8,7 @@ import {
 import {
   cloneJsonObject,
   cloneJsonValue,
+  type ContentPart,
   type JsonObject,
   type JsonValue,
 } from "@agentdock/contracts";
@@ -17,7 +18,7 @@ import type {
   ToolErrorRecord,
   ToolResultRecord,
 } from "../../types.js";
-import { isRecord, messageText } from "../../value.js";
+import { isRecord, messageContentParts, messageText } from "../../value.js";
 
 export function readStateMessages(state: unknown): BaseMessage[] {
   if (!isRecord(state) || !isRecord(state.values)) return [];
@@ -80,7 +81,9 @@ export function collectToolResults(messages: Message[]): {
   const errors = new Map<string, ToolErrorRecord>();
   for (const message of messages) {
     if (message.role !== "tool") continue;
-    for (const result of message.toolResults) {
+    for (const result of message.content.flatMap((part) =>
+      part.type === "tool-result" ? [part.result] : [],
+    )) {
       results.set(result.toolCallId, result);
       if (result.isError) {
         const validationFailure =
@@ -128,8 +131,13 @@ export function normalizeMessages(
       const toolCalls = (message.tool_calls ?? []).map(toToolCallRecord);
       normalized.push({
         role: "assistant",
-        content: messageText(message.content),
-        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        content: [
+          ...messageContentParts(message.content),
+          ...toolCalls.map((toolCall): ContentPart => ({
+            type: "tool-call",
+            toolCall,
+          })),
+        ],
         ...(message.id ? { id: message.id } : {}),
       });
       continue;
@@ -152,30 +160,26 @@ export function normalizeMessages(
         message.status === "error" ||
         messageContent.startsWith("Error invoking tool");
       if (record?.error) {
+        const result: ToolResultRecord = {
+          ...record.error,
+          output: record.result?.output ?? messageOutput,
+          isError: true,
+        };
         normalized.push({
           role: "tool",
-          content: messageContent,
-          toolResults: [
-            {
-              ...record.error,
-              output: record.result?.output ?? messageOutput,
-              isError: true,
-            },
-          ],
+          content: [{ type: "tool-result", result }],
           ...(message.id ? { id: message.id } : {}),
         });
         continue;
       }
+      const result: ToolResultRecord = record?.result ?? {
+        ...toolCall,
+        output: messageOutput,
+        ...(messageIsError ? { isError: true } : {}),
+      };
       normalized.push({
         role: "tool",
-        content: messageContent,
-        toolResults: [
-          record?.result ?? {
-            ...toolCall,
-            output: messageOutput,
-            ...(messageIsError ? { isError: true } : {}),
-          },
-        ],
+        content: [{ type: "tool-result", result }],
         ...(message.id ? { id: message.id } : {}),
       });
       continue;
@@ -185,13 +189,13 @@ export function normalizeMessages(
     if (role === "human") {
       normalized.push({
         role: "user",
-        content: messageText(message.content),
+        content: messageContentParts(message.content),
         ...(message.id ? { id: message.id } : {}),
       });
     } else if (role === "system") {
       normalized.push({
         role: "system",
-        content: messageText(message.content),
+        content: messageContentParts(message.content),
         ...(message.id ? { id: message.id } : {}),
       });
     }
@@ -236,30 +240,44 @@ function addToolCall(
     (existing.name !== toolCall.name ||
       JSON.stringify(existing.input) !== JSON.stringify(toolCall.input))
   ) {
-    throw new Error(
+    throw codedError(
+      "tool_call_conflict",
       `Model returned conflicting finalized tool calls for ID: ${toolCall.toolCallId}`,
     );
   }
   calls.set(toolCall.toolCallId, toolCall);
 }
 
-export function findFinalContent(messages: Message[]): string {
+export function findFinalContent(messages: Message[]): ContentPart[] {
   for (const message of [...messages].reverse()) {
-    if (message.role === "assistant" && !message.toolCalls?.length)
+    if (
+      message.role === "assistant" &&
+      !message.content.some((part) => part.type === "tool-call")
+    )
       return message.content;
   }
-  return "";
+  return [];
 }
 
 export function toToolCallRecord(value: unknown): ToolCallRecord {
-  if (!isRecord(value)) throw new Error("Model returned an invalid tool call.");
+  if (!isRecord(value))
+    throw codedError(
+      "tool_call_invalid",
+      "Model returned an invalid tool call.",
+    );
   const toolCallId = value.id;
   const name = value.name;
   if (typeof toolCallId !== "string" || !toolCallId) {
-    throw new Error("Model returned a tool call without an ID.");
+    throw codedError(
+      "tool_call_invalid",
+      "Model returned a tool call without an ID.",
+    );
   }
   if (typeof name !== "string" || !name) {
-    throw new Error(`Model returned an unnamed tool call: ${toolCallId}`);
+    throw codedError(
+      "tool_call_invalid",
+      `Model returned an unnamed tool call: ${toolCallId}`,
+    );
   }
   return {
     toolCallId,
@@ -267,6 +285,7 @@ export function toToolCallRecord(value: unknown): ToolCallRecord {
     input: requireRecord(
       value.args ?? {},
       `Model returned invalid tool input: ${name}`,
+      "tool_input_invalid",
     ),
   };
 }
@@ -283,14 +302,23 @@ export function readStepNumber(metadata: unknown): number | null {
   return metadata.langgraph_step;
 }
 
-function requireRecord(value: unknown, message: string): JsonObject {
+function requireRecord(
+  value: unknown,
+  message: string,
+  code: string,
+): JsonObject {
   try {
     return cloneJsonObject(value, message);
   } catch (error) {
-    throw new Error(
+    throw codedError(
+      code,
       `${message}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+function codedError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
 }
 
 function isPersistedToolRecord(value: unknown): value is PersistedToolRecord {

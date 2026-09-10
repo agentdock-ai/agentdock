@@ -1,5 +1,6 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
+import type { AnyAgentMiddleware } from "langchain";
 import type { CheckpointAdapter } from "@agentdock/checkpoint";
 import {
   AgentDock,
@@ -33,6 +34,7 @@ export interface CreateAgentDockOptions {
   policy?: AgentDockPolicy;
   defaults?: AgentDockDefaults;
   coordinator?: RunCoordinator;
+  middleware?: readonly AnyAgentMiddleware[];
 }
 
 /** Creates the simple typed-tool facade over the advanced AgentDock runtime. */
@@ -59,6 +61,7 @@ export function createAgentDock(options: CreateAgentDockOptions): AgentDock {
       ? { checkpointer: options.persistence.checkpointer }
       : {}),
     ...(options.coordinator ? { coordinator: options.coordinator } : {}),
+    ...(options.middleware ? { middleware: options.middleware } : {}),
   };
   return new AgentDock(advancedOptions);
 }

@@ -22,6 +22,18 @@ export class RedisCheckpoint implements CheckpointAdapter {
     if (typeof options?.url !== "string" || options.url.trim().length === 0) {
       throw new Error("RedisCheckpoint url must be a non-empty string.");
     }
+    if (
+      options.ttl?.defaultTTL !== undefined &&
+      (!Number.isFinite(options.ttl.defaultTTL) || options.ttl.defaultTTL <= 0)
+    ) {
+      throw new Error("RedisCheckpoint ttl.defaultTTL must be positive.");
+    }
+    if (
+      options.ttl?.refreshOnRead !== undefined &&
+      typeof options.ttl.refreshOnRead !== "boolean"
+    ) {
+      throw new Error("RedisCheckpoint ttl.refreshOnRead must be a boolean.");
+    }
 
     this.client = createClient({ url: options.url });
     this.saver = new RedisSaver(this.client, options.ttl);

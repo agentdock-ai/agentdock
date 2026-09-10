@@ -2,18 +2,23 @@ import type { ToolApprovalRequest } from "../../permissions/types.js";
 import type { ToolCallRecord } from "../../types.js";
 import { isRecord } from "../../value.js";
 
-export function readApprovalRequestsFromCheckpoint(
+export interface PendingApprovalInterrupt {
+  interruptId: string;
+  requests: ToolApprovalRequest[];
+}
+
+export function readApprovalInterruptFromCheckpoint(
   state: unknown,
   finalizedToolCalls: readonly ToolCallRecord[],
-): ToolApprovalRequest[] {
-  if (!isRecord(state)) return [];
+): PendingApprovalInterrupt | null {
+  if (!isRecord(state)) return null;
   const interrupts = Array.isArray(state.tasks)
     ? state.tasks.flatMap((task) => {
         if (!isRecord(task) || !Array.isArray(task.interrupts)) return [];
         return task.interrupts;
       })
     : readPendingWriteInterrupts(state.pendingWrites);
-  return matchApprovalActions(interrupts, finalizedToolCalls);
+  return readApprovalInterrupt(interrupts, finalizedToolCalls);
 }
 
 function readPendingWriteInterrupts(value: unknown): unknown[] {
@@ -24,29 +29,44 @@ function readPendingWriteInterrupts(value: unknown): unknown[] {
   });
 }
 
-export function readApprovalRequestsFromPayload(
+export function readApprovalInterruptFromPayload(
   payload: unknown,
   finalizedToolCalls: readonly ToolCallRecord[],
-): ToolApprovalRequest[] {
-  if (!isRecord(payload)) return [];
-  return matchApprovalActions(payload.__interrupt__, finalizedToolCalls);
+): PendingApprovalInterrupt | null {
+  if (!isRecord(payload)) return null;
+  return readApprovalInterrupt(payload.__interrupt__, finalizedToolCalls);
 }
 
-function matchApprovalActions(
+function readApprovalInterrupt(
   interrupts: unknown,
   finalizedToolCalls: readonly ToolCallRecord[],
-): ToolApprovalRequest[] {
-  if (!Array.isArray(interrupts)) return [];
+): PendingApprovalInterrupt | null {
+  if (!Array.isArray(interrupts)) return null;
 
-  const actionRequests = interrupts.flatMap((interrupt) => {
-    if (!isRecord(interrupt) || !isRecord(interrupt.value)) return [];
+  const active = flattenInterrupts(interrupts).filter((interrupt) => {
+    if (!isRecord(interrupt) || !isRecord(interrupt.value)) return false;
     const actions = interrupt.value.actionRequests;
-    return Array.isArray(actions) ? actions : [];
+    return Array.isArray(actions) && actions.length > 0;
   });
-  if (actionRequests.length === 0) return [];
+  if (active.length === 0) return null;
+  if (active.length !== 1) {
+    throw new Error("Current approval state contains multiple interrupts.");
+  }
+  const interrupt = active[0];
+  if (
+    !isRecord(interrupt) ||
+    typeof interrupt.id !== "string" ||
+    !interrupt.id
+  ) {
+    throw new Error("Current approval interrupt does not have an ID.");
+  }
+  const value = interrupt.value;
+  if (!isRecord(value) || !Array.isArray(value.actionRequests)) {
+    throw new Error("Current approval interrupt contains invalid actions.");
+  }
 
   const remaining = [...finalizedToolCalls];
-  return actionRequests.map((action) => {
+  const requests = value.actionRequests.map((action) => {
     if (!isRecord(action) || typeof action.name !== "string") {
       throw new Error("Current approval interrupt contains an invalid action.");
     }
@@ -63,6 +83,13 @@ function matchApprovalActions(
     const [toolCall] = remaining.splice(index, 1);
     return { approvalId: toolCall.toolCallId, toolCall };
   });
+  return { interruptId: interrupt.id, requests };
+}
+
+function flattenInterrupts(interrupts: unknown[]): unknown[] {
+  return interrupts.flatMap((interrupt) =>
+    Array.isArray(interrupt) ? flattenInterrupts(interrupt) : [interrupt],
+  );
 }
 
 function isEquivalentJson(left: unknown, right: unknown): boolean {

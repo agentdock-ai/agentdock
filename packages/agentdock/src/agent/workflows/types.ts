@@ -1,8 +1,6 @@
 import type { Message } from "../memory.js";
-import type {
-  ToolApprovalRequest,
-  ToolApprovalResponse,
-} from "../permissions/types.js";
+import type { ToolApprovalResponse } from "../permissions/types.js";
+import type { PendingApprovalInterrupt } from "./tool-calling/interrupts.js";
 import type {
   AgentContext,
   AgentSessionHistory,
@@ -24,6 +22,7 @@ export interface WorkflowStartInput extends WorkflowInput {
 
 export interface WorkflowResumeInput extends WorkflowInput {
   approvals: ToolApprovalResponse[];
+  interruptId: string;
 }
 
 export interface AgentWorkflow {
@@ -43,13 +42,13 @@ export interface AgentWorkflow {
       "systemPrompt" | "maxSteps" | "sessionNamespace"
     >,
   ): Promise<string | null>;
-  getPendingApprovals(
+  getPendingApprovalInterrupt(
     sessionId: string,
     options?: Pick<
       RunAgentOptions,
       "systemPrompt" | "maxSteps" | "sessionNamespace"
     >,
-  ): Promise<ToolApprovalRequest[]>;
+  ): Promise<PendingApprovalInterrupt | null>;
   getSessionHistory(
     sessionId: string,
     options?: Pick<

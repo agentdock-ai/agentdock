@@ -3,8 +3,8 @@ import { test } from "vitest";
 import { AIMessage } from "@langchain/core/messages";
 import { collectToolCalls } from "../../src/agent/workflows/tool-calling/message-adapter.js";
 import {
-  readApprovalRequestsFromCheckpoint,
-  readApprovalRequestsFromPayload,
+  readApprovalInterruptFromCheckpoint,
+  readApprovalInterruptFromPayload,
 } from "../../src/agent/workflows/tool-calling/interrupts.js";
 
 const finalizedCalls = [
@@ -13,7 +13,7 @@ const finalizedCalls = [
 ];
 
 test("reads only the current checkpoint interrupt and preserves action order", () => {
-  const requests = readApprovalRequestsFromCheckpoint(
+  const interrupt = readApprovalInterruptFromCheckpoint(
     {
       tasks: [
         {
@@ -33,7 +33,9 @@ test("reads only the current checkpoint interrupt and preserves action order", (
     },
     finalizedCalls,
   );
+  const requests = interrupt.requests;
 
+  assert.equal(interrupt.interruptId, "interrupt-current");
   assert.deepEqual(
     requests.map((request) => request.approvalId),
     ["call-first", "call-second"],
@@ -47,10 +49,15 @@ test("reads only the current checkpoint interrupt and preserves action order", (
 test("does not silently accept an interrupt action without a finalized call", () => {
   assert.throws(
     () =>
-      readApprovalRequestsFromPayload(
+      readApprovalInterruptFromPayload(
         {
           __interrupt__: [
-            { value: { actionRequests: [{ name: "missing_tool", args: {} }] } },
+            {
+              id: "interrupt-missing",
+              value: {
+                actionRequests: [{ name: "missing_tool", args: {} }],
+              },
+            },
           ],
         },
         [],

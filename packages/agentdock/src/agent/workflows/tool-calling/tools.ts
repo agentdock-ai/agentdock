@@ -7,7 +7,6 @@ import { ToolMessage } from "@langchain/core/messages";
 import {
   cloneJsonObject,
   cloneJsonValue,
-  type JsonObject,
   type JsonValue,
 } from "@agentdock/contracts";
 import type {
@@ -46,9 +45,9 @@ export function createToolCallingTools(
         rawInput: unknown,
         runtime: ToolRuntime<unknown, AgentContext>,
       ) => {
-        const input = requireRecord(
+        const input = cloneJsonObject(
           rawInput,
-          `Tool input must be an object: ${toolDefinition.name}`,
+          `Tool input: ${toolDefinition.name}`,
         );
         validateToolInput(
           toolDefinition.parameters,
@@ -89,6 +88,7 @@ export function createToolCallingTools(
                 input,
                 ctx: runtime.context,
                 signal,
+                toolCallId: toolCall.toolCallId,
                 ...(reportProgress ? { reportProgress } : {}),
               }),
             runtime.config.signal,
@@ -143,28 +143,31 @@ export async function authorizeToolCall(
   timeout: number | undefined,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
   if (!toolDefinition.authorize) return { allowed: true };
-  const authorization = await executeWithDeadline(
-    () =>
-      Promise.resolve(
-        toolDefinition.authorize!({
-          toolCall,
-          ctx,
-        }),
-      ),
-    signal,
-    timeout,
-    "authorization_timeout",
-  );
-  assertAuthorizationResult(authorization);
-  return authorization;
-}
-
-function requireRecord(value: unknown, message: string): JsonObject {
+  let authorization: unknown;
   try {
-    return cloneJsonObject(value, message);
+    authorization = await executeWithDeadline(
+      (authorizationSignal) =>
+        Promise.resolve(
+          toolDefinition.authorize!({
+            toolCall,
+            ctx,
+            signal: authorizationSignal,
+          }),
+        ),
+      signal,
+      timeout,
+      "authorization_timeout",
+    );
   } catch (error) {
-    throw new Error(`${message}: ${errorMessage(error)}`);
+    if (errorCode(error)) throw error;
+    throw codedError("authorization_failed", errorMessage(error));
   }
+  try {
+    assertAuthorizationResult(authorization);
+  } catch (error) {
+    throw codedError("authorization_invalid", errorMessage(error));
+  }
+  return authorization;
 }
 
 function serializeToolOutput(output: unknown): JsonValue {

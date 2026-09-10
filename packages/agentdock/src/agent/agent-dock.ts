@@ -1,5 +1,6 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
+import type { AnyAgentMiddleware } from "langchain";
 import {
   CheckpointManager,
   MemoryCheckpoint,
@@ -97,6 +98,7 @@ export interface AgentDockOptions {
   checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
   coordinator?: RunCoordinator;
+  middleware?: readonly AnyAgentMiddleware[];
 }
 
 interface ActiveRun {
@@ -139,6 +141,7 @@ export class AgentDock {
       model: this.model,
       registry: this.registry,
       checkpointer: this.checkpointManager.saver,
+      middleware: options.middleware,
     });
     this.toolCalling = this.createWorkflowClient(this.toolCallingWorkflow);
   }
@@ -189,7 +192,7 @@ export class AgentDock {
           .map(([runId]) => runId);
         return waitForClose(this.checkpointManager.close(), gracePeriodMs);
       })
-      .then(() => {
+      .finally(() => {
         this.lifecycle = "closed";
       });
     return this.closePromise;
@@ -292,7 +295,7 @@ export class AgentDock {
     ctx: AgentContext,
     options: AgentDockRunOptions,
   ): Promise<StreamAgentResult> {
-    await this.prepareOperation();
+    this.assertOpen();
     assertNonEmptyString(userPrompt, "Agent prompt");
     assertContext(ctx);
     assertRunOptions(options, true);
@@ -304,6 +307,7 @@ export class AgentDock {
     await this.claimRun(runId, sessionId, controller, merged.sessionNamespace);
 
     try {
+      await this.prepareOperation();
       const execution = workflow.start({
         runId,
         sessionId,
@@ -350,7 +354,7 @@ export class AgentDock {
     assertContext(ctx);
     assertRunOptions(options, true);
     const merged = this.mergeOptions(options);
-    await this.prepareOperation();
+    this.assertOpen();
 
     const sessionId = options.sessionId;
     const controller = new AbortController();
@@ -362,14 +366,21 @@ export class AgentDock {
     );
 
     try {
+      await this.prepareOperation();
       const checkpointRunId = await workflow.getRunId(sessionId, merged);
       if (checkpointRunId !== input.runId) {
         throw new Error(
           "Agent run ID does not match the checkpoint for this session.",
         );
       }
-      const pending = await workflow.getPendingApprovals(sessionId, merged);
-      const approvals = validateApprovalDecisions(input.approvals, pending);
+      const pending = await workflow.getPendingApprovalInterrupt(
+        sessionId,
+        merged,
+      );
+      const approvals = validateApprovalDecisions(
+        input.approvals,
+        pending?.requests ?? [],
+      );
       const execution = workflow.resume({
         runId: input.runId,
         sessionId,
@@ -377,6 +388,7 @@ export class AgentDock {
         options: merged,
         signal: createSignal(controller, merged.abortSignal),
         approvals,
+        interruptId: pending!.interruptId,
       });
       return this.trackExecution(execution, input.runId);
     } catch (error) {

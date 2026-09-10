@@ -7,6 +7,19 @@ import { FakeToolCallingModel } from "langchain";
 import { SqliteCheckpoint } from "@agentdock/checkpoint-sqlite";
 import { AgentDock, ToolRegistry } from "../../src/index.js";
 
+function contentText(content) {
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+function messageToolResults(message) {
+  return message.content.flatMap((part) =>
+    part.type === "tool-result" ? [part.result] : [],
+  );
+}
+
 test("persists a pending approval across AgentDock recreation", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "agentdock-agent-"));
   const databasePath = path.join(directory, "checkpoints.sqlite");
@@ -81,11 +94,15 @@ test("persists a pending approval across AgentDock recreation", async () => {
     const session = await secondAgent.getSession("session-persisted");
     assert.ok(
       session.messages.some(
-        (message) => message.content === "Publish the report.",
+        (message) => contentText(message.content) === "Publish the report.",
       ),
     );
     assert.ok(
-      session.messages.some((message) => message.content.includes("published")),
+      session.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          messageToolResults(message)[0]?.output === "published",
+      ),
     );
     await secondAgent.close();
   } finally {
@@ -268,6 +285,17 @@ test("rejects incomplete or stale approval decisions against SQLite checkpoints"
       secondAgent.resume(
         {
           runId: "run-approvals",
+          approvals: [firstApproval, firstApproval],
+        },
+        {},
+        { sessionId: "session-approvals" },
+      ),
+      /unique approval IDs/,
+    );
+    await assert.rejects(
+      secondAgent.resume(
+        {
+          runId: "run-approvals",
           approvals: [
             firstApproval,
             { approvalId: "stale-approval", approved: true },
@@ -284,8 +312,8 @@ test("rejects incomplete or stale approval decisions against SQLite checkpoints"
       {
         runId: "run-approvals",
         approvals: [
-          firstApproval,
           { approvalId: "call-second", approved: true },
+          firstApproval,
         ],
       },
       {},

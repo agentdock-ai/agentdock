@@ -17,6 +17,12 @@ import {
   toToolCallRecord,
 } from "../../src/agent/workflows/tool-calling/message-adapter.js";
 
+function toolResults(message) {
+  return message.content.flatMap((part) =>
+    part.type === "tool-result" ? [part.result] : [],
+  );
+}
+
 test("normalizes LangChain messages into public AgentDock messages", () => {
   const toolCall = {
     toolCallId: "call-weather",
@@ -44,18 +50,29 @@ test("normalizes LangChain messages into public AgentDock messages", () => {
   );
 
   assert.deepEqual(messages, [
-    { role: "system", content: "Be helpful.", id: "system-1" },
-    { role: "user", content: "Weather?", id: "user-1" },
+    {
+      role: "system",
+      content: [{ type: "text", text: "Be helpful." }],
+      id: "system-1",
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: "Weather?" }],
+      id: "user-1",
+    },
     {
       role: "assistant",
-      content: "",
-      toolCalls: [toolCall],
+      content: [{ type: "tool-call", toolCall }],
       id: "assistant-1",
     },
     {
       role: "tool",
-      content: "sunny",
-      toolResults: [{ ...toolCall, output: "sunny" }],
+      content: [
+        {
+          type: "tool-result",
+          result: { ...toolCall, output: "sunny" },
+        },
+      ],
       id: "tool-1",
     },
   ]);
@@ -74,9 +91,9 @@ test("reads checkpoint state safely and finds final assistant content", () => {
   assert.deepEqual(readStateMessages(state), [assistant]);
   assert.equal(readStateRunId(state), "run-state");
   assert.equal(stateHasInterrupt(state), false);
-  assert.equal(
+  assert.deepEqual(
     findFinalContent(normalizeMessages([assistant], new Map())),
-    "Final answer.",
+    [{ type: "text", text: "Final answer." }],
   );
   assert.deepEqual(readStateMessages({}), []);
   assert.equal(readStateRunId({}), null);
@@ -104,7 +121,9 @@ test("validates model tool calls and stream metadata", () => {
   );
   assert.throws(
     () => toToolCallRecord({ id: "call-1", name: "lookup", args: [] }),
-    /invalid tool input/,
+    (error) =>
+      error.code === "tool_input_invalid" &&
+      /invalid tool input/.test(error.message),
   );
   assert.equal(isStreamChunk(["messages", []]), true);
   assert.equal(isStreamChunk(["messages"]), false);
@@ -142,7 +161,7 @@ test("reconstructs persisted structured tool outputs without changing strings", 
     ]),
   );
 
-  assert.deepEqual(normalized[1].toolResults[0].output, { ok: true });
+  assert.deepEqual(toolResults(normalized[1])[0].output, { ok: true });
 });
 
 test("preserves every JSON output type from a checkpointed tool message", () => {
@@ -178,8 +197,42 @@ test("preserves every JSON output type from a checkpointed tool message", () => 
       new Map([[toolCall.toolCallId, toolCall]]),
     );
 
-    assert.deepEqual(messages[1].toolResults[0].output, output);
+    assert.deepEqual(toolResults(messages[1])[0].output, output);
   }
+});
+
+test("preserves text, reasoning, media, citations, and provider content", () => {
+  const message = new AIMessage({
+    content: [
+      { type: "reasoning", reasoning: "Checked the forecast." },
+      { type: "text", text: "It is sunny." },
+      { type: "image", url: "https://example.test/weather.png" },
+      { type: "audio", fileId: "audio-1", mimeType: "audio/mpeg" },
+      {
+        type: "citation",
+        url: "https://example.test/source",
+        title: "Weather source",
+      },
+      { type: "provider-extra", confidence: 0.9 },
+    ],
+  });
+
+  assert.deepEqual(normalizeMessages([message], new Map())[0].content, [
+    { type: "reasoning", text: "Checked the forecast." },
+    { type: "text", text: "It is sunny." },
+    { type: "image", url: "https://example.test/weather.png" },
+    { type: "audio", fileId: "audio-1", mimeType: "audio/mpeg" },
+    {
+      type: "citation",
+      url: "https://example.test/source",
+      title: "Weather source",
+    },
+    {
+      type: "custom",
+      name: "provider-extra",
+      data: { type: "provider-extra", confidence: 0.9 },
+    },
+  ]);
 });
 
 test("reports a malformed tool message instead of silently dropping it", () => {

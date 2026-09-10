@@ -1,6 +1,7 @@
 import type { JsonObject } from "./json.js";
 import type { Message } from "./messages.js";
 import type { ToolApprovalRequest } from "./approvals.js";
+import type { AgentLimitInfo, AgentUsage, ContentPart } from "./events.js";
 import type {
   ToolCallRecord,
   ToolErrorRecord,
@@ -35,7 +36,7 @@ export interface AgentRunResult {
   runId: string;
   sessionId: string;
   status: AgentRunStatus;
-  content: string;
+  content: ContentPart[];
   messages: Message[];
   toolCalls: ToolCallRecord[];
   toolResults: ToolResultRecord[];
@@ -43,4 +44,9 @@ export interface AgentRunResult {
   approvalRequests: ToolApprovalRequest[];
   stepsCompleted: number;
   error?: string;
+  errorCode?: string;
+  cancellationReason?: string;
+  finishReason?: string;
+  usage?: AgentUsage;
+  limit?: AgentLimitInfo;
 }

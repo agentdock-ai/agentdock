@@ -90,3 +90,22 @@ test("AgentDock bounds an owned adapter close", async () => {
   await agent.close({ gracePeriodMs: 10 });
   assert.equal(closeCalls, 1);
 });
+
+test("AgentDock stays deterministically closed when owned adapter close fails", async () => {
+  const agent = createAgent({
+    checkpoint: {
+      saver: new MemorySaver(),
+      initialize: async () => {},
+      close: async () => {
+        throw new Error("adapter close failed");
+      },
+    },
+  });
+
+  const firstClose = agent.close();
+  const secondClose = agent.close();
+  assert.equal(firstClose, secondClose);
+  await assert.rejects(firstClose, /adapter close failed/);
+  await assert.rejects(agent.close(), /adapter close failed/);
+  await assert.rejects(agent.initialize(), /closed or closing/);
+});

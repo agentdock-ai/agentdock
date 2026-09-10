@@ -15,6 +15,8 @@ export class PostgresCheckpoint implements CheckpointAdapter {
 
   constructor(options: PostgresCheckpointOptions) {
     assertNonEmptyString(options?.connectionString, "connectionString");
+    if (options.schema !== undefined)
+      assertNonEmptyString(options.schema, "schema");
     this.saver = PostgresSaver.fromConnString(options.connectionString, {
       ...(options.schema ? { schema: options.schema } : {}),
     });

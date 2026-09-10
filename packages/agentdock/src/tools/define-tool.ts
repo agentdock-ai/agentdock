@@ -7,7 +7,10 @@ import type {
   ToolAuthorizationResult,
 } from "../agent/types.js";
 
-export interface DefineToolOptions<Schema extends z.ZodObject> {
+export interface DefineToolOptions<
+  Schema extends z.ZodObject,
+  Context extends AgentContext = AgentContext,
+> {
   name: string;
   description: string;
   input: Schema;
@@ -17,16 +20,18 @@ export interface DefineToolOptions<Schema extends z.ZodObject> {
   ) => ToolAuthorizationResult | Promise<ToolAuthorizationResult>;
   run: (
     input: z.output<Schema>,
-    ctx: AgentContext,
-    signal?: AbortSignal,
+    ctx: Context,
+    signal: AbortSignal,
     reportProgress?: (text: string) => void,
+    toolCallId?: string,
   ) => unknown | Promise<unknown>;
 }
 
 /** Creates a typed AgentDock tool from a Zod object schema. */
-export function defineTool<Schema extends z.ZodObject>(
-  options: DefineToolOptions<Schema>,
-): Tool {
+export function defineTool<
+  Schema extends z.ZodObject,
+  Context extends AgentContext = AgentContext,
+>(options: DefineToolOptions<Schema, Context>): Tool {
   const parameters = cloneJsonObject(
     z.toJSONSchema(options.input),
     `Tool parameters: ${options.name}`,
@@ -39,14 +44,20 @@ export function defineTool<Schema extends z.ZodObject>(
       ? { requiresApproval: options.requiresApproval }
       : {}),
     ...(options.authorize ? { authorize: options.authorize } : {}),
-    execute: async ({ input, ctx, signal, reportProgress }) => {
+    execute: async ({ input, ctx, signal, reportProgress, toolCallId }) => {
       const parsed = options.input.safeParse(input);
       if (!parsed.success) {
         throw new Error(
           `Invalid input for tool ${options.name}: ${parsed.error.message}`,
         );
       }
-      return options.run(parsed.data, ctx, signal, reportProgress);
+      return options.run(
+        parsed.data,
+        ctx as Context,
+        signal,
+        reportProgress,
+        toolCallId,
+      );
     },
   };
 }

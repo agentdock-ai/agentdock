@@ -1,6 +1,7 @@
 # AgentDock
 
-AgentDock is a small TypeScript facade for a streamed LangChain tool-calling agent running on LangGraph.
+AgentDock is a durable, frontend-ready TypeScript runtime for a streamed LangChain
+tool-calling agent running on LangGraph.
 
 It owns the application contract: tool registration, approval policy, normalized events, run lifecycle, and a small public API. LangChain owns models and tools; LangGraph owns the tool-calling loop, checkpoints, interrupts, and resume.
 
@@ -52,9 +53,22 @@ for await (const event of stream) {
 console.log(await result);
 ```
 
+`result.content` and every normalized message use `ContentPart[]`. Read text parts
+for plain terminal output while preserving reasoning, media, citations, custom JSON,
+and tool records for richer clients:
+
+```ts
+const text = (await result).content
+  .filter((part) => part.type === "text")
+  .map((part) => part.text)
+  .join("");
+```
+
 The stream uses the canonical AgentDock event contract. Events include structured
 content (`message.part.delta`), tool lifecycle events (`tool.completed` and
 `tool.failed`), interrupts, terminal metadata, and stable run/session sequencing.
+There is one stream method and one event union; `run()` consumes the same stream
+internally and returns the same logical result.
 
 For new code, the simpler typed API avoids hand-written raw schemas:
 
@@ -98,9 +112,14 @@ The optional resolver initially supports `openai`, `ollama`, and `openrouter`; a
 
 Set `requiresApproval: true` on a side-effecting tool. AgentDock emits
 `interrupt.required` and returns a `waiting_for_approval` result. LangGraph keeps
-the graph checkpoint; resume the same session after a decision.
+the graph checkpoint; resume the same session after a decision. A resume continues
+the same logical run and can cross any number of approval boundaries, including
+after recreating AgentDock from a durable checkpoint. Approval requests are read
+from the current interrupt only, so old approvals never reappear.
 
-Event sequence numbers are ordered within each returned stream. Resuming a run creates a new stream with its own sequence.
+Event sequence numbers are ordered within each returned stream. The logical
+sequence continues across phases and restarts, while each returned stream has its
+own phase sequence.
 
 The contracts package provides the event types with session/run/phase identifiers,
 logical ordering, structured content parts, generic interrupt records, usage, finish
@@ -151,15 +170,41 @@ Install only the optional backend package you need, for example `yarn add @agent
 
 ## Lifecycle and authoring rules
 
-`new AgentDock()` is the advanced escape hatch for raw LangChain models, checkpointers,
-adapters, and middleware. `defineTool()` validates model input with Zod and infers
-the `run` input type. Raw JSON Schema is supported for advanced integrations, but
-ordinary model tools must use an object-root schema.
+`new AgentDock()` is the advanced escape hatch for raw LangChain models,
+checkpointers, adapters, defaults, coordinators, and middleware. The easy factory
+accepts the same `middleware` option and passes it to this runtime without a second
+execution path. `defineTool()` validates model
+input with Zod and infers the `run` input type. The execution callback receives
+JSON context, an abort signal, progress reporting, and the finalized tool-call ID.
+Raw JSON Schema is an explicit advanced escape hatch. Its supported subset is an
+object root with `properties`, `required`, `additionalProperties`, `items`,
+`enum`, `const`, `oneOf`, `anyOf`, and `allOf` (plus descriptive metadata);
+unsupported keywords are rejected at registration.
+
+Tool input is validated before authorization and again before execution through the
+same runtime schema. Use the tool-call ID as an idempotency key for external side
+effects; AgentDock does not retry or undo a side effect that outlives cancellation.
 
 `getSession()` returns current normalized model-visible messages. Use
 `getSessionHistory()` for checkpoint-by-checkpoint history and `deleteSession()` to
-remove all model-visible checkpoint context. Deletion fails while the namespace/session
-has an active run.
+remove all model-visible checkpoint context. Deletion fails while the
+namespace/session has an active run. A `sessionNamespace` must be stable for the
+host/tenant that owns the session; host authorization and tenant metadata remain
+outside AgentDock.
+
+Use a durable `checkpoint` adapter when AgentDock owns the resource. If you pass a
+raw `checkpointer`, it remains caller-owned and AgentDock never closes it. Tool and
+authorization timeouts have hard deadlines even for code that ignores its abort
+signal, but an external side effect may still continue. `close({ gracePeriodMs })`
+aborts active runs, waits only for the grace period, closes owned resources once,
+and exposes unfinished run IDs through `getUnfinishedRunIds()`.
 
 Authorization is checked before an approval interrupt and again immediately before
 tool execution. A denied protected tool therefore does not create an approval prompt.
+
+Every event includes `protocolVersion` plus stable run, session, phase, event, and
+sequence fields. Consumers must reject unsupported protocol versions rather than
+guessing at payload shape. Usage may include input, cached-input, output, reasoning,
+and total tokens together with model, provider, and USD cost when a provider reports
+them. A configured model-call limit terminates with `agent_step_limit` and explicit
+limit metadata.

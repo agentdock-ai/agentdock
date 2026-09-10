@@ -25,6 +25,7 @@ export type {
 export interface ToolAuthorizationInput {
   toolCall: ToolCallRecord;
   ctx: AgentContext;
+  signal: AbortSignal;
 }
 
 export type ToolAuthorizationResult =
@@ -42,9 +43,10 @@ export interface Tool {
 }
 
 export interface ToolExecuteInput {
-  input: Record<string, unknown>;
+  input: JsonObject;
   ctx: AgentContext;
-  signal?: AbortSignal;
+  signal: AbortSignal;
+  toolCallId: string;
   reportProgress?: (text: string) => void;
 }
 

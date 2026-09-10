@@ -1,4 +1,9 @@
-import type { AgentEvent, AgentEventInput } from "../events.js";
+import {
+  AGENT_EVENT_PROTOCOL_VERSION,
+  cloneAgentEventInput,
+  type AgentEvent,
+  type AgentEventInput,
+} from "../events.js";
 
 export class AgentEventStream implements AsyncIterable<AgentEvent> {
   private readonly values: AgentEvent[] = [];
@@ -14,10 +19,12 @@ export class AgentEventStream implements AsyncIterable<AgentEvent> {
   ) {}
 
   emit(input: AgentEventInput): void {
+    const normalizedInput = cloneAgentEventInput(input);
     const sequence = ++this.sequence;
     const logicalSequence = ++this.logicalSequence;
     this.push({
-      ...input,
+      ...normalizedInput,
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: crypto.randomUUID(),
       runId: this.runId,
       sessionId: this.sessionId,

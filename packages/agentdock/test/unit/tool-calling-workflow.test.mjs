@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
+import {
+  createAgentReducerState,
+  reduceAgentEvent,
+} from "@agentdock/contracts";
 import { AgentDock, AgentEventType, ToolRegistry } from "../../src/index.js";
 import {
   createToolCallArgumentChunks,
@@ -58,6 +62,19 @@ async function collect(iterable) {
   return events;
 }
 
+function contentText(content) {
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+function messageToolResults(message) {
+  return message.content.flatMap((part) =>
+    part.type === "tool-result" ? [part.result] : [],
+  );
+}
+
 function createAgent(toolCalls, registry = new ToolRegistry()) {
   return new AgentDock({
     model: new FakeToolCallingModel({ toolCalls }),
@@ -91,7 +108,7 @@ test.each([
     const result = await streamed.result;
 
     assert.equal(result.status, "completed");
-    assert.equal(result.content, expected);
+    assert.equal(contentText(result.content), expected);
     assert.equal(
       events
         .filter((event) => event.type === AgentEventType.MessagePartDelta)
@@ -109,6 +126,49 @@ test.each([
     );
   },
 );
+
+test("streams structured reasoning and text without flattening either part", async () => {
+  const agent = new AgentDock({
+    model: createScriptedChatModel({
+      chunks: createScriptedMessageChunks(
+        [
+          [{ type: "reasoning", reasoning: "Check the inputs." }],
+          [{ type: "text", text: "Final answer." }],
+        ],
+        { includeIds: false },
+      ),
+      response: [
+        { type: "reasoning", reasoning: "Check the inputs." },
+        { type: "text", text: "Final answer." },
+      ],
+    }),
+  });
+  const execution = await agent.stream(
+    "Use structured output.",
+    {},
+    { sessionId: "structured-stream", runId: "structured-stream" },
+  );
+  const eventsPromise = collect(execution.stream);
+  const result = await execution.result;
+  const events = await eventsPromise;
+  const deltas = events
+    .filter((event) => event.type === AgentEventType.MessagePartDelta)
+    .map((event) => event.part);
+  const completed = events.find(
+    (event) => event.type === AgentEventType.MessageCompleted,
+  );
+
+  assert.deepEqual(deltas, [
+    { type: "reasoning", text: "Check the inputs." },
+    { type: "text", text: "Final answer." },
+  ]);
+  assert.deepEqual(result.content, [
+    { type: "reasoning", text: "Check the inputs." },
+    { type: "text", text: "Final answer." },
+  ]);
+  assert.deepEqual(completed.content, result.content);
+  await agent.close();
+});
 
 test("does not publish a partial tool call before its final arguments are available", async () => {
   const registry = new ToolRegistry();
@@ -158,6 +218,62 @@ test("does not publish a partial tool call before its final arguments are availa
   assert.equal(result.toolCalls[0].toolCallId, "call-partial");
 });
 
+test("keeps multiple anonymous assistant messages distinct", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "anonymous_lookup",
+    description: "Return one value.",
+    parameters: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+    execute: async ({ input }) => input.value,
+  });
+  const agent = new AgentDock({
+    model: createScriptedChatModel({
+      streamSequences: [
+        createToolCallArgumentChunks({
+          name: "anonymous_lookup",
+          toolCallId: "call-anonymous",
+          input: { value: "done" },
+        }),
+        createScriptedMessageChunks(["Final", " answer."], {
+          includeIds: false,
+        }),
+      ],
+      responses: ["", "Final answer."],
+    }),
+    registry,
+  });
+
+  const execution = await agent.stream(
+    "Run the lookup.",
+    {},
+    { sessionId: "anonymous-messages", runId: "anonymous-messages" },
+  );
+  const eventsPromise = collect(execution.stream);
+  const result = await execution.result;
+  const events = await eventsPromise;
+  const completedMessages = events.filter(
+    (event) => event.type === AgentEventType.MessageCompleted,
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(contentText(result.content), "Final answer.");
+  assert.equal(completedMessages.length, 2);
+  assert.equal(
+    new Set(completedMessages.map((event) => event.messageId)).size,
+    2,
+  );
+  assert.equal(completedMessages[0].content[0].type, "tool-call");
+  assert.deepEqual(completedMessages[1].content, [
+    { type: "text", text: "Final answer." },
+  ]);
+  await agent.close();
+});
+
 test("run and stream return the same normalized final assistant content", async () => {
   const chunks = ["Hello", " ", "world", "!"];
   const create = () =>
@@ -183,7 +299,7 @@ test("run and stream return the same normalized final assistant content", async 
     { sessionId: "session-run-equivalence", runId: "run-run-equivalence" },
   );
 
-  assert.equal(streamResult.content, runResult.content);
+  assert.deepEqual(streamResult.content, runResult.content);
   assert.deepEqual(
     streamResult.messages.map((message) => [message.role, message.content]),
     runResult.messages.map((message) => [message.role, message.content]),
@@ -202,7 +318,7 @@ test("AgentDock streams the default tool-calling workflow and persists session m
   const session = await agent.getSession("session-stream");
 
   assert.equal(result.status, "completed");
-  assert.equal(result.content, "Summarize this request.");
+  assert.equal(contentText(result.content), "Summarize this request.");
   assert.equal(events[0].type, AgentEventType.RunStarted);
   assert.equal(events.at(-1).type, AgentEventType.RunCompleted);
   assert.equal(events[0].sessionId, "session-stream");
@@ -217,9 +333,62 @@ test("AgentDock streams the default tool-calling workflow and persists session m
     events.map((_, index) => index + 1),
   );
   assert.deepEqual(
-    session.messages.map((message) => message.content),
+    session.messages.map((message) => contentText(message.content)),
     ["Summarize this request.", "Summarize this request."],
   );
+});
+
+test("separate runs in one session keep independent result snapshots", async () => {
+  const agent = new AgentDock({
+    model: createScriptedChatModel({
+      streamSequences: [
+        createScriptedMessageChunks(["First run."], {
+          id: "independent-assistant-one",
+        }),
+        createScriptedMessageChunks(["Second run."], {
+          id: "independent-assistant-two",
+        }),
+      ],
+    }),
+  });
+  const first = await agent.run(
+    "First run.",
+    {},
+    { sessionId: "shared-session-runs", runId: "independent-run-one" },
+  );
+  const second = await agent.run(
+    "Second run.",
+    {},
+    { sessionId: "shared-session-runs", runId: "independent-run-two" },
+  );
+  const session = await agent.getSession("shared-session-runs");
+  const history = await agent.getSessionHistory("shared-session-runs");
+
+  assert.equal(first.runId, "independent-run-one");
+  assert.equal(second.runId, "independent-run-two");
+  assert.deepEqual(
+    first.messages.map((message) => contentText(message.content)),
+    ["First run.", "First run."],
+  );
+  assert.deepEqual(
+    second.messages.map((message) => contentText(message.content)),
+    ["Second run.", "Second run."],
+  );
+  assert.deepEqual(
+    session.messages.map((message) => contentText(message.content)),
+    ["First run.", "First run.", "Second run.", "Second run."],
+  );
+  assert.ok(
+    history.checkpoints.some(
+      (checkpoint) => checkpoint.runId === "independent-run-one",
+    ),
+  );
+  assert.ok(
+    history.checkpoints.some(
+      (checkpoint) => checkpoint.runId === "independent-run-two",
+    ),
+  );
+  await agent.close();
 });
 
 test("AgentDock exposes the default workflow through toolCalling", async () => {
@@ -234,7 +403,7 @@ test("AgentDock exposes the default workflow through toolCalling", async () => {
   const result = await streamed.result;
 
   assert.equal(result.status, "completed");
-  assert.equal(result.content, "Use the tool-calling workflow.");
+  assert.equal(contentText(result.content), "Use the tool-calling workflow.");
 });
 
 test("AgentDock executes tool-calling tools through the shared registry and context", async () => {
@@ -408,6 +577,18 @@ test("AgentDock resumes multiple sequential approval boundaries", async () => {
     ["call-second"],
   );
 
+  await assert.rejects(
+    agent.resume(
+      {
+        runId: "run-sequential-approval",
+        approvals: [{ approvalId: "call-first", approved: true }],
+      },
+      {},
+      { sessionId: "session-sequential-approval" },
+    ),
+    /do not match a pending AgentDock run/,
+  );
+
   const completed = await agent.resume(
     {
       runId: "run-sequential-approval",
@@ -428,6 +609,60 @@ test("AgentDock resumes multiple sequential approval boundaries", async () => {
     completed.toolResults.map((result) => result.toolCallId),
     ["call-first", "call-second"],
   );
+});
+
+test("approval resume events reduce as one logical run without replaying tool calls", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "publish_once",
+    description: "Publish once.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => "published",
+  });
+  const agent = createAgent(
+    [[{ name: "publish_once", args: {}, id: "call-publish-once" }], []],
+    registry,
+  );
+
+  const first = await agent.stream(
+    "Publish once.",
+    {},
+    { sessionId: "session-reducer-resume", runId: "run-reducer-resume" },
+  );
+  const firstEvents = await collect(first.stream);
+  const waiting = await first.result;
+  const required = firstEvents.find(
+    (event) => event.type === AgentEventType.InterruptRequired,
+  );
+
+  const second = await agent.resumeStream(
+    {
+      runId: waiting.runId,
+      approvals: [{ approvalId: "call-publish-once", approved: true }],
+    },
+    {},
+    { sessionId: "session-reducer-resume" },
+  );
+  const secondEvents = await collect(second.stream);
+  await second.result;
+  const resolved = secondEvents.find(
+    (event) => event.type === AgentEventType.InterruptResolved,
+  );
+  const allEvents = [...firstEvents, ...secondEvents];
+  const reduced = allEvents.reduce(reduceAgentEvent, createAgentReducerState());
+
+  assert.equal(reduced.status, "completed");
+  assert.equal(required.interrupt.interruptId, resolved.interruptId);
+  assert.equal(
+    allEvents.filter(
+      (event) =>
+        event.type === AgentEventType.ToolCalled &&
+        event.toolCall.toolCallId === "call-publish-once",
+    ).length,
+    1,
+  );
+  await agent.close();
 });
 
 test("AgentDock resumes three approval boundaries after recreating the runtime", async () => {
@@ -636,7 +871,8 @@ test("logical cancellation preserves activity from an earlier approval phase", a
   assert.ok(
     cancelled.messages.some(
       (message) =>
-        message.role === "tool" && message.content === "first complete",
+        message.role === "tool" &&
+        messageToolResults(message)[0]?.output === "first complete",
     ),
   );
 });
@@ -678,11 +914,11 @@ test("session reconstruction preserves structured output while waiting for a lat
   const toolMessage = session.messages.find(
     (message) =>
       message.role === "tool" &&
-      message.toolResults[0]?.toolCallId === "call-structured-first",
+      messageToolResults(message)[0]?.toolCallId === "call-structured-first",
   );
 
   assert.equal(waiting.status, "waiting_for_approval");
-  assert.deepEqual(toolMessage.toolResults[0].output, {
+  assert.deepEqual(messageToolResults(toolMessage)[0].output, {
     city: "Lahore",
     forecast: "sunny",
   });

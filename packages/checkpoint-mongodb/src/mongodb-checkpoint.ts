@@ -19,6 +19,21 @@ export class MongoDBCheckpoint implements CheckpointAdapter {
 
   constructor(options: MongoDBCheckpointOptions) {
     assertNonEmptyString(options?.connectionString, "connectionString");
+    for (const [name, value] of [
+      ["database", options.database],
+      ["collection", options.collection],
+      ["writesCollection", options.writesCollection],
+    ] as const) {
+      if (value !== undefined) assertNonEmptyString(value, name);
+    }
+    if (
+      options.collection !== undefined &&
+      options.collection === options.writesCollection
+    ) {
+      throw new Error(
+        "MongoDBCheckpoint collection and writesCollection must be different.",
+      );
+    }
     this.client = new MongoClient(options.connectionString);
     this.saver = new MongoDBSaver({
       client: this.client,

@@ -42,6 +42,9 @@ export function assertDockOptions(
   ) {
     throw new Error("AgentDock coordinator must implement acquire().");
   }
+  if (options.middleware !== undefined && !Array.isArray(options.middleware)) {
+    throw new Error("AgentDock middleware must be an array.");
+  }
   if (options.checkpoint !== undefined && options.checkpointer !== undefined) {
     throw new Error(
       "AgentDock checkpoint and checkpointer options cannot be used together.",

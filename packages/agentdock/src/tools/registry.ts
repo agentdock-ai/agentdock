@@ -63,6 +63,22 @@ const JSON_SCHEMA_TYPES = new Set([
   "string",
 ]);
 
+const SUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "$schema",
+  "title",
+  "description",
+  "type",
+  "properties",
+  "required",
+  "additionalProperties",
+  "items",
+  "enum",
+  "const",
+  "oneOf",
+  "anyOf",
+  "allOf",
+]);
+
 function normalizeTool(tool: unknown): Tool {
   if (!isRecord(tool)) throw new Error("Tool must be an object.");
 
@@ -134,6 +150,14 @@ function validateSchemaNode(
     throw new Error(
       `Tool parameters contain an invalid JSON schema at ${path}: ${toolName}`,
     );
+  }
+
+  for (const key of Object.keys(value)) {
+    if (!SUPPORTED_SCHEMA_KEYWORDS.has(key)) {
+      throw new Error(
+        `Tool parameters use unsupported JSON schema keyword ${key} at ${path}: ${toolName}`,
+      );
+    }
   }
 
   if (
@@ -237,11 +261,15 @@ function cloneTool(tool: Tool): Tool {
 }
 
 function validateInputNode(
-  schema: Record<string, unknown>,
+  schema: Record<string, unknown> | boolean,
   value: unknown,
   path: string,
   toolName: string,
 ): void {
+  if (schema === true) return;
+  if (schema === false) {
+    throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
+  }
   if (schema.const !== undefined && !sameJson(schema.const, value)) {
     throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
   }
@@ -257,7 +285,9 @@ function validateInputNode(
     if (!Array.isArray(alternatives)) continue;
     const matches = alternatives.filter((alternative) => {
       try {
-        if (!isRecord(alternative)) return false;
+        if (typeof alternative !== "boolean" && !isRecord(alternative)) {
+          return false;
+        }
         validateInputNode(alternative, value, path, toolName);
         return true;
       } catch {
@@ -301,7 +331,10 @@ function validateInputNode(
             `Unexpected input ${path}.${property} for tool ${toolName}.`,
           );
         }
-        if (isRecord(schema.additionalProperties)) {
+        if (
+          typeof schema.additionalProperties === "boolean" ||
+          isRecord(schema.additionalProperties)
+        ) {
           validateInputNode(
             schema.additionalProperties,
             propertyValue,
@@ -311,7 +344,7 @@ function validateInputNode(
         }
         continue;
       }
-      if (isRecord(propertySchema)) {
+      if (typeof propertySchema === "boolean" || isRecord(propertySchema)) {
         validateInputNode(
           propertySchema,
           propertyValue,
@@ -326,14 +359,10 @@ function validateInputNode(
     if (!Array.isArray(value)) {
       throw new Error(`Invalid input at ${path} for tool ${toolName}.`);
     }
-    if (isRecord(schema.items)) {
+    const items = schema.items;
+    if (typeof items === "boolean" || isRecord(items)) {
       value.forEach((item, index) =>
-        validateInputNode(
-          schema.items as Record<string, unknown>,
-          item,
-          `${path}[${index}]`,
-          toolName,
-        ),
+        validateInputNode(items, item, `${path}[${index}]`, toolName),
       );
     }
   }

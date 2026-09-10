@@ -8,6 +8,13 @@ export type JsonObject = { [key: string]: JsonValue };
 /** JSON Schema data supplied to a frontend or transport consumer. */
 export type JsonSchema = boolean | { [key: string]: JsonValue };
 
+export class JsonValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JsonValidationError";
+  }
+}
+
 export function cloneJsonValue(value: unknown, label = "value"): JsonValue {
   assertJsonValue(value, label);
   return clone(value);
@@ -15,9 +22,19 @@ export function cloneJsonValue(value: unknown, label = "value"): JsonValue {
 
 export function cloneJsonObject(value: unknown, label = "object"): JsonObject {
   if (!isJsonObject(value)) {
-    throw new Error(`${label} must be a JSON object.`);
+    throw new JsonValidationError(`${label} must be a JSON object.`);
   }
   return cloneJsonValue(value, label) as JsonObject;
+}
+
+export function cloneJsonSchema(value: unknown, label = "schema"): JsonSchema {
+  if (typeof value === "boolean") return value;
+  if (!isJsonObject(value)) {
+    throw new JsonValidationError(
+      `${label} must be a JSON Schema object or boolean.`,
+    );
+  }
+  return cloneJsonValue(value, label) as JsonSchema;
 }
 
 export function assertJsonValue(
@@ -45,22 +62,52 @@ function validateJsonValue(
   if (typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number") {
     if (Number.isFinite(value)) return;
-    throw new Error(`${path} must contain only finite JSON numbers.`);
+    throw new JsonValidationError(
+      `${path} must contain only finite JSON numbers.`,
+    );
   }
   if (typeof value !== "object") {
-    throw new Error(`${path} is not JSON-serializable.`);
+    throw new JsonValidationError(`${path} is not JSON-serializable.`);
   }
   if (seen.has(value))
-    throw new Error(`${path} contains a circular reference.`);
+    throw new JsonValidationError(`${path} contains a circular reference.`);
   seen.add(value);
 
   if (Array.isArray(value)) {
-    value.forEach((item, index) =>
-      validateJsonValue(item, `${path}[${index}]`, seen),
-    );
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value)) {
+        throw new JsonValidationError(
+          `${path}[${index}] is a sparse array entry.`,
+        );
+      }
+      validateJsonValue(value[index], `${path}[${index}]`, seen);
+    }
+    for (const key of Object.keys(value)) {
+      if (!isArrayIndexKey(key)) {
+        throw new JsonValidationError(
+          `${path}.${key} is not a JSON array entry.`,
+        );
+      }
+    }
+    const symbols = Object.getOwnPropertySymbols(value);
+    if (symbols.length > 0) {
+      const symbol = symbols[0];
+      throw new JsonValidationError(
+        `${path}[${symbol.toString()}] is not JSON-serializable.`,
+      );
+    }
   } else {
     if (Object.getPrototypeOf(value) !== Object.prototype) {
-      throw new Error(`${path} must contain only JSON objects and arrays.`);
+      throw new JsonValidationError(
+        `${path} must contain only JSON objects and arrays.`,
+      );
+    }
+    const symbols = Object.getOwnPropertySymbols(value);
+    if (symbols.length > 0) {
+      const symbol = symbols[0];
+      throw new JsonValidationError(
+        `${path}[${symbol.toString()}] is not JSON-serializable.`,
+      );
     }
     for (const [key, item] of Object.entries(value)) {
       validateJsonValue(item, `${path}.${key}`, seen);
@@ -68,6 +115,16 @@ function validateJsonValue(
   }
 
   seen.delete(value);
+}
+
+function isArrayIndexKey(key: string): boolean {
+  const index = Number(key);
+  return (
+    Number.isSafeInteger(index) &&
+    index >= 0 &&
+    index < 2 ** 32 - 1 &&
+    String(index) === key
+  );
 }
 
 function clone(value: JsonValue): JsonValue {

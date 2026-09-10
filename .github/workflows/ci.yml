@@ -44,7 +44,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: redis:7
+        image: redis/redis-stack-server:7.4.0-v8
         ports:
           - 6379:6379
         options: >-
@@ -65,3 +65,4 @@ jobs:
           AGENTDOCK_TEST_POSTGRES_URL: postgresql://agentdock:agentdock@localhost:5432/agentdock
           AGENTDOCK_TEST_MONGODB_URL: mongodb://localhost:27017
           AGENTDOCK_TEST_REDIS_URL: redis://localhost:6379
+          AGENTDOCK_REQUIRE_SERVICES: "1"

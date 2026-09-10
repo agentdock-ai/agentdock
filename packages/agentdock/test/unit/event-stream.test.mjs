@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { AgentEventType } from "../../src/agent/events.js";
+import {
+  AGENT_EVENT_PROTOCOL_VERSION,
+  AgentEventType,
+} from "../../src/agent/events.js";
 import { AgentEventStream } from "../../src/agent/workflows/event-stream.js";
 
 test("AgentEventStream adds ordered event metadata and closes cleanly", async () => {
@@ -14,6 +17,7 @@ test("AgentEventStream adds ordered event metadata and closes cleanly", async ()
 
   const event = (await pending).value;
   assert.equal(event.type, AgentEventType.RunStarted);
+  assert.equal(event.protocolVersion, AGENT_EVENT_PROTOCOL_VERSION);
   assert.equal(event.runId, "run-stream");
   assert.equal(event.sessionId, "");
   assert.equal(event.logicalSequence, 1);

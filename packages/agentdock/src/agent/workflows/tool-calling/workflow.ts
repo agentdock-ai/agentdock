@@ -11,11 +11,18 @@ import {
   createAgent,
   humanInTheLoopMiddleware,
   modelCallLimitMiddleware,
+  type AnyAgentMiddleware,
   type InterruptOnConfig,
   type ToolCallRequest,
 } from "langchain";
 import { z } from "zod";
-import { cloneJsonObject, cloneJsonValue } from "@agentdock/contracts";
+import {
+  cloneContentParts,
+  cloneJsonObject,
+  cloneJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from "@agentdock/contracts";
 import {
   AgentEventType,
   type AgentEventInput,
@@ -38,7 +45,10 @@ import type {
   ToolErrorRecord,
   ToolResultRecord,
 } from "../../types.js";
-import type { ToolRegistry } from "../../../tools/registry.js";
+import {
+  validateToolInput,
+  type ToolRegistry,
+} from "../../../tools/registry.js";
 import { AgentEventStream } from "../event-stream.js";
 import {
   findFinalContent,
@@ -56,15 +66,21 @@ import {
   toToolCallRecord,
 } from "./message-adapter.js";
 import {
-  readApprovalRequestsFromCheckpoint,
-  readApprovalRequestsFromPayload,
+  readApprovalInterruptFromCheckpoint,
+  readApprovalInterruptFromPayload,
+  type PendingApprovalInterrupt,
 } from "./interrupts.js";
 import {
   authorizeToolCall,
   createToolCallingTools,
   type ToolOutcomes,
 } from "./tools.js";
-import { errorMessage, isRecord, messageText } from "../../value.js";
+import {
+  errorMessage,
+  isRecord,
+  messageContentParts,
+  messageText,
+} from "../../value.js";
 import { createThreadId } from "../../coordinator.js";
 import type {
   AgentWorkflow,
@@ -74,10 +90,38 @@ import type {
 
 const AGENT_STATE_SCHEMA = z.object({
   agentdockRunId: z.string().optional(),
-  agentdockRunSnapshot: z.unknown().optional(),
-  agentdockToolRecords: z.unknown().optional(),
-  agentdockEventSequence: z.number().optional(),
+  agentdockRunStartIndex: z.number().int().nonnegative().optional(),
+  agentdockRunSnapshot: strictJsonObjectSchema(
+    "AgentDock run snapshot",
+  ).optional(),
+  agentdockToolRecords: strictJsonArraySchema(
+    "AgentDock tool records",
+  ).optional(),
+  agentdockEventSequence: z.number().int().nonnegative().optional(),
 });
+
+function strictJsonObjectSchema(label: string) {
+  return z.custom<JsonObject>((value) => {
+    try {
+      cloneJsonObject(value, label);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function strictJsonArraySchema(label: string) {
+  return z.custom<JsonValue[]>((value) => {
+    try {
+      if (!Array.isArray(value)) return false;
+      cloneJsonValue(value, label);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
 
 const EVENT_SEQUENCE_CHECKPOINT_STRIDE = 1_000_000;
 
@@ -85,6 +129,7 @@ export interface ToolCallingWorkflowOptions {
   model: BaseChatModel;
   registry: ToolRegistry;
   checkpointer: BaseCheckpointSaver;
+  middleware?: readonly AnyAgentMiddleware[];
 }
 
 interface ExecutionState {
@@ -96,11 +141,13 @@ interface ExecutionState {
   toolResults: ToolResultRecord[];
   toolErrors: ToolErrorRecord[];
   stepNumbers: Set<number>;
-  approvalRequests: ToolApprovalRequest[];
-  textByMessageId: Map<string, string>;
+  approvalInterrupt: PendingApprovalInterrupt | null;
+  textByMessagePart: Map<string, string>;
+  emittedPartFingerprints: Set<string>;
   startedMessageIds: Set<string>;
   assistantMessageIds: string[];
   anonymousMessageIds: Map<string, string>;
+  persistedAssistantMessageIds: Set<string>;
   usageMessageIds: Set<string>;
   usage?: AgentUsage;
 }
@@ -114,11 +161,13 @@ export class ToolCallingWorkflow implements AgentWorkflow {
   private readonly model: BaseChatModel;
   private readonly registry: ToolRegistry;
   private readonly checkpointer: BaseCheckpointSaver;
+  private readonly middleware: readonly AnyAgentMiddleware[];
 
   constructor(options: ToolCallingWorkflowOptions) {
     this.model = options.model;
     this.registry = options.registry;
     this.checkpointer = options.checkpointer;
+    this.middleware = options.middleware ?? [];
   }
 
   start(input: WorkflowStartInput): StreamAgentResult {
@@ -155,13 +204,13 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     return readStateRunId(state);
   }
 
-  async getPendingApprovals(
+  async getPendingApprovalInterrupt(
     sessionId: string,
     options: Pick<
       RunAgentOptions,
       "systemPrompt" | "maxSteps" | "sessionNamespace"
     > = {},
-  ): Promise<ToolApprovalRequest[]> {
+  ): Promise<PendingApprovalInterrupt | null> {
     const agent = this.createAgent(options, new Map());
     const state = await agent.getState(
       this.runConfig(sessionId, {}, undefined, options.sessionNamespace),
@@ -173,7 +222,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       options.sessionNamespace,
     );
     const checkpoint = await this.checkpointer.getTuple(config);
-    return readApprovalRequestsFromCheckpoint(
+    return readApprovalInterruptFromCheckpoint(
       checkpoint ? { pendingWrites: checkpoint.pendingWrites } : state,
       collectLatestToolCalls(readStateMessages(state)),
     );
@@ -256,6 +305,20 @@ export class ToolCallingWorkflow implements AgentWorkflow {
 
     try {
       const initialGraphState = await agent.getState(config);
+      const initialMessages = readStateMessages(initialGraphState);
+      const runStartIndex =
+        mode === "start"
+          ? initialMessages.length
+          : readStateRunStartIndex(initialGraphState, input.runId);
+      if (runStartIndex === null) {
+        throw new Error(
+          "Agent checkpoint is missing the logical-run message boundary.",
+        );
+      }
+      const initialRunMessages = initialMessages.slice(runStartIndex);
+      seedExecutionState(state, initialRunMessages);
+      const initialAssistantCount =
+        initialRunMessages.filter(isAIMessage).length;
       eventStream.setLogicalSequenceStart(
         readStateEventSequence(initialGraphState, input.runId),
       );
@@ -266,10 +329,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         );
         emit({
           type: AgentEventType.InterruptResolved,
-          interruptId: createApprovalInterruptId(
-            input.runId,
-            input.approvals.map((approval) => approval.approvalId),
-          ),
+          interruptId: input.interruptId,
           decisions: input.approvals.map((approval) => ({
             approvalId: approval.approvalId,
             approved: approval.approved,
@@ -284,6 +344,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
               {
                 messages: [{ role: "user", content: input.userPrompt }],
                 agentdockRunId: input.runId,
+                agentdockRunStartIndex: runStartIndex,
               },
               { ...config, streamMode: ["messages", "updates"] },
             )
@@ -298,7 +359,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         this.consumeStreamChunk(chunk, state, emit);
 
       const graphState = await agent.getState(config);
-      const graphMessages = readStateMessages(graphState);
+      const graphMessages = readStateMessages(graphState).slice(runStartIndex);
       const currentToolCalls = mergeById(
         collectToolCalls(graphMessages),
         state.resolvedToolCalls,
@@ -320,20 +381,25 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         createPersistedToolRecordsFromMessages(messages),
       );
       const content = findFinalContent(messages);
-      emitCompletedMessages(messages, state, emit);
+      emitCompletedMessages(messages, state, emit, initialAssistantCount);
       if (stateHasInterrupt(graphState)) {
-        const approvalRequests = await this.getPendingApprovals(
-          input.sessionId,
-          input.options,
-        );
+        const approvalInterrupt =
+          state.approvalInterrupt ??
+          (await this.getPendingApprovalInterrupt(
+            input.sessionId,
+            input.options,
+          ));
+        if (!approvalInterrupt) {
+          throw new Error(
+            "Agent checkpoint has an unresolved interrupt without actions.",
+          );
+        }
+        const approvalRequests = approvalInterrupt.requests;
         emit({
           type: AgentEventType.InterruptRequired,
           interrupt: {
             kind: "tool-approval",
-            interruptId: createApprovalInterruptId(
-              input.runId,
-              approvalRequests.map((approval) => approval.approvalId),
-            ),
+            interruptId: approvalInterrupt.interruptId,
             prompt: "Tool execution requires approval.",
             actions: approvalRequests.map((approval) => ({
               id: approval.approvalId,
@@ -366,7 +432,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       emit({
         type: AgentEventType.RunCompleted,
         finishReason: "stop",
-        content: [{ type: "text", text: content }],
+        content,
         ...(state.usage ? { usage: state.usage } : {}),
       });
       const result = createResult(
@@ -402,9 +468,35 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           eventStream.getLogicalSequence(),
         );
       }
+      if (
+        isModelCallLimitError(error) &&
+        input.options.maxSteps !== undefined
+      ) {
+        const limit = {
+          kind: "model_calls",
+          limit: input.options.maxSteps,
+          used: input.options.maxSteps,
+        };
+        emit({
+          type: AgentEventType.RunFailed,
+          code: "agent_step_limit",
+          message,
+          limit,
+        });
+        return this.persistFailedResult(
+          agent,
+          config,
+          input,
+          state,
+          "failed",
+          message,
+          eventStream.getLogicalSequence(),
+          { errorCode: "agent_step_limit", finishReason: "limit", limit },
+        );
+      }
       emit({
         type: AgentEventType.RunFailed,
-        code: "agent_execution_failed",
+        code: readErrorCode(error) ?? "agent_execution_failed",
         message,
       });
       return this.persistFailedResult(
@@ -415,6 +507,10 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         "failed",
         message,
         eventStream.getLogicalSequence(),
+        {
+          errorCode: readErrorCode(error) ?? "agent_execution_failed",
+          finishReason: "error",
+        },
       );
     }
   }
@@ -450,13 +546,21 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     status: "cancelled" | "failed",
     error: string,
     eventSequence: number,
+    terminal: Pick<AgentRunResult, "errorCode" | "finishReason" | "limit"> = {},
   ): Promise<AgentRunResult> {
-    const current = failedResult(input, state, status, error);
+    const current = failedResult(input, state, status, error, terminal);
     try {
       const graphState = await agent.getState(config);
       const result = mergeRunResults(
         readRunSnapshot(graphState),
-        failedResultFromGraphState(input, state, graphState, status, error),
+        failedResultFromGraphState(
+          input,
+          state,
+          graphState,
+          status,
+          error,
+          terminal,
+        ),
       );
       const records = mergeToolRecords(
         readStateToolRecords(graphState),
@@ -520,7 +624,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     options: Pick<RunAgentOptions, "maxSteps" | "authorizationTimeout">,
     ctx: AgentContext,
   ) {
-    const middleware = [];
+    const middleware: AnyAgentMiddleware[] = [];
     const interruptOn = this.createApprovalInterrupts(
       options.authorizationTimeout,
       ctx,
@@ -534,11 +638,12 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       middleware.push(
         modelCallLimitMiddleware({
           runLimit: options.maxSteps,
-          exitBehavior: "end",
+          exitBehavior: "error",
         }),
       );
     }
 
+    middleware.push(...this.middleware);
     return middleware;
   }
 
@@ -555,6 +660,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         allowedDecisions: ["approve", "reject"],
         when: async (request: ToolCallRequest) => {
           const toolCall = toToolCallRecord(request.toolCall);
+          try {
+            validateToolInput(tool.parameters, toolCall.input, tool.name);
+          } catch {
+            return false;
+          }
           const authorization = await authorizeToolCall(
             tool,
             toolCall,
@@ -648,6 +758,19 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     emit: (event: AgentEventInput) => void,
     isChunk: boolean,
   ): void {
+    const finalizedToolCalls = isChunk
+      ? []
+      : (message.tool_calls ?? []).map(toToolCallRecord);
+    if (
+      message.id &&
+      state.persistedAssistantMessageIds.has(message.id) &&
+      finalizedToolCalls.length > 0 &&
+      finalizedToolCalls.every((toolCall) =>
+        state.toolCallsById.has(toolCall.toolCallId),
+      )
+    ) {
+      return;
+    }
     const messageId = message.id ?? getAnonymousMessageId(state, metadata);
     if (!state.assistantMessageIds.includes(messageId))
       state.assistantMessageIds.push(messageId);
@@ -660,29 +783,38 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       state.usage = mergeUsage(state.usage, usage);
       emit({ type: AgentEventType.UsageUpdated, usage: state.usage });
     }
-    const text = messageText(message.content);
-    const delta = isChunk
-      ? getChunkDelta(state, messageId, text)
-      : getMessageDelta(state, messageId, text);
-    if (delta) {
-      if (!state.startedMessageIds.has(messageId)) {
-        state.startedMessageIds.add(messageId);
+    const partIndexes = new Map<string, number>();
+    for (const part of messageContentParts(message.content)) {
+      const partIndex = partIndexes.get(part.type) ?? 0;
+      partIndexes.set(part.type, partIndex + 1);
+      if (part.type === "text" || part.type === "reasoning") {
+        const key = `${messageId}:${part.type}:${partIndex}`;
+        const delta = isChunk
+          ? getChunkDelta(state, key, part.text)
+          : getMessageDelta(state, key, part.text);
+        if (!delta) continue;
+        ensureMessageStarted(state, messageId, emit);
         emit({
-          type: AgentEventType.MessageStarted,
+          type: AgentEventType.MessagePartDelta,
           messageId,
-          role: "assistant",
+          part: { type: part.type, text: delta },
         });
+        continue;
       }
+      const fingerprint = `${messageId}:${JSON.stringify(part)}`;
+      if (!isChunk && state.emittedPartFingerprints.has(fingerprint)) continue;
+      state.emittedPartFingerprints.add(fingerprint);
+      ensureMessageStarted(state, messageId, emit);
       emit({
         type: AgentEventType.MessagePartDelta,
         messageId,
-        part: { type: "text", text: delta },
+        part,
       });
     }
     if (!isChunk) {
-      const toolCalls = (message.tool_calls ?? []).map(toToolCallRecord);
-      if (toolCalls.length > 0) state.latestToolCalls = toolCalls;
-      for (const toolCall of toolCalls) {
+      if (finalizedToolCalls.length > 0)
+        state.latestToolCalls = finalizedToolCalls;
+      for (const toolCall of finalizedToolCalls) {
         if (this.recordToolCall(toolCall, state))
           emit({ type: AgentEventType.ToolCalled, toolCall });
       }
@@ -708,12 +840,12 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     }
 
     if (!("__interrupt__" in payload)) return;
-    const approvals = readApprovalRequestsFromPayload(
+    const approvalInterrupt = readApprovalInterruptFromPayload(
       payload,
       state.latestToolCalls,
     );
-    if (approvals.length === 0) return;
-    state.approvalRequests = approvals;
+    if (!approvalInterrupt) return;
+    state.approvalInterrupt = approvalInterrupt;
   }
 
   private recordToolCall(
@@ -745,11 +877,13 @@ function createExecutionState(): ExecutionState {
     toolResults: [],
     toolErrors: [],
     stepNumbers: new Set(),
-    approvalRequests: [],
-    textByMessageId: new Map(),
+    approvalInterrupt: null,
+    textByMessagePart: new Map(),
+    emittedPartFingerprints: new Set(),
     startedMessageIds: new Set(),
     assistantMessageIds: [],
     anonymousMessageIds: new Map(),
+    persistedAssistantMessageIds: new Set(),
     usageMessageIds: new Set(),
     usage: undefined,
   };
@@ -766,6 +900,47 @@ function getAnonymousMessageId(
   const id = `agentdock-assistant-${state.anonymousMessageIds.size + 1}`;
   state.anonymousMessageIds.set(key, id);
   return id;
+}
+
+function ensureMessageStarted(
+  state: ExecutionState,
+  messageId: string,
+  emit: (event: AgentEventInput) => void,
+): void {
+  if (state.startedMessageIds.has(messageId)) return;
+  state.startedMessageIds.add(messageId);
+  emit({
+    type: AgentEventType.MessageStarted,
+    messageId,
+    role: "assistant",
+  });
+}
+
+function seedExecutionState(
+  state: ExecutionState,
+  messages: ReturnType<typeof readStateMessages>,
+): void {
+  for (const toolCall of collectToolCalls(messages)) {
+    state.toolCallsById.set(toolCall.toolCallId, toolCall);
+  }
+  for (const message of messages) {
+    if (!isAIMessage(message)) continue;
+    if (message.id) state.persistedAssistantMessageIds.add(message.id);
+    const usage = readAgentUsage(
+      message.usage_metadata,
+      message.response_metadata,
+    );
+    if (usage) state.usage = mergeUsage(state.usage, usage);
+  }
+}
+
+function readStateRunStartIndex(state: unknown, runId: string): number | null {
+  if (readStateRunId(state) !== runId) return null;
+  if (!isRecord(state) || !isRecord(state.values)) return null;
+  const value = state.values.agentdockRunStartIndex;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
 }
 
 function normalizeStateMessages(state: unknown): Message[] {
@@ -805,8 +980,8 @@ function getMessageDelta(
   messageId: string,
   text: string,
 ): string {
-  const previous = state.textByMessageId.get(messageId) ?? "";
-  state.textByMessageId.set(messageId, text);
+  const previous = state.textByMessagePart.get(messageId) ?? "";
+  state.textByMessagePart.set(messageId, text);
   if (text.startsWith(previous)) return text.slice(previous.length);
   if (text === previous) return "";
   return text;
@@ -818,8 +993,8 @@ function getChunkDelta(
   text: string,
 ): string {
   if (text) {
-    const previous = state.textByMessageId.get(messageId) ?? "";
-    state.textByMessageId.set(messageId, previous + text);
+    const previous = state.textByMessagePart.get(messageId) ?? "";
+    state.textByMessagePart.set(messageId, previous + text);
   }
   return text;
 }
@@ -830,28 +1005,70 @@ function readAgentUsage(
 ): AgentUsage | null {
   const source =
     findUsageRecord(usageMetadata) ?? findUsageRecord(responseMetadata);
-  if (!source) return null;
+  const response = isRecord(responseMetadata) ? responseMetadata : null;
+  if (!source && !response) return null;
 
   const inputTokens = readUsageNumber(
-    source.input_tokens ?? source.inputTokens ?? source.prompt_tokens,
+    source?.input_tokens ?? source?.inputTokens ?? source?.prompt_tokens,
+  );
+  const inputDetails = isRecord(source?.input_token_details)
+    ? source.input_token_details
+    : isRecord(source?.inputTokenDetails)
+      ? source.inputTokenDetails
+      : null;
+  const cachedInputTokens = readUsageNumber(
+    source?.cached_input_tokens ??
+      source?.cachedInputTokens ??
+      inputDetails?.cache_read ??
+      inputDetails?.cached_tokens,
   );
   const outputTokens = readUsageNumber(
-    source.output_tokens ?? source.outputTokens ?? source.completion_tokens,
+    source?.output_tokens ?? source?.outputTokens ?? source?.completion_tokens,
+  );
+  const outputDetails = isRecord(source?.output_token_details)
+    ? source.output_token_details
+    : isRecord(source?.outputTokenDetails)
+      ? source.outputTokenDetails
+      : null;
+  const reasoningTokens = readUsageNumber(
+    source?.reasoning_tokens ??
+      source?.reasoningTokens ??
+      outputDetails?.reasoning ??
+      outputDetails?.reasoning_tokens,
   );
   const totalTokens = readUsageNumber(
-    source.total_tokens ?? source.totalTokens,
+    source?.total_tokens ?? source?.totalTokens,
+  );
+  const costUsd = readUsageNumber(
+    source?.cost_usd ?? source?.costUsd ?? response?.cost_usd,
+  );
+  const model = readUsageString(
+    response?.model_name ?? response?.model ?? source?.model,
+  );
+  const provider = readUsageString(
+    response?.model_provider ?? response?.provider ?? source?.provider,
   );
   if (
     inputTokens === undefined &&
+    cachedInputTokens === undefined &&
     outputTokens === undefined &&
-    totalTokens === undefined
+    reasoningTokens === undefined &&
+    totalTokens === undefined &&
+    costUsd === undefined &&
+    model === undefined &&
+    provider === undefined
   ) {
     return null;
   }
   return {
     ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+    ...(model === undefined ? {} : { model }),
+    ...(provider === undefined ? {} : { provider }),
   };
 }
 
@@ -869,6 +1086,10 @@ function readUsageNumber(value: unknown): number | undefined {
     : undefined;
 }
 
+function readUsageString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function mergeUsage(
   previous: AgentUsage | undefined,
   current: AgentUsage,
@@ -881,14 +1102,32 @@ function mergeUsage(
     previous?.outputTokens,
     current.outputTokens,
   );
+  const cachedInputTokens = addUsageNumber(
+    previous?.cachedInputTokens,
+    current.cachedInputTokens,
+  );
+  const reasoningTokens = addUsageNumber(
+    previous?.reasoningTokens,
+    current.reasoningTokens,
+  );
   const totalTokens = addUsageNumber(
     previous?.totalTokens,
     current.totalTokens,
   );
+  const costUsd = addUsageNumber(previous?.costUsd, current.costUsd);
   return {
     ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+    ...((current.model ?? previous?.model)
+      ? { model: current.model ?? previous?.model }
+      : {}),
+    ...((current.provider ?? previous?.provider)
+      ? { provider: current.provider ?? previous?.provider }
+      : {}),
   };
 }
 
@@ -901,25 +1140,31 @@ function addUsageNumber(
   return previous + current;
 }
 
-function createApprovalInterruptId(
-  runId: string,
-  approvalIds: readonly string[],
-): string {
-  return `approval-${runId}-${approvalIds.join("-")}`;
+function isModelCallLimitError(value: unknown): value is Error {
+  return (
+    value instanceof Error && value.name === "ModelCallLimitMiddlewareError"
+  );
+}
+
+function readErrorCode(value: unknown): string | undefined {
+  return isRecord(value) && typeof value.code === "string"
+    ? value.code
+    : undefined;
 }
 
 function emitCompletedMessages(
   messages: Message[],
   state: ExecutionState,
   emit: (event: AgentEventInput) => void,
+  skipAssistantCount: number,
 ): void {
   let assistantIndex = 0;
   for (const message of messages) {
     if (message.role !== "assistant") continue;
-    const content: ContentPart[] = [];
-    if (message.content) content.push({ type: "text", text: message.content });
-    for (const toolCall of message.toolCalls ?? [])
-      content.push({ type: "tool-call", toolCall });
+    if (assistantIndex < skipAssistantCount) {
+      assistantIndex += 1;
+      continue;
+    }
     emit({
       type: AgentEventType.MessageCompleted,
       messageId:
@@ -927,7 +1172,7 @@ function emitCompletedMessages(
         state.assistantMessageIds[assistantIndex] ??
         `assistant-${assistantIndex}`,
       role: "assistant",
-      content,
+      content: message.content,
     });
     assistantIndex += 1;
   }
@@ -937,7 +1182,7 @@ function createResult(
   input: WorkflowStartInput | WorkflowResumeInput,
   state: ExecutionState,
   status: "completed" | "waiting_for_approval",
-  content: string,
+  content: ContentPart[],
   messages: Message[],
   approvalRequests: ToolApprovalRequest[],
   currentToolCalls: ToolCallRecord[],
@@ -958,6 +1203,8 @@ function createResult(
       state.stepNumbers.size,
       countLogicalSteps(messages),
     ),
+    ...(status === "completed" ? { finishReason: "stop" } : {}),
+    ...(state.usage ? { usage: state.usage } : {}),
   };
 }
 
@@ -966,12 +1213,13 @@ function failedResult(
   state: ExecutionState,
   status: "cancelled" | "failed",
   error: string,
+  terminal: Pick<AgentRunResult, "errorCode" | "finishReason" | "limit"> = {},
 ): AgentRunResult {
   return {
     runId: input.runId,
     sessionId: input.sessionId,
     status,
-    content: "",
+    content: [],
     messages: [],
     toolCalls: state.toolCalls,
     toolResults: state.toolResults,
@@ -979,6 +1227,13 @@ function failedResult(
     approvalRequests: [],
     stepsCompleted: state.stepNumbers.size,
     error,
+    errorCode:
+      terminal.errorCode ??
+      (status === "cancelled" ? "agent_cancelled" : "agent_execution_failed"),
+    ...(status === "cancelled" ? { cancellationReason: error } : {}),
+    finishReason:
+      terminal.finishReason ?? (status === "cancelled" ? "cancelled" : "error"),
+    ...(terminal.limit ? { limit: terminal.limit } : {}),
   };
 }
 
@@ -988,8 +1243,10 @@ function failedResultFromGraphState(
   graphState: unknown,
   status: "cancelled" | "failed",
   error: string,
+  terminal: Pick<AgentRunResult, "errorCode" | "finishReason" | "limit"> = {},
 ): AgentRunResult {
-  const graphMessages = readStateMessages(graphState);
+  const runStartIndex = readStateRunStartIndex(graphState, input.runId) ?? 0;
+  const graphMessages = readStateMessages(graphState).slice(runStartIndex);
   const toolCalls = mergeById(
     collectToolCalls(graphMessages),
     mergeById(state.resolvedToolCalls, state.toolCalls),
@@ -1021,6 +1278,13 @@ function failedResultFromGraphState(
       countLogicalSteps(messages),
     ),
     error,
+    errorCode:
+      terminal.errorCode ??
+      (status === "cancelled" ? "agent_cancelled" : "agent_execution_failed"),
+    ...(status === "cancelled" ? { cancellationReason: error } : {}),
+    finishReason:
+      terminal.finishReason ?? (status === "cancelled" ? "cancelled" : "error"),
+    ...(terminal.limit ? { limit: terminal.limit } : {}),
   };
 }
 
@@ -1055,38 +1319,40 @@ function createPersistedToolRecordsFromMessages(
 ): PersistedToolRecord[] {
   return messages.flatMap((message) => {
     if (message.role !== "tool") return [];
-    return message.toolResults.map((result) => {
-      const validationFailure =
-        typeof result.output === "string" &&
-        result.output.includes(
-          "Received tool input did not match expected schema",
-        );
-      return {
-        toolCall: {
-          toolCallId: result.toolCallId,
-          name: result.name,
-          input: result.input,
-        },
-        result,
-        ...(result.isError
-          ? {
-              error: {
-                toolCallId: result.toolCallId,
-                name: result.name,
-                input: result.input,
-                error: validationFailure
-                  ? "Tool input failed validation."
-                  : typeof result.output === "string"
-                    ? result.output
-                    : "Tool execution failed.",
-                code: validationFailure
-                  ? "tool_input_invalid"
-                  : "tool_execution_failed",
-              },
-            }
-          : {}),
-      };
-    });
+    return message.content
+      .flatMap((part) => (part.type === "tool-result" ? [part.result] : []))
+      .map((result) => {
+        const validationFailure =
+          typeof result.output === "string" &&
+          result.output.includes(
+            "Received tool input did not match expected schema",
+          );
+        return {
+          toolCall: {
+            toolCallId: result.toolCallId,
+            name: result.name,
+            input: result.input,
+          },
+          result,
+          ...(result.isError
+            ? {
+                error: {
+                  toolCallId: result.toolCallId,
+                  name: result.name,
+                  input: result.input,
+                  error: validationFailure
+                    ? "Tool input failed validation."
+                    : typeof result.output === "string"
+                      ? result.output
+                      : "Tool execution failed.",
+                  code: validationFailure
+                    ? "tool_input_invalid"
+                    : "tool_execution_failed",
+                },
+              }
+            : {}),
+        };
+      });
   });
 }
 
@@ -1097,20 +1363,37 @@ function readRunSnapshot(state: unknown): AgentRunResult | null {
   const runId = snapshot.runId;
   const sessionId = snapshot.sessionId;
   const status = snapshot.status;
-  const content = snapshot.content;
+  const content = readContentParts(
+    snapshot.content,
+    "AgentDock result content",
+  );
   const stepsCompleted = snapshot.stepsCompleted;
+  const usage =
+    snapshot.usage === undefined
+      ? undefined
+      : readAgentUsage(snapshot.usage, undefined);
+  const limit =
+    snapshot.limit === undefined ? undefined : readLimitInfo(snapshot.limit);
   if (
     typeof runId !== "string" ||
     typeof sessionId !== "string" ||
     !isRunStatus(status) ||
-    typeof content !== "string" ||
+    content === null ||
     typeof stepsCompleted !== "number" ||
     !Number.isSafeInteger(stepsCompleted) ||
     !Array.isArray(snapshot.messages) ||
     !Array.isArray(snapshot.toolCalls) ||
     !Array.isArray(snapshot.toolResults) ||
     !Array.isArray(snapshot.toolErrors) ||
-    !Array.isArray(snapshot.approvalRequests)
+    !Array.isArray(snapshot.approvalRequests) ||
+    (snapshot.usage !== undefined && usage === null) ||
+    (snapshot.limit !== undefined && limit === null) ||
+    (snapshot.finishReason !== undefined &&
+      typeof snapshot.finishReason !== "string") ||
+    (snapshot.errorCode !== undefined &&
+      typeof snapshot.errorCode !== "string") ||
+    (snapshot.cancellationReason !== undefined &&
+      typeof snapshot.cancellationReason !== "string")
   ) {
     return null;
   }
@@ -1150,6 +1433,30 @@ function readRunSnapshot(state: unknown): AgentRunResult | null {
     ),
     stepsCompleted,
     ...(typeof snapshot.error === "string" ? { error: snapshot.error } : {}),
+    ...(typeof snapshot.errorCode === "string"
+      ? { errorCode: snapshot.errorCode }
+      : {}),
+    ...(typeof snapshot.cancellationReason === "string"
+      ? { cancellationReason: snapshot.cancellationReason }
+      : {}),
+    ...(typeof snapshot.finishReason === "string"
+      ? { finishReason: snapshot.finishReason }
+      : {}),
+    ...(usage ? { usage } : {}),
+    ...(limit ? { limit } : {}),
+  };
+}
+
+function readLimitInfo(value: unknown): AgentRunResult["limit"] | null {
+  if (!isRecord(value) || typeof value.kind !== "string") return null;
+  const limit = readUsageNumber(value.limit);
+  const used = readUsageNumber(value.used);
+  if (value.limit !== undefined && limit === undefined) return null;
+  if (value.used !== undefined && used === undefined) return null;
+  return {
+    kind: value.kind,
+    ...(limit === undefined ? {} : { limit }),
+    ...(used === undefined ? {} : { used }),
   };
 }
 
@@ -1234,40 +1541,25 @@ function readToolError(value: unknown): ToolErrorRecord | null {
 
 function readMessage(value: unknown): Message | null {
   if (!isRecord(value) || typeof value.role !== "string") return null;
-  if (typeof value.content !== "string") return null;
+  const content = readContentParts(value.content, "AgentDock message content");
+  if (content === null) return null;
   const id = typeof value.id === "string" ? { id: value.id } : {};
-  if (value.role === "user" || value.role === "system") {
-    return { role: value.role, content: value.content, ...id };
-  }
-  if (value.role === "assistant") {
-    if (value.toolCalls === undefined) {
-      return { role: "assistant", content: value.content, ...id };
-    }
-    if (!Array.isArray(value.toolCalls)) return null;
-    const toolCalls = value.toolCalls.map(readToolCall);
-    if (toolCalls.some((toolCall) => toolCall === null)) return null;
-    return {
-      role: "assistant",
-      content: value.content,
-      toolCalls: toolCalls.filter(
-        (toolCall): toolCall is ToolCallRecord => toolCall !== null,
-      ),
-      ...id,
-    };
-  }
-  if (value.role === "tool" && Array.isArray(value.toolResults)) {
-    const toolResults = value.toolResults.map(readToolResult);
-    if (toolResults.some((result) => result === null)) return null;
-    return {
-      role: "tool",
-      content: value.content,
-      toolResults: toolResults.filter(
-        (result): result is ToolResultRecord => result !== null,
-      ),
-      ...id,
-    };
-  }
+  if (
+    value.role === "user" ||
+    value.role === "system" ||
+    value.role === "assistant" ||
+    value.role === "tool"
+  )
+    return { role: value.role, content, ...id };
   return null;
+}
+
+function readContentParts(value: unknown, label: string): ContentPart[] | null {
+  try {
+    return cloneContentParts(value, label);
+  } catch {
+    return null;
+  }
 }
 
 function readApprovalRequest(value: unknown): ToolApprovalRequest | null {
@@ -1306,7 +1598,7 @@ function mergeRunResults(
 
   return {
     ...current,
-    content: current.content || previous.content,
+    content: current.content.length > 0 ? current.content : previous.content,
     messages:
       current.messages.length > 0 ? current.messages : previous.messages,
     toolCalls: mergeById(previous.toolCalls, current.toolCalls),
@@ -1315,6 +1607,15 @@ function mergeRunResults(
     stepsCompleted: Math.max(previous.stepsCompleted, current.stepsCompleted),
     approvalRequests:
       current.status === "waiting_for_approval" ? current.approvalRequests : [],
+    ...(current.finishReason || previous.finishReason
+      ? { finishReason: current.finishReason ?? previous.finishReason }
+      : {}),
+    ...(current.usage || previous.usage
+      ? { usage: mergeUsage(previous.usage, current.usage ?? {}) }
+      : {}),
+    ...(current.limit || previous.limit
+      ? { limit: current.limit ?? previous.limit }
+      : {}),
   };
 }
 
