@@ -9,7 +9,7 @@ import { MongoDBCheckpoint } from "@agentdock/checkpoint-mongodb";
 import { PostgresCheckpoint } from "@agentdock/checkpoint-postgres";
 import { RedisCheckpoint } from "@agentdock/checkpoint-redis";
 import { SqliteCheckpoint } from "@agentdock/checkpoint-sqlite";
-import { AgentDock, ToolRegistry } from "../../src/index.js";
+import { AgentDock, ToolRegistry, createThreadId } from "../../src/index.js";
 
 const externalId = crypto.randomUUID().replaceAll("-", "");
 const requireExternalServices = process.env.AGENTDOCK_REQUIRE_SERVICES === "1";
@@ -223,7 +223,9 @@ for (const factory of adapterFactories) {
       );
       assert.equal(waiting.status, "waiting_for_approval");
       const checkpoint = await firstAdapter.saver.getTuple({
-        configurable: { thread_id: testId("approval-session") },
+        configurable: {
+          thread_id: createThreadId(testId("approval-session"), undefined),
+        },
       });
       assert.ok(checkpoint);
       assert.ok(checkpoint.pendingWrites.length > 0);

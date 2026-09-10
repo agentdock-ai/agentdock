@@ -131,6 +131,13 @@ function clone(value: JsonValue): JsonValue {
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(clone);
   const result: JsonObject = {};
-  for (const [key, item] of Object.entries(value)) result[key] = clone(item);
+  for (const [key, item] of Object.entries(value)) {
+    Object.defineProperty(result, key, {
+      value: clone(item),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
   return result;
 }

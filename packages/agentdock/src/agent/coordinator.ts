@@ -43,14 +43,14 @@ export function createSessionKey(
   sessionId: string,
   sessionNamespace: string | undefined,
 ): string {
-  return JSON.stringify([sessionNamespace ?? "default", sessionId]);
+  return encodeURIComponent(
+    JSON.stringify([sessionNamespace ?? null, sessionId]),
+  ).replace(/\*/g, "%2A");
 }
 
 export function createThreadId(
   sessionId: string,
   sessionNamespace: string | undefined,
 ): string {
-  return sessionNamespace === undefined
-    ? sessionId
-    : JSON.stringify([sessionNamespace, sessionId]);
+  return createSessionKey(sessionId, sessionNamespace);
 }

@@ -56,6 +56,7 @@ import {
   normalizeMessages,
   collectToolCalls,
   collectLatestToolCalls,
+  collectToolRecordsFromMessages,
   collectToolResults,
   readStateMessages,
   readStateRunId,
@@ -142,6 +143,7 @@ interface ExecutionState {
   toolErrors: ToolErrorRecord[];
   stepNumbers: Set<number>;
   approvalInterrupt: PendingApprovalInterrupt | null;
+  resolvedInterruptIds: Set<string>;
   textByMessagePart: Map<string, string>;
   emittedPartFingerprints: Set<string>;
   startedMessageIds: Set<string>;
@@ -324,6 +326,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       );
       emit({ type: AgentEventType.RunStarted });
       if (mode === "resume" && "approvals" in input) {
+        state.resolvedInterruptIds.add(input.interruptId);
         state.resolvedToolCalls.push(
           ...input.approvals.map((approval) => approval.toolCall),
         );
@@ -364,7 +367,10 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         collectToolCalls(graphMessages),
         state.resolvedToolCalls,
       );
-      const currentRecords = createPersistedToolRecords(state);
+      const currentRecords = mergeToolRecords(
+        collectToolRecordsFromMessages(graphMessages),
+        createPersistedToolRecords(state),
+      );
       const toolCallsById = new Map(
         currentToolCalls.map((toolCall) => [toolCall.toolCallId, toolCall]),
       );
@@ -377,23 +383,31 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       );
       const messageToolResults = collectToolResults(messages);
       const persistedRecords = mergeToolRecords(
-        currentRecords,
         createPersistedToolRecordsFromMessages(messages),
+        currentRecords,
       );
       const content = findFinalContent(messages);
       emitCompletedMessages(messages, state, emit, initialAssistantCount);
-      if (stateHasInterrupt(graphState)) {
-        const approvalInterrupt =
-          state.approvalInterrupt ??
-          (await this.getPendingApprovalInterrupt(
-            input.sessionId,
-            input.options,
-          ));
-        if (!approvalInterrupt) {
-          throw new Error(
-            "Agent checkpoint has an unresolved interrupt without actions.",
-          );
-        }
+      const graphHasInterrupt = stateHasInterrupt(
+        graphState,
+        state.resolvedInterruptIds,
+      );
+      const checkpointApprovalInterrupt = graphHasInterrupt
+        ? readApprovalInterruptFromCheckpoint(
+            graphState,
+            collectLatestToolCalls(graphMessages),
+            state.resolvedInterruptIds,
+          )
+        : null;
+      const approvalInterrupt = [
+        state.approvalInterrupt,
+        checkpointApprovalInterrupt,
+      ].find(
+        (candidate) =>
+          candidate !== null &&
+          !isResolvedApprovalInterrupt(candidate, state.resolvedToolCalls),
+      );
+      if (approvalInterrupt) {
         const approvalRequests = approvalInterrupt.requests;
         emit({
           type: AgentEventType.InterruptRequired,
@@ -417,7 +431,15 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           approvalRequests,
           currentToolCalls,
           messageToolResults.results,
-          mergeById(messageToolResults.errors, state.toolErrors),
+          mergeById(
+            messageToolResults.errors,
+            mergeById(
+              currentRecords.flatMap((record) =>
+                record.error ? [record.error] : [],
+              ),
+              state.toolErrors,
+            ),
+          ),
         );
         return this.persistResult(
           agent,
@@ -426,6 +448,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           result,
           persistedRecords,
           eventStream.getLogicalSequence(),
+        );
+      }
+      if (graphHasInterrupt && checkpointApprovalInterrupt === null) {
+        throw new Error(
+          "Agent checkpoint has an unresolved interrupt without actions.",
         );
       }
 
@@ -444,7 +471,15 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         [],
         currentToolCalls,
         messageToolResults.results,
-        mergeById(messageToolResults.errors, state.toolErrors),
+        mergeById(
+          messageToolResults.errors,
+          mergeById(
+            currentRecords.flatMap((record) =>
+              record.error ? [record.error] : [],
+            ),
+            state.toolErrors,
+          ),
+        ),
       );
       return this.persistResult(
         agent,
@@ -726,7 +761,9 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       if (outcome?.error) {
         state.toolErrors.push(outcome.error);
         state.toolResults.push({
-          ...outcome.error,
+          toolCallId: outcome.error.toolCallId,
+          name: outcome.error.name,
+          input: outcome.error.input,
           output: messageText(message.content),
           isError: true,
         });
@@ -843,8 +880,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     const approvalInterrupt = readApprovalInterruptFromPayload(
       payload,
       state.latestToolCalls,
+      state.resolvedInterruptIds,
     );
     if (!approvalInterrupt) return;
+    if (isResolvedApprovalInterrupt(approvalInterrupt, state.resolvedToolCalls))
+      return;
     state.approvalInterrupt = approvalInterrupt;
   }
 
@@ -867,6 +907,18 @@ export class ToolCallingWorkflow implements AgentWorkflow {
   }
 }
 
+function isResolvedApprovalInterrupt(
+  interrupt: PendingApprovalInterrupt,
+  resolvedToolCalls: readonly ToolCallRecord[],
+): boolean {
+  const resolvedIds = new Set(
+    resolvedToolCalls.map((toolCall) => toolCall.toolCallId),
+  );
+  return interrupt.requests.every((request) =>
+    resolvedIds.has(request.approvalId),
+  );
+}
+
 function createExecutionState(): ExecutionState {
   return {
     toolCalls: [],
@@ -878,6 +930,7 @@ function createExecutionState(): ExecutionState {
     toolErrors: [],
     stepNumbers: new Set(),
     approvalInterrupt: null,
+    resolvedInterruptIds: new Set(),
     textByMessagePart: new Map(),
     emittedPartFingerprints: new Set(),
     startedMessageIds: new Set(),
@@ -923,6 +976,7 @@ function seedExecutionState(
   for (const toolCall of collectToolCalls(messages)) {
     state.toolCallsById.set(toolCall.toolCallId, toolCall);
   }
+  state.latestToolCalls = collectLatestToolCalls(messages);
   for (const message of messages) {
     if (!isAIMessage(message)) continue;
     if (message.id) state.persistedAssistantMessageIds.add(message.id);
@@ -1252,7 +1306,10 @@ function failedResultFromGraphState(
     mergeById(state.resolvedToolCalls, state.toolCalls),
   );
   const persistedRecords = mergeToolRecords(
-    readStateToolRecords(graphState),
+    mergeToolRecords(
+      readStateToolRecords(graphState),
+      collectToolRecordsFromMessages(graphMessages),
+    ),
     createPersistedToolRecords(state),
   );
   const messages = normalizeMessages(
@@ -1271,7 +1328,15 @@ function failedResultFromGraphState(
     messages,
     toolCalls,
     toolResults: mergeById(messageResults.results, state.toolResults),
-    toolErrors: mergeById(messageResults.errors, state.toolErrors),
+    toolErrors: mergeById(
+      messageResults.errors,
+      mergeById(
+        persistedRecords.flatMap((record) =>
+          record.error ? [record.error] : [],
+        ),
+        state.toolErrors,
+      ),
+    ),
     approvalRequests: [],
     stepsCompleted: Math.max(
       state.stepNumbers.size,

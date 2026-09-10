@@ -91,6 +91,36 @@ test("AgentDock bounds an owned adapter close", async () => {
   assert.equal(closeCalls, 1);
 });
 
+test("AgentDock bounds shutdown during checkpoint initialization and reports the run", async () => {
+  let initializationStarted;
+  const started = new Promise((resolve) => {
+    initializationStarted = resolve;
+  });
+  const agent = createAgent({
+    checkpoint: {
+      saver: new MemorySaver(),
+      initialize: async () => {
+        initializationStarted();
+        await new Promise(() => {});
+      },
+      close: async () => {},
+    },
+  });
+
+  void agent.stream(
+    "Wait during initialization.",
+    {},
+    { sessionId: "initialization-close", runId: "initialization-close" },
+  );
+  await started;
+  const beforeClose = Date.now();
+  await agent.close({ gracePeriodMs: 20 });
+
+  assert.ok(Date.now() - beforeClose >= 15);
+  assert.ok(Date.now() - beforeClose < 500);
+  assert.deepEqual(agent.getUnfinishedRunIds(), ["initialization-close"]);
+});
+
 test("AgentDock stays deterministically closed when owned adapter close fails", async () => {
   const agent = createAgent({
     checkpoint: {

@@ -10,6 +10,7 @@ export interface PendingApprovalInterrupt {
 export function readApprovalInterruptFromCheckpoint(
   state: unknown,
   finalizedToolCalls: readonly ToolCallRecord[],
+  resolvedInterruptIds: ReadonlySet<string> = new Set(),
 ): PendingApprovalInterrupt | null {
   if (!isRecord(state)) return null;
   const interrupts = Array.isArray(state.tasks)
@@ -18,7 +19,11 @@ export function readApprovalInterruptFromCheckpoint(
         return task.interrupts;
       })
     : readPendingWriteInterrupts(state.pendingWrites);
-  return readApprovalInterrupt(interrupts, finalizedToolCalls);
+  return readApprovalInterrupt(
+    interrupts,
+    finalizedToolCalls,
+    resolvedInterruptIds,
+  );
 }
 
 function readPendingWriteInterrupts(value: unknown): unknown[] {
@@ -32,19 +37,30 @@ function readPendingWriteInterrupts(value: unknown): unknown[] {
 export function readApprovalInterruptFromPayload(
   payload: unknown,
   finalizedToolCalls: readonly ToolCallRecord[],
+  resolvedInterruptIds: ReadonlySet<string> = new Set(),
 ): PendingApprovalInterrupt | null {
   if (!isRecord(payload)) return null;
-  return readApprovalInterrupt(payload.__interrupt__, finalizedToolCalls);
+  return readApprovalInterrupt(
+    payload.__interrupt__,
+    finalizedToolCalls,
+    resolvedInterruptIds,
+  );
 }
 
 function readApprovalInterrupt(
   interrupts: unknown,
   finalizedToolCalls: readonly ToolCallRecord[],
+  resolvedInterruptIds: ReadonlySet<string>,
 ): PendingApprovalInterrupt | null {
   if (!Array.isArray(interrupts)) return null;
 
   const active = flattenInterrupts(interrupts).filter((interrupt) => {
     if (!isRecord(interrupt) || !isRecord(interrupt.value)) return false;
+    if (
+      typeof interrupt.id === "string" &&
+      resolvedInterruptIds.has(interrupt.id)
+    )
+      return false;
     const actions = interrupt.value.actionRequests;
     return Array.isArray(actions) && actions.length > 0;
   });

@@ -7,6 +7,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import {
+  collectToolRecordsFromMessages,
   findFinalContent,
   isStreamChunk,
   normalizeMessages,
@@ -249,4 +250,49 @@ test("reports a malformed tool message instead of silently dropping it", () => {
       ),
     /Tool message references an unknown tool call: missing-call/,
   );
+});
+
+test("reconstructs exact typed tool errors from checkpointed message metadata", () => {
+  const message = new ToolMessage({
+    content: "authorization expired",
+    artifact: "authorization expired",
+    status: "error",
+    tool_call_id: "call-expired",
+    name: "protected_action",
+    additional_kwargs: {
+      agentdockToolCall: {
+        id: "call-expired",
+        name: "protected_action",
+        args: { reportId: "report-1" },
+      },
+      agentdockToolError: {
+        toolCallId: "call-expired",
+        name: "protected_action",
+        input: { reportId: "report-1" },
+        error: "authorization expired",
+        code: "authorization_denied",
+      },
+    },
+  });
+
+  const records = collectToolRecordsFromMessages([message]);
+  assert.deepEqual(records[0].error, {
+    toolCallId: "call-expired",
+    name: "protected_action",
+    input: { reportId: "report-1" },
+    error: "authorization expired",
+    code: "authorization_denied",
+  });
+  const normalized = normalizeMessages(
+    [message],
+    new Map([["call-expired", records[0].toolCall]]),
+    new Map([["call-expired", records[0]]]),
+  );
+  assert.deepEqual(Object.keys(toolResults(normalized[0])[0]).sort(), [
+    "input",
+    "isError",
+    "name",
+    "output",
+    "toolCallId",
+  ]);
 });

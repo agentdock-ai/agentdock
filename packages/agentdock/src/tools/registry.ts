@@ -316,7 +316,10 @@ function validateInputNode(
     }
     const required = Array.isArray(schema.required) ? schema.required : [];
     for (const property of required) {
-      if (typeof property === "string" && !(property in value)) {
+      if (
+        typeof property === "string" &&
+        !Object.prototype.hasOwnProperty.call(value, property)
+      ) {
         throw new Error(
           `Missing required input ${path}.${property} for tool ${toolName}.`,
         );

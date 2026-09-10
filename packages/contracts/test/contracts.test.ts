@@ -239,6 +239,20 @@ describe("AgentDock contracts", () => {
     );
   });
 
+  it("clones reserved JSON object keys without changing object prototypes", () => {
+    const source = JSON.parse(
+      '{"__proto__":{"polluted":true},"constructor":"preserved"}',
+    ) as Record<string, unknown>;
+    const cloned = cloneJsonValue(source) as Record<string, unknown>;
+
+    expect(Object.getPrototypeOf(cloned)).toBe(Object.prototype);
+    expect(Object.hasOwn(cloned, "__proto__")).toBe(true);
+    expect(cloned.__proto__).toEqual({ polluted: true });
+    expect(cloned.constructor).toBe("preserved");
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(cloned))).toEqual(source);
+  });
+
   it("round-trips every structured content part and terminal metadata", () => {
     const event: AgentEvent = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
@@ -365,6 +379,20 @@ describe("AgentDock contracts", () => {
         type: AgentEventType.RunStarted,
       }),
     ).toThrow(/Unsupported Agent event protocol version/);
+    expect(() =>
+      cloneAgentEvent({
+        protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+        eventId: "negative-usage",
+        runId: "run",
+        sessionId: "session",
+        phaseId: "phase",
+        logicalSequence: 1,
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type: AgentEventType.UsageUpdated,
+        usage: { inputTokens: -1 },
+      }),
+    ).toThrow(/usage\.inputTokens must be non-negative/);
   });
 
   it("reduces tool progress, interrupt lifecycle, and terminal metadata", () => {
@@ -463,6 +491,131 @@ describe("AgentDock contracts", () => {
     expect(JSON.parse(JSON.stringify(state))).toEqual(state);
   });
 
+  it("replaces message deltas and reduces multiple messages, failures, and cancellation", () => {
+    const base = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      runId: "run-terminal-cases",
+      sessionId: "session-terminal-cases",
+      phaseId: "phase-terminal-cases",
+      timestamp: new Date(0).toISOString(),
+    } as const;
+    const events: AgentEvent[] = [
+      {
+        ...base,
+        eventId: "terminal-1",
+        logicalSequence: 1,
+        sequence: 1,
+        type: AgentEventType.RunStarted,
+      },
+      {
+        ...base,
+        eventId: "terminal-2",
+        logicalSequence: 2,
+        sequence: 2,
+        type: AgentEventType.MessageStarted,
+        messageId: "message-one",
+        role: "assistant",
+      },
+      {
+        ...base,
+        eventId: "terminal-3",
+        logicalSequence: 3,
+        sequence: 3,
+        type: AgentEventType.MessagePartDelta,
+        messageId: "message-one",
+        part: { type: "text", text: "partial text" },
+      },
+      {
+        ...base,
+        eventId: "terminal-4",
+        logicalSequence: 4,
+        sequence: 4,
+        type: AgentEventType.MessageCompleted,
+        messageId: "message-one",
+        role: "assistant",
+        content: [{ type: "text", text: "replacement snapshot" }],
+      },
+      {
+        ...base,
+        eventId: "terminal-5",
+        logicalSequence: 5,
+        sequence: 5,
+        type: AgentEventType.MessageStarted,
+        messageId: "message-two",
+        role: "assistant",
+      },
+      {
+        ...base,
+        eventId: "terminal-6",
+        logicalSequence: 6,
+        sequence: 6,
+        type: AgentEventType.MessagePartDelta,
+        messageId: "message-two",
+        part: { type: "reasoning", text: "second message" },
+      },
+      {
+        ...base,
+        eventId: "terminal-7",
+        logicalSequence: 7,
+        sequence: 7,
+        type: AgentEventType.ToolCalled,
+        toolCall: { toolCallId: "call-failed", name: "fail", input: {} },
+      },
+      {
+        ...base,
+        eventId: "terminal-8",
+        logicalSequence: 8,
+        sequence: 8,
+        type: AgentEventType.ToolFailed,
+        error: {
+          toolCallId: "call-failed",
+          name: "fail",
+          input: {},
+          error: "failed",
+          code: "tool_failed",
+        },
+      },
+      {
+        ...base,
+        eventId: "terminal-9",
+        logicalSequence: 9,
+        sequence: 9,
+        type: AgentEventType.RunFailed,
+        code: "run_failed",
+        message: "run failed",
+      },
+    ];
+    const failed = events.reduce(reduceAgentEvent, createAgentReducerState());
+
+    expect(failed.messages).toHaveLength(2);
+    expect(failed.messages[0]?.content).toEqual([
+      { type: "text", text: "replacement snapshot" },
+    ]);
+    expect(failed.toolErrors[0]?.code).toBe("tool_failed");
+    expect(failed.status).toBe("failed");
+    expect(failed.errorCode).toBe("run_failed");
+    const cancelled = reduceAgentEvent(
+      reduceAgentEvent(createAgentReducerState(), events[0]),
+      {
+        ...events[0],
+        eventId: "terminal-cancelled",
+        logicalSequence: 2,
+        sequence: 2,
+        type: AgentEventType.RunCancelled,
+        reason: "cancelled by host",
+      },
+    );
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.cancellationReason).toBe("cancelled by host");
+    expect(() =>
+      reduceAgentEvent(reduceAgentEvent(createAgentReducerState(), events[0]), {
+        ...events[0],
+        timestamp: new Date(1).toISOString(),
+        type: AgentEventType.RunStarted,
+      }),
+    ).toThrow(/event ID was reused/);
+  });
+
   it("rejects invalid reducer transitions and allows only a valid phase reset", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
@@ -480,6 +633,14 @@ describe("AgentDock contracts", () => {
     };
     const state = reduceAgentEvent(createAgentReducerState(), started);
 
+    expect(() =>
+      reduceAgentEvent(createAgentReducerState(), {
+        ...started,
+        type: AgentEventType.MessageStarted,
+        messageId: "too-early",
+        role: "assistant",
+      }),
+    ).toThrow(/must begin with run\.started/);
     expect(() =>
       reduceAgentEvent(state, { ...started, eventId: "rules-2" }),
     ).toThrow(/logical sequence/);

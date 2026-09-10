@@ -213,6 +213,101 @@ test("restarts SQLite approval phases without replaying prior actions", async ()
   }
 });
 
+test("preserves a typed tool error through a later approval restart", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "agentdock-agent-"));
+  const databasePath = path.join(directory, "checkpoints.sqlite");
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "denied_before_restart",
+    description: "Fail with a typed authorization error.",
+    parameters: { type: "object", properties: {} },
+    authorize: () => ({ allowed: false, reason: "policy expired" }),
+    execute: async () => "unreachable",
+  });
+  registry.register({
+    name: "approved_after_error",
+    description: "Pause after the first tool error.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => "approved",
+  });
+
+  try {
+    const first = new AgentDock({
+      model: new FakeToolCallingModel({
+        toolCalls: [
+          [
+            {
+              name: "denied_before_restart",
+              args: {},
+              id: "call-denied-before-restart",
+            },
+          ],
+          [
+            {
+              name: "approved_after_error",
+              args: {},
+              id: "call-approved-after-error",
+            },
+          ],
+        ],
+      }),
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    });
+    const waiting = await first.run(
+      "Fail and then pause.",
+      {},
+      { sessionId: "session-error-restart", runId: "run-error-restart" },
+    );
+    assert.equal(waiting.status, "waiting_for_approval");
+    assert.equal(waiting.toolErrors[0].code, "authorization_denied");
+    await first.close();
+
+    const second = new AgentDock({
+      model: new FakeToolCallingModel({ toolCalls: [[]] }),
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    });
+    const completed = await second.resume(
+      {
+        runId: waiting.runId,
+        approvals: [
+          {
+            approvalId: waiting.approvalRequests[0].approvalId,
+            approved: true,
+          },
+        ],
+      },
+      {},
+      { sessionId: "session-error-restart" },
+    );
+
+    assert.equal(completed.status, "completed");
+    assert.deepEqual(
+      completed.toolErrors.find(
+        (error) => error.toolCallId === "call-denied-before-restart",
+      ),
+      {
+        toolCallId: "call-denied-before-restart",
+        name: "denied_before_restart",
+        input: {},
+        error: "policy expired",
+        code: "authorization_denied",
+      },
+    );
+    assert.equal(
+      completed.toolResults.filter(
+        (result) => result.toolCallId === "call-denied-before-restart",
+      ).length,
+      1,
+    );
+    await second.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejects incomplete or stale approval decisions against SQLite checkpoints", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "agentdock-agent-"));
   const databasePath = path.join(directory, "checkpoints.sqlite");

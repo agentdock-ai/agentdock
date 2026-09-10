@@ -73,3 +73,29 @@ test("AgentEventStream continues the logical sequence across phases", async () =
   );
   second.close();
 });
+
+test("AgentEventStream rejects a non-JSON event payload before sequencing it", async () => {
+  const stream = new AgentEventStream(
+    "run-invalid-event",
+    "session-invalid-event",
+  );
+
+  assert.throws(
+    () =>
+      stream.emit({
+        type: AgentEventType.MessagePartDelta,
+        messageId: "message-invalid-event",
+        part: {
+          type: "custom",
+          name: "invalid",
+          data: { nested: 1n },
+        },
+      }),
+    /Agent event input\.part\.data\.nested is not JSON-serializable/,
+  );
+  stream.emit({ type: AgentEventType.RunStarted });
+  const event = (await stream[Symbol.asyncIterator]().next()).value;
+  assert.equal(event.sequence, 1);
+  assert.equal(event.logicalSequence, 1);
+  stream.close();
+});

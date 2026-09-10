@@ -1121,6 +1121,13 @@ test("AgentDock reports tool exceptions as typed tool errors", async () => {
   assert.equal(result.status, "completed");
   assert.equal(result.toolErrors[0].error, "Tool is unavailable.");
   assert.equal(result.toolResults[0].isError, true);
+  assert.deepEqual(Object.keys(result.toolResults[0]).sort(), [
+    "input",
+    "isError",
+    "name",
+    "output",
+    "toolCallId",
+  ]);
   assert.ok(events.some((event) => event.type === AgentEventType.ToolFailed));
 });
 
@@ -1400,15 +1407,21 @@ test("AgentDock cancels an active tool run", async () => {
 
 test("AgentDock reports a timed-out tool as a typed tool error", async () => {
   const registry = new ToolRegistry();
+  let observedAbort = false;
   registry.register({
     name: "slow_tool",
     description: "Never completes before its timeout.",
     parameters: { type: "object", properties: {} },
     execute: async ({ signal }) =>
       new Promise((_, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), {
-          once: true,
-        });
+        signal.addEventListener(
+          "abort",
+          () => {
+            observedAbort = true;
+            reject(signal.reason);
+          },
+          { once: true },
+        );
       }),
   });
   const agent = createAgent(
@@ -1427,7 +1440,15 @@ test("AgentDock reports a timed-out tool as a typed tool error", async () => {
   );
 
   assert.equal(result.status, "completed");
+  assert.equal(observedAbort, true);
   assert.equal(result.toolErrors.length, 1);
+  assert.equal(result.toolErrors[0].code, "tool_timeout");
+  assert.equal(
+    result.toolResults.filter(
+      (toolResult) => toolResult.toolCallId === "call-timeout",
+    ).length,
+    1,
+  );
   assert.equal(result.toolResults[0].isError, true);
 });
 

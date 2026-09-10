@@ -49,11 +49,6 @@ export function createToolCallingTools(
           rawInput,
           `Tool input: ${toolDefinition.name}`,
         );
-        validateToolInput(
-          toolDefinition.parameters,
-          input,
-          toolDefinition.name,
-        );
         const toolCall: ToolCallRecord = {
           toolCallId: runtime.toolCallId,
           name: toolDefinition.name,
@@ -61,6 +56,15 @@ export function createToolCallingTools(
         };
 
         try {
+          try {
+            validateToolInput(
+              toolDefinition.parameters,
+              input,
+              toolDefinition.name,
+            );
+          } catch (error) {
+            throw codedError("tool_input_invalid", errorMessage(error));
+          }
           if (toolDefinition.authorize) {
             const authorization = await authorizeToolCall(
               toolDefinition,
@@ -95,7 +99,12 @@ export function createToolCallingTools(
             toolTimeout,
             "tool_timeout",
           );
-          const serializedOutput = serializeToolOutput(output);
+          let serializedOutput: JsonValue;
+          try {
+            serializedOutput = serializeToolOutput(output);
+          } catch (error) {
+            throw codedError("tool_output_invalid", errorMessage(error));
+          }
           outcomes.set(toolCall.toolCallId, {
             result: { ...toolCall, output: serializedOutput },
           });
@@ -116,14 +125,27 @@ export function createToolCallingTools(
             name: toolDefinition.name,
           });
         } catch (error) {
-          outcomes.set(toolCall.toolCallId, {
-            error: {
-              ...toolCall,
-              error: errorMessage(error),
-              ...(errorCode(error) ? { code: errorCode(error) } : {}),
+          const toolError: ToolErrorRecord = {
+            ...toolCall,
+            error: errorMessage(error),
+            code: errorCode(error) ?? "tool_execution_failed",
+          };
+          outcomes.set(toolCall.toolCallId, { error: toolError });
+          return new ToolMessage({
+            content: toolError.error,
+            artifact: toolError.error,
+            status: "error",
+            additional_kwargs: {
+              agentdockToolCall: {
+                id: toolCall.toolCallId,
+                name: toolCall.name,
+                args: input,
+              },
+              agentdockToolError: toolError,
             },
+            tool_call_id: toolCall.toolCallId,
+            name: toolDefinition.name,
           });
-          throw error;
         }
       },
       {

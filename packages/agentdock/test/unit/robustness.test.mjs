@@ -9,6 +9,8 @@ import {
   AgentDock,
   ToolRegistry,
   createAgentDock,
+  createSessionKey,
+  createThreadId,
   defineTool,
   validateToolInput,
 } from "../../src/index.js";
@@ -161,6 +163,78 @@ test("defineTool infers and validates typed input at the execution boundary", as
     forecast: "sunny",
   });
   await agent.close();
+});
+
+test("the easy API runs multiple typed tools through a custom checkpoint adapter", async () => {
+  let initializationCalls = 0;
+  let closeCalls = 0;
+  const checkpoint = {
+    saver: new MemorySaver(),
+    initialize: async () => {
+      initializationCalls += 1;
+    },
+    close: async () => {
+      closeCalls += 1;
+    },
+  };
+  const weather = defineTool({
+    name: "typed_weather",
+    description: "Return typed weather.",
+    input: z.object({ city: z.string() }),
+    run: async ({ city }) => ({ city, forecast: "sunny" }),
+  });
+  const timezone = defineTool({
+    name: "typed_timezone",
+    description: "Return a typed timezone.",
+    input: z.object({ city: z.string() }),
+    run: async ({ city }) => ({ city, timezone: "Asia/Karachi" }),
+  });
+  const agent = createAgentDock({
+    model: new FakeToolCallingModel({
+      toolCalls: [
+        [
+          {
+            name: "typed_weather",
+            args: { city: "Lahore" },
+            id: "call-typed-weather",
+          },
+        ],
+        [
+          {
+            name: "typed_timezone",
+            args: { city: "Lahore" },
+            id: "call-typed-timezone",
+          },
+        ],
+        [],
+      ],
+    }),
+    tools: { weather, timezone },
+    persistence: { checkpoint },
+  });
+
+  const result = await agent.run(
+    "Use both typed tools.",
+    {},
+    { sessionId: "easy-multiple-tools", runId: "easy-multiple-tools" },
+  );
+
+  assert.deepEqual(
+    result.toolResults.map(({ name, output }) => ({ name, output })),
+    [
+      {
+        name: "typed_weather",
+        output: { city: "Lahore", forecast: "sunny" },
+      },
+      {
+        name: "typed_timezone",
+        output: { city: "Lahore", timezone: "Asia/Karachi" },
+      },
+    ],
+  );
+  assert.equal(initializationCalls, 1);
+  await agent.close();
+  assert.equal(closeCalls, 1);
 });
 
 test("the easy and advanced APIs run caller-provided middleware", async () => {
@@ -671,6 +745,38 @@ test("invalid protected tool input is rejected before authorization and approval
   await agent.close();
 });
 
+test("invalid non-JSON tool output becomes one stable tool error", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "invalid_output",
+    description: "Return an output that cannot be persisted as JSON.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ count: 1n }),
+  });
+  const agent = createAgent(
+    [[{ name: "invalid_output", args: {}, id: "call-invalid-output" }], []],
+    registry,
+  );
+
+  const result = await agent.run(
+    "Return the invalid output.",
+    {},
+    { sessionId: "invalid-output", runId: "invalid-output" },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.toolErrors.length, 1);
+  assert.equal(result.toolErrors[0].code, "tool_output_invalid");
+  assert.equal(
+    result.toolResults.filter(
+      (toolResult) => toolResult.toolCallId === "call-invalid-output",
+    ).length,
+    1,
+  );
+  assert.equal(result.toolResults[0].isError, true);
+  await agent.close();
+});
+
 test("authorization timeout is distinct from tool timeout", async () => {
   const registry = new ToolRegistry();
   registry.register({
@@ -873,6 +979,54 @@ test("authorization is rechecked after approval", async () => {
   await agent.close();
 });
 
+test("a failed phase preserves messages and tool activity from the logical run", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "complete_before_model_failure",
+    description: "Complete once before the next model call fails.",
+    parameters: { type: "object", properties: {} },
+    requiresApproval: true,
+    execute: async () => ({ completed: true }),
+  });
+  const agent = new AgentDock({
+    model: new ApprovalThenThrowModel(),
+    registry,
+  });
+
+  const waiting = await agent.run(
+    "Run before failing.",
+    {},
+    { sessionId: "failure-preserves-run", runId: "failure-preserves-run" },
+  );
+  const failed = await agent.resume(
+    {
+      runId: waiting.runId,
+      approvals: [
+        {
+          approvalId: waiting.approvalRequests[0].approvalId,
+          approved: true,
+        },
+      ],
+    },
+    {},
+    { sessionId: "failure-preserves-run" },
+  );
+
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.errorCode, "agent_execution_failed");
+  assert.match(failed.error, /model failed after tool execution/);
+  assert.deepEqual(
+    failed.toolCalls.map((toolCall) => toolCall.toolCallId),
+    ["call-before-model-failure"],
+  );
+  assert.deepEqual(failed.toolResults[0].output, { completed: true });
+  assert.deepEqual(
+    failed.messages.map((message) => message.role),
+    ["user", "assistant", "tool"],
+  );
+  await agent.close();
+});
+
 test("tool timeout returns by deadline even when the tool ignores abort", async () => {
   const registry = new ToolRegistry();
   let started;
@@ -905,6 +1059,57 @@ test("tool timeout returns by deadline even when the tool ignores abort", async 
   assert.ok(Date.now() - begin < 500);
   assert.equal(result.toolErrors[0].code, "tool_timeout");
   await agent.close({ gracePeriodMs: 1 });
+});
+
+test("tool deadlines preserve fast success and the original fast rejection", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "fast_success",
+    description: "Complete before the deadline.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ ok: true }),
+  });
+  registry.register({
+    name: "fast_failure",
+    description: "Reject before the deadline.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      throw new Error("original tool rejection");
+    },
+  });
+  const agent = createAgent(
+    [
+      [
+        { name: "fast_success", args: {}, id: "call-fast-success" },
+        { name: "fast_failure", args: {}, id: "call-fast-failure" },
+      ],
+      [],
+    ],
+    registry,
+  );
+
+  const result = await agent.run(
+    "Run both fast tools.",
+    {},
+    {
+      sessionId: "fast-deadline-outcomes",
+      runId: "fast-deadline-outcomes",
+      toolTimeout: 250,
+    },
+  );
+
+  assert.deepEqual(
+    result.toolResults.find(
+      (toolResult) => toolResult.toolCallId === "call-fast-success",
+    ).output,
+    { ok: true },
+  );
+  const failure = result.toolErrors.find(
+    (toolError) => toolError.toolCallId === "call-fast-failure",
+  );
+  assert.equal(failure.error, "original tool rejection");
+  assert.notEqual(failure.code, "tool_timeout");
+  await agent.close();
 });
 
 test("close is bounded and reports runs that ignore cancellation", async () => {
@@ -1275,6 +1480,19 @@ test("deleteSession removes model-visible context and namespaces do not collide"
   await second.close();
 });
 
+test("deleteSession is idempotent for a session that does not exist", async () => {
+  const agent = createAgent([[]]);
+
+  await agent.deleteSession("missing-session");
+  await agent.deleteSession("missing-session");
+
+  assert.equal(await agent.getSession("missing-session"), null);
+  const history = await agent.getSessionHistory("missing-session");
+  assert.equal(history.current, null);
+  assert.deepEqual(history.checkpoints, []);
+  await agent.close();
+});
+
 test("session namespaces isolate checkpoint threads", async () => {
   const checkpointer = new (
     await import("@langchain/langgraph-checkpoint")
@@ -1309,6 +1527,50 @@ test("session namespaces isolate checkpoint threads", async () => {
       .messages[0].content,
     [{ type: "text", text: "Namespace B." }],
   );
+  await agent.close();
+});
+
+test("an omitted namespace does not collide with the literal default namespace", async () => {
+  assert.notEqual(
+    createThreadId("same-session", undefined),
+    createThreadId("same-session", "default"),
+  );
+  assert.notEqual(
+    createThreadId('["tenant","same-session"]', undefined),
+    createThreadId("same-session", "tenant"),
+  );
+  assert.equal(
+    createThreadId("same-session", "tenant"),
+    createSessionKey("same-session", "tenant"),
+  );
+  assert.doesNotMatch(
+    createThreadId("session*?[one]\\two", "tenant*?[one]\\two"),
+    /[*?[\]\\]/,
+  );
+  const agent = new AgentDock({ model: new NeverModel() });
+  const unnamespaced = await agent.stream(
+    "Hold the unnamespaced session.",
+    {},
+    { sessionId: "same-session", runId: "unnamespaced-run" },
+  );
+  const namespaced = await agent.stream(
+    "Hold the explicitly named session.",
+    {},
+    {
+      sessionId: "same-session",
+      sessionNamespace: "default",
+      runId: "explicit-default-run",
+    },
+  );
+
+  assert.equal(await agent.stop("unnamespaced-run"), true);
+  assert.equal(await agent.stop("explicit-default-run"), true);
+  const [first, second] = await Promise.all([
+    unnamespaced.result,
+    namespaced.result,
+  ]);
+  assert.equal(first.status, "cancelled");
+  assert.equal(second.status, "cancelled");
   await agent.close();
 });
 
@@ -1468,6 +1730,43 @@ class ThrowingModel extends BaseChatModel {
 
   async _generate() {
     throw new Error("model failed");
+  }
+}
+
+class ApprovalThenThrowModel extends BaseChatModel {
+  index = 0;
+
+  constructor() {
+    super({});
+  }
+
+  bindTools() {
+    return this;
+  }
+
+  _llmType() {
+    return "approval-then-throw";
+  }
+
+  async _generate() {
+    if (this.index > 0) throw new Error("model failed after tool execution");
+    this.index += 1;
+    return {
+      generations: [
+        {
+          message: new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                name: "complete_before_model_failure",
+                args: {},
+                id: "call-before-model-failure",
+              },
+            ],
+          }),
+        },
+      ],
+    };
   }
 }
 

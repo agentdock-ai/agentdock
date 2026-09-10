@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { ToolRegistry } from "../../src/index.js";
+import { ToolRegistry, validateToolInput } from "../../src/index.js";
 
 function createTool(overrides = {}) {
   return {
@@ -114,4 +114,21 @@ test("clear removes all registered tools", () => {
 
   assert.deepEqual(registry.list(), []);
   assert.deepEqual(registry.schemas(), []);
+});
+
+test("required JSON Schema fields must be own input properties", () => {
+  assert.throws(
+    () =>
+      validateToolInput(
+        {
+          type: "object",
+          properties: { toString: { type: "string" } },
+          required: ["toString"],
+          additionalProperties: false,
+        },
+        {},
+        "reserved_property",
+      ),
+    /Missing required input \$\.toString/,
+  );
 });

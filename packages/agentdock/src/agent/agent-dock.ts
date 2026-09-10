@@ -187,9 +187,7 @@ export class AgentDock {
     });
     this.closePromise = boundedWait
       .then(() => {
-        this.unfinishedRunIds = executions
-          .filter(([runId]) => this.activeExecutions.has(runId))
-          .map(([runId]) => runId);
+        this.unfinishedRunIds = [...this.activeRuns.keys()];
         return waitForClose(this.checkpointManager.close(), gracePeriodMs);
       })
       .finally(() => {

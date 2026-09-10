@@ -110,14 +110,57 @@ export function collectToolResults(messages: Message[]): {
   return { results: [...results.values()], errors: [...errors.values()] };
 }
 
-export function stateHasInterrupt(state: unknown): boolean {
+export function collectToolRecordsFromMessages(
+  messages: BaseMessage[],
+): PersistedToolRecord[] {
+  const records = new Map<string, PersistedToolRecord>();
+  for (const message of messages) {
+    if (!isToolMessage(message)) continue;
+    const toolCall = readToolMessageToolCall(message);
+    if (!toolCall) continue;
+    const error = readToolMessageError(message, toolCall);
+    const result: ToolResultRecord = {
+      ...toolCall,
+      output: readToolMessageOutput(
+        message.artifact === undefined ? message.content : message.artifact,
+      ),
+      ...(error || message.status === "error" ? { isError: true } : {}),
+    };
+    records.set(toolCall.toolCallId, {
+      toolCall,
+      result,
+      ...(error ? { error } : {}),
+    });
+  }
+  return [...records.values()];
+}
+
+export function stateHasInterrupt(
+  state: unknown,
+  resolvedInterruptIds: ReadonlySet<string> = new Set(),
+): boolean {
   if (!isRecord(state) || !Array.isArray(state.tasks)) return false;
   return state.tasks.some(
     (task) =>
       isRecord(task) &&
       Array.isArray(task.interrupts) &&
-      task.interrupts.length > 0,
+      hasUnresolvedInterrupt(task.interrupts, resolvedInterruptIds),
   );
+}
+
+function hasUnresolvedInterrupt(
+  interrupts: unknown[],
+  resolvedInterruptIds: ReadonlySet<string>,
+): boolean {
+  return interrupts.some((interrupt) => {
+    if (Array.isArray(interrupt))
+      return hasUnresolvedInterrupt(interrupt, resolvedInterruptIds);
+    return (
+      !isRecord(interrupt) ||
+      typeof interrupt.id !== "string" ||
+      !resolvedInterruptIds.has(interrupt.id)
+    );
+  });
 }
 
 export function normalizeMessages(
@@ -161,7 +204,9 @@ export function normalizeMessages(
         messageContent.startsWith("Error invoking tool");
       if (record?.error) {
         const result: ToolResultRecord = {
-          ...record.error,
+          toolCallId: record.error.toolCallId,
+          name: record.error.name,
+          input: record.error.input,
           output: record.result?.output ?? messageOutput,
           isError: true,
         };
@@ -228,6 +273,30 @@ function readToolMessageToolCall(message: ToolMessage): ToolCallRecord | null {
   } catch {
     return null;
   }
+}
+
+function readToolMessageError(
+  message: ToolMessage,
+  toolCall: ToolCallRecord,
+): ToolErrorRecord | null {
+  const metadata = isRecord(message.additional_kwargs)
+    ? message.additional_kwargs.agentdockToolError
+    : undefined;
+  if (metadata === undefined) return null;
+  if (
+    !isRecord(metadata) ||
+    typeof metadata.error !== "string" ||
+    (metadata.code !== undefined && typeof metadata.code !== "string")
+  ) {
+    throw new Error(
+      `Tool message contains invalid AgentDock error metadata: ${toolCall.toolCallId}`,
+    );
+  }
+  return {
+    ...toolCall,
+    error: metadata.error,
+    ...(typeof metadata.code === "string" ? { code: metadata.code } : {}),
+  };
 }
 
 function addToolCall(

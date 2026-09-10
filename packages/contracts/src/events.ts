@@ -344,6 +344,8 @@ export function reduceAgentEvent(
     state.status === "cancelled"
   )
     throw new Error("Agent event cannot be applied after the run is terminal.");
+  if (state.status === "idle" && event.type !== AgentEventType.RunStarted)
+    throw new Error("Agent event stream must begin with run.started.");
   if (state.runId !== null && state.runId !== event.runId)
     throw new Error("Agent event run ID does not match reducer state.");
   if (
@@ -589,7 +591,7 @@ function assertUsage(
     "costUsd",
   ] as const)
     if (value[key] !== undefined)
-      assertFiniteNumber(value[key], `${path}.${key}`);
+      assertNonNegativeNumber(value[key], `${path}.${key}`);
   if (value.model !== undefined) assertString(value.model, `${path}.model`);
   if (value.provider !== undefined)
     assertString(value.provider, `${path}.provider`);
@@ -613,8 +615,9 @@ function assertLimit(
   if (!isJsonObject(value)) throw new Error(`${path} must be an object.`);
   assertString(value.kind, `${path}.kind`);
   if (value.limit !== undefined)
-    assertFiniteNumber(value.limit, `${path}.limit`);
-  if (value.used !== undefined) assertFiniteNumber(value.used, `${path}.used`);
+    assertNonNegativeNumber(value.limit, `${path}.limit`);
+  if (value.used !== undefined)
+    assertNonNegativeNumber(value.used, `${path}.used`);
 }
 
 function assertJsonArray(
@@ -639,6 +642,13 @@ function assertFiniteNumber(
 ): asserts value is number {
   if (typeof value !== "number" || !Number.isFinite(value))
     throw new Error(`${path} must be a finite number.`);
+}
+function assertNonNegativeNumber(
+  value: unknown,
+  path: string,
+): asserts value is number {
+  assertFiniteNumber(value, path);
+  if (value < 0) throw new Error(`${path} must be non-negative.`);
 }
 function assertSequence(value: unknown, path: string): void {
   if (!Number.isSafeInteger(value) || (value as number) < 0)
