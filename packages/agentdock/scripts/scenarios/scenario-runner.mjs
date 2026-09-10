@@ -128,7 +128,7 @@ export class ScenarioRunner {
         );
         return;
       case AgentEventType.RunFailed:
-        this.line(`${this.paint("Run failed", "red")}: ${event.error.message}`);
+        this.line(`${this.paint("Run failed", "red")}: ${event.message}`);
         return;
       default:
         throw new Error(`Unsupported AgentDock event: ${event.type}`);
@@ -141,7 +141,7 @@ export class ScenarioRunner {
     this.line(`Status: ${result.status}`);
     this.line(`Run ID: ${result.runId}`);
     this.line(`Session ID: ${result.sessionId}`);
-    this.line(`Content: ${result.content || "(empty)"}`);
+    this.line(`Content: ${formatContent(result.content)}`);
     this.line(`Tool calls: ${result.toolCalls.length}`);
     this.line(`Tool results: ${result.toolResults.length}`);
   }
@@ -172,6 +172,15 @@ const color = {
 function formatValue(value) {
   if (typeof value === "string") return value;
   return JSON.stringify(value);
+}
+
+function formatContent(content) {
+  if (!Array.isArray(content) || content.length === 0) return "(empty)";
+  const text = content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+  return text || formatValue(content);
 }
 
 function mergeRunResults(previous, current) {

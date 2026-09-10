@@ -25,5 +25,11 @@ const runner = new ScenarioRunner({
 const result = await runner.run(prompt, { runId: "scenario-streaming-run" });
 
 assert.equal(result.status, "completed");
-assert.ok(result.content.trim().length > 0);
+assert.ok(
+  result.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("")
+    .trim().length > 0,
+);
 runner.line("Streaming scenario passed.");

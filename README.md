@@ -26,10 +26,16 @@ Run a single package command with Yarn workspaces:
 
 ```bash
 yarn workspace agentdock test
+yarn test:coverage
 yarn workspace @agentdock/checkpoint build
 ```
 
 ## Reliability boundaries
+
+The V1 production target is a single backend process with one worker and durable
+checkpoint storage. Postgres is the recommended production adapter; SQLite is for
+local or single-machine deployments. Multi-replica execution and distributed
+coordination are deferred to V2, and the backend HTTP layer is a separate project.
 
 AgentDock separates a logical run from its LangGraph execution phases. An approval
 resume continues the same `runId`; results and persisted tool records are merged

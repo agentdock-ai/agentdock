@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 export interface SqliteCheckpointOptions {
   readonly path: string;
@@ -26,6 +28,10 @@ export class SqliteCheckpoint implements CheckpointAdapter {
     if (typeof options?.path !== "string" || options.path.trim().length === 0) {
       throw new Error("SqliteCheckpoint path must be a non-empty string.");
     }
+    // better-sqlite3 creates the database file, but not missing parent
+    // directories. Keep this adapter usable on a fresh single-machine
+    // deployment while leaving schema ownership with LangGraph.
+    mkdirSync(dirname(options.path), { recursive: true });
     this.sqliteSaver = new AgentDockSqliteSaver(new Database(options.path));
     this.saver = this.sqliteSaver;
   }

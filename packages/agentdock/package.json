@@ -42,6 +42,7 @@
     "test:unit": "vitest run test/unit",
     "test:types": "tsc -p tsconfig.type-tests.json --noEmit",
     "test:integration": "vitest run test/integration",
+    "test:coverage": "vitest run --coverage",
     "test": "yarn test:types && yarn test:unit && yarn test:integration",
     "test:scenarios": "yarn build && yarn workspace @agentdock/models build && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
     "test:watch": "vitest",
@@ -64,6 +65,7 @@
     "@agentdock/checkpoint-postgres": "^0.1.0",
     "@agentdock/checkpoint-redis": "^0.1.0",
     "@agentdock/checkpoint-sqlite": "^0.1.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "prettier": "^3.5.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

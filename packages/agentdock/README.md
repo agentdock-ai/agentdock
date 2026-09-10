@@ -160,6 +160,11 @@ const dock = new AgentDock({
 
 Install only the optional backend package you need, for example `yarn add @agentdock/checkpoint-postgres`. The default `MemoryCheckpoint` is process-local and intended for development and tests. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; AgentDock does not close those caller-owned savers.
 
+For the V1 production boundary, run one AgentDock Node.js process with one worker and
+use Postgres for durable checkpoints. SQLite is supported for local or single-machine
+deployments, including fresh filesystem paths. Multi-replica deployment, distributed
+coordination, worker leases, and the HTTP server are outside this core V1 release.
+
 ## Core boundary
 
 - One built-in workflow: streamed tool-calling (`dock.toolCalling`, the default).
@@ -182,8 +187,10 @@ object root with `properties`, `required`, `additionalProperties`, `items`,
 unsupported keywords are rejected at registration.
 
 Tool input is validated before authorization and again before execution through the
-same runtime schema. Use the tool-call ID as an idempotency key for external side
-effects; AgentDock does not retry or undo a side effect that outlives cancellation.
+same runtime schema. For publish, write, send, or mutation tools, persist or pass the
+`toolCallId` as the external operation's idempotency key. AgentDock does not retry or
+undo a side effect that outlives cancellation; a timeout or cancellation is not proof
+that the external operation stopped.
 
 `getSession()` returns current normalized model-visible messages. Use
 `getSessionHistory()` for checkpoint-by-checkpoint history and `deleteSession()` to

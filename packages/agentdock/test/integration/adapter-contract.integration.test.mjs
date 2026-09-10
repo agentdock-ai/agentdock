@@ -180,6 +180,7 @@ for (const factory of adapterFactories) {
     test("persists approval interruption and resumes exactly once after restart", async () => {
       const storage = await factory.createStorage();
       let executions = 0;
+      const executedToolCallIds = [];
       const registry = new ToolRegistry();
       registry.register({
         name: "publish_report",
@@ -191,8 +192,9 @@ for (const factory of adapterFactories) {
           additionalProperties: false,
         },
         requiresApproval: true,
-        execute: async () => {
+        execute: async ({ toolCallId }) => {
           executions += 1;
+          executedToolCallIds.push(toolCallId);
           return "published";
         },
       });
@@ -256,6 +258,7 @@ for (const factory of adapterFactories) {
       assert.equal(resumed.status, "completed");
       assert.equal(resumed.toolResults.length, 1);
       assert.equal(executions, 1);
+      assert.deepEqual(executedToolCallIds, ["call-publish"]);
       await second.close();
       await storage.dispose();
     });

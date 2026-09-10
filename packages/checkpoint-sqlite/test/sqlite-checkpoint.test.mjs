@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -44,6 +45,23 @@ describe("SqliteCheckpoint", () => {
     assert.deepEqual(tables, ["checkpoints", "writes"]);
 
     await checkpoint.close();
+    await checkpoint.close();
+  });
+
+  it("creates missing parent directories before opening the database", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "agentdock-sqlite-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(
+      directory,
+      "missing",
+      "nested",
+      "checkpoints.sqlite",
+    );
+
+    const checkpoint = new SqliteCheckpoint({ path: databasePath });
+
+    assert.equal(existsSync(databasePath), true);
+    await checkpoint.initialize();
     await checkpoint.close();
   });
 });
