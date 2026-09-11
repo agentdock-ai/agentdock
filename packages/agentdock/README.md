@@ -218,19 +218,6 @@ const dock = new AgentDock({
 
 Install only the optional backend package you need, for example `yarn add @agentdock/checkpoint-postgres`. The default `MemoryCheckpoint` is process-local and intended for development and tests. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; AgentDock does not close those caller-owned savers.
 
-For the V1 production boundary, run one AgentDock Node.js process with one worker and
-use Postgres for durable checkpoints. SQLite is supported for local or single-machine
-deployments, including fresh filesystem paths. Multi-replica deployment, distributed
-coordination, worker leases, and the HTTP server are outside this core V1 release.
-
-## Core boundary
-
-- One built-in workflow: streamed tool-calling (`dock.toolCalling`, the default).
-- One execution path: `stream()`; `run()` consumes that stream.
-- One state owner: the LangGraph checkpointer.
-- One tool/authorization/approval path shared by every future workflow.
-- No bundled model provider wrappers, separate context graph, UI, or plugin system.
-
 ## Lifecycle and authoring rules
 
 `new AgentDock()` is the advanced escape hatch for raw LangChain models,

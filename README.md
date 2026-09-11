@@ -13,8 +13,6 @@ This repository contains the independently publishable AgentDock packages.
 - `@agentdock/checkpoint-redis` — Redis checkpoint adapter.
 - `@agentdock/models` — optional model resolver.
 
-The repository root is a private Yarn workspace manager. The CLI remains a separate project.
-
 ## Development
 
 ```bash
@@ -29,42 +27,6 @@ yarn workspace agentdock test
 yarn test:coverage
 yarn workspace @agentdock/checkpoint build
 ```
-
-## Reliability boundaries
-
-The V1 production target is a single backend process with one worker and durable
-checkpoint storage. Postgres is the recommended production adapter; SQLite is for
-local or single-machine deployments. Multi-replica execution and distributed
-coordination are deferred to V2, and the backend HTTP layer is a separate project.
-
-AgentDock separates a logical run from its LangGraph execution phases. An approval
-resume continues the same `runId`; results and persisted tool records are merged
-across every phase and restart. A session may have only one active logical run.
-
-Use `sessionNamespace` when one checkpointer serves multiple tenants. The namespace
-is part of the checkpoint thread key, so equal session IDs in different namespaces do
-not share model-visible history. Host ownership and tenant authorization metadata
-remain outside AgentDock.
-
-Contexts, tool inputs and outputs, event payloads, and persisted AgentDock metadata
-must be strict JSON. Side-effecting tools should be idempotent because a process or
-distributed coordinator cannot undo an external side effect after a crash.
-
-Messages and final run content use one `ContentPart[]` representation. Text,
-reasoning, images, audio, video, files, citations, finalized tool calls, tool results,
-and provider-specific JSON therefore survive streaming, checkpoint restart, and
-session reconstruction without being flattened to strings.
-
-Tool timeouts abort cooperative tools and also return by a hard deadline for tools
-that ignore the signal. An ignored signal can leave an external side effect running;
-`tool_timeout` does not claim that the external operation stopped. Shutdown is
-bounded with `await dock.close({ gracePeriodMs: 5_000 })`. The optional
-`RunCoordinator` interface can provide distributed session locking; the default
-coordinator protects runs in the current process.
-
-Every event carries `protocolVersion`, event/run/session/phase IDs, and both phase
-and logical-run sequence numbers. There is one `stream()` API and one event union;
-there are no version-suffixed stream paths.
 
 ## Publishing
 
