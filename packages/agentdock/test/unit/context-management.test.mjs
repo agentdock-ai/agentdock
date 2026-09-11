@@ -11,17 +11,26 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { SqliteCheckpoint } from "@agentdock/checkpoint-sqlite";
-import { AgentDock } from "../../src/index.js";
+import { AgentDock, ToolRegistry } from "../../src/index.js";
 import {
   ContextCapacityError,
   ContextManagement,
 } from "../../src/agent/context-management.js";
 
 class ProfiledChatModel extends BaseChatModel {
-  constructor({ maxInputTokens, response = "ok", fail = false } = {}) {
+  constructor({
+    maxInputTokens,
+    response = "ok",
+    responses,
+    toolCalls,
+    fail = false,
+  } = {}) {
     super({});
     this.maxInputTokens = maxInputTokens;
     this.response = response;
+    this.responses = responses;
+    this.toolCalls = toolCalls ?? [];
+    this.toolCallIndex = 0;
     this.fail = fail;
     this.calls = [];
   }
@@ -43,8 +52,18 @@ class ProfiledChatModel extends BaseChatModel {
   async _generate(messages) {
     this.calls.push(messages);
     if (this.fail) throw new Error("summary provider unavailable");
+    const response = this.responses?.[this.toolCallIndex] ?? this.response;
+    const toolCalls = this.toolCalls[this.toolCallIndex] ?? [];
+    this.toolCallIndex += 1;
     return {
-      generations: [{ message: new AIMessage({ content: this.response }) }],
+      generations: [
+        {
+          message: new AIMessage({
+            content: toolCalls.length > 0 ? "" : response,
+            ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+          }),
+        },
+      ],
     };
   }
 }
@@ -367,6 +386,90 @@ test("persists compacted state across AgentDock recreation with SQLite", async (
     } finally {
       await second.close();
     }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("resumes an approval after compaction without replaying the side effect", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "agentdock-context-"));
+  const databasePath = path.join(directory, "checkpoints.sqlite");
+  let executions = 0;
+  const registry = new ToolRegistry();
+  registry.register({
+    name: "publish_report",
+    description: "Publish a report.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    requiresApproval: true,
+    execute: async () => {
+      executions += 1;
+      return "published";
+    },
+  });
+
+  try {
+    const summaryModel = new ProfiledChatModel({
+      maxInputTokens: 1_000,
+      response: "compacted facts before publishing",
+    });
+    const firstModel = new ProfiledChatModel({
+      maxInputTokens: 1_000,
+      toolCalls: [
+        [],
+        [{ name: "publish_report", args: {}, id: "publish-after-summary" }],
+        [],
+      ],
+    });
+    const first = new AgentDock({
+      model: firstModel,
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      contextManagement: {
+        summarization: { summaryModel, trigger: "auto" },
+      },
+    });
+    await first.initialize();
+    await first.run(
+      longPrompt("initial history"),
+      {},
+      { sessionId: "approval-after-summary" },
+    );
+    const waiting = await first.run(
+      longPrompt("publish this"),
+      {},
+      { sessionId: "approval-after-summary", runId: "approval-after-summary" },
+    );
+
+    assert.equal(waiting.status, "waiting_for_approval");
+    assert.equal(summaryModel.calls.length, 1);
+    assert.equal(executions, 0);
+    await first.close();
+
+    const second = new AgentDock({
+      model: new ProfiledChatModel({ maxInputTokens: 1_000, toolCalls: [[]] }),
+      registry,
+      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      contextManagement: { summarization: { trigger: "auto" } },
+    });
+    await second.initialize();
+    const completed = await second.resume(
+      {
+        runId: waiting.runId,
+        approvals: [
+          {
+            approvalId: waiting.approvalRequests[0].approvalId,
+            approved: true,
+          },
+        ],
+      },
+      {},
+      { sessionId: "approval-after-summary" },
+    );
+
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.toolResults[0].output, "published");
+    assert.equal(executions, 1);
+    await second.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
