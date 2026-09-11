@@ -7,6 +7,7 @@ import {
   type AgentDockDefaults,
   type AgentDockOptions,
 } from "./agent-dock.js";
+import type { ContextManagementOptions } from "./context-management.js";
 import type {
   Tool,
   ToolAuthorizationInput,
@@ -35,6 +36,7 @@ export interface CreateAgentDockOptions {
   defaults?: AgentDockDefaults;
   coordinator?: RunCoordinator;
   middleware?: readonly AnyAgentMiddleware[];
+  contextManagement?: ContextManagementOptions;
 }
 
 /** Creates the simple typed-tool facade over the advanced AgentDock runtime. */
@@ -62,6 +64,9 @@ export function createAgentDock(options: CreateAgentDockOptions): AgentDock {
       : {}),
     ...(options.coordinator ? { coordinator: options.coordinator } : {}),
     ...(options.middleware ? { middleware: options.middleware } : {}),
+    ...(options.contextManagement
+      ? { contextManagement: options.contextManagement }
+      : {}),
   };
   return new AgentDock(advancedOptions);
 }

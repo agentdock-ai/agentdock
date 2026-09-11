@@ -1,6 +1,12 @@
 export * from "./agent-dock.js";
 export * from "./coordinator.js";
 export * from "./easy-api.js";
+export type {
+  ContextBudget,
+  ContextManagementOptions,
+  ContextSummarizationOptions,
+  ModelContextProfile,
+} from "./context-management.js";
 export type { CheckpointAdapter } from "@agentdock/checkpoint";
 export * from "./events.js";
 export type {

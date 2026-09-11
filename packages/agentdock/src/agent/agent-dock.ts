@@ -23,6 +23,10 @@ import {
   type RunCoordinator,
 } from "./coordinator.js";
 import { ToolCallingWorkflow } from "./workflows/tool-calling/workflow.js";
+import {
+  ContextManagement,
+  type ContextManagementOptions,
+} from "./context-management.js";
 import type { AgentWorkflow } from "./workflows/types.js";
 import { ToolRegistry, type ToolSchema } from "../tools/registry.js";
 import {
@@ -99,6 +103,8 @@ export interface AgentDockOptions {
   defaults?: AgentDockDefaults;
   coordinator?: RunCoordinator;
   middleware?: readonly AnyAgentMiddleware[];
+  /** Opt-in automatic conversation compaction before primary-model calls. */
+  contextManagement?: ContextManagementOptions;
 }
 
 interface ActiveRun {
@@ -142,6 +148,10 @@ export class AgentDock {
       registry: this.registry,
       checkpointer: this.checkpointManager.saver,
       middleware: options.middleware,
+      contextManagement: ContextManagement.create(
+        this.model,
+        options.contextManagement,
+      ),
     });
     this.toolCalling = this.createWorkflowClient(this.toolCallingWorkflow);
   }

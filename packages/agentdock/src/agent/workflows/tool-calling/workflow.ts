@@ -15,6 +15,7 @@ import {
   type InterruptOnConfig,
   type ToolCallRequest,
 } from "langchain";
+import type { ContextManagement } from "../../context-management.js";
 import { z } from "zod";
 import {
   cloneContentParts,
@@ -131,6 +132,7 @@ export interface ToolCallingWorkflowOptions {
   registry: ToolRegistry;
   checkpointer: BaseCheckpointSaver;
   middleware?: readonly AnyAgentMiddleware[];
+  contextManagement?: ContextManagement;
 }
 
 interface ExecutionState {
@@ -164,12 +166,14 @@ export class ToolCallingWorkflow implements AgentWorkflow {
   private readonly registry: ToolRegistry;
   private readonly checkpointer: BaseCheckpointSaver;
   private readonly middleware: readonly AnyAgentMiddleware[];
+  private readonly contextManagement: ContextManagement | undefined;
 
   constructor(options: ToolCallingWorkflowOptions) {
     this.model = options.model;
     this.registry = options.registry;
     this.checkpointer = options.checkpointer;
     this.middleware = options.middleware ?? [];
+    this.contextManagement = options.contextManagement;
   }
 
   start(input: WorkflowStartInput): StreamAgentResult {
@@ -676,6 +680,10 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           exitBehavior: "error",
         }),
       );
+    }
+
+    if (this.contextManagement) {
+      middleware.push(this.contextManagement.asMiddleware());
     }
 
     middleware.push(...this.middleware);

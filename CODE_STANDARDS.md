@@ -16,6 +16,7 @@
 - Separate domain logic, infrastructure, configuration, and presentation concerns.
 - Use abstractions only when they remove real duplication or support a real requirement.
 - Prefer explicit control flow when it preserves type safety and improves readability.
+- Use a class when a feature owns resolved configuration, a lifecycle, or a framework integration boundary. Keep small stateless transformations as private functions or static helpers; do not add empty class wrappers merely for style.
 - When a model facade uses class-style provider selection, expose a non-instantiable class with one explicit static factory per provider. Keep provider-specific options in provider-specific types.
 
 ## DRY

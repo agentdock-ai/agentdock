@@ -108,6 +108,64 @@ const dock = new AgentDock({
 
 The optional resolver initially supports `openai`, `ollama`, and `openrouter`; applications that need a provider outside that set can continue to pass any LangChain `BaseChatModel` directly.
 
+## Optional automatic context management
+
+Context compaction is opt-in. When enabled, AgentDock compacts older model-visible
+conversation state immediately before a primary-model call, then persists the summary
+and retained messages through the existing LangGraph checkpoint. It therefore survives
+process recreation and approval resumes without a second graph or persistence system.
+
+```ts
+import { AgentDock } from "agentdock";
+import { PostgresCheckpoint } from "@agentdock/checkpoint-postgres";
+import { AgentDockModel } from "@agentdock/models";
+
+const model = AgentDockModel.openAI({
+  model: "gpt-5.4-mini",
+  apiKey: process.env.OPENAI_API_KEY,
+});
+const summaryModel = AgentDockModel.openAI({
+  model: "gpt-5.4-nano",
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const dock = new AgentDock({
+  model,
+  checkpoint: new PostgresCheckpoint({
+    connectionString: process.env.DATABASE_URL!,
+  }),
+  contextManagement: {
+    summarization: {
+      summaryModel, // optional; defaults to model
+      trigger: "auto",
+    },
+  },
+});
+```
+
+`trigger: "auto"` uses the verified input-context profile of the **primary** model:
+it compacts at 75% of that capacity and retains the newest 25%. The summary model may
+be smaller; it never changes the primary-model budget, and AgentDock trims its summary
+input to fit safely. Supported provider models and `AgentDockModel` expose profile
+metadata. An unknown raw LangChain model must provide a profile override in automatic
+or fractional mode:
+
+```ts
+contextManagement: {
+  summarization: {
+    trigger: "auto",
+    primaryModelProfile: { maxInputTokens: 128_000 },
+  },
+}
+```
+
+Advanced callers can avoid profile discovery with explicit policies such as
+`trigger: { tokens: 96_000 }`, `trigger: { messages: 80 }`, and
+`keep: { tokens: 24_000 }`. `maxSteps` is unrelated: it limits main model calls,
+not the model context size. AgentDock preserves system instructions, recent messages,
+and whole assistant/tool-result groups. Runtime `ctx` remains tool and authorization
+context; it is not copied into model prompts or summaries.
+
 ## Approval and resume
 
 Set `requiresApproval: true` on a side-effecting tool. AgentDock emits
@@ -171,7 +229,7 @@ coordination, worker leases, and the HTTP server are outside this core V1 releas
 - One execution path: `stream()`; `run()` consumes that stream.
 - One state owner: the LangGraph checkpointer.
 - One tool/authorization/approval path shared by every future workflow.
-- No bundled model provider wrappers, custom graph engine, context-engine, UI, or plugin system.
+- No bundled model provider wrappers, separate context graph, UI, or plugin system.
 
 ## Lifecycle and authoring rules
 
