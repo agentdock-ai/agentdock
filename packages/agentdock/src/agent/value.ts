@@ -3,7 +3,7 @@ import {
   cloneJsonValue,
   type ContentPart,
   type JsonValue,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Agent execution failed.";

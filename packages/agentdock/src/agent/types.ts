@@ -5,7 +5,7 @@ import type {
   AgentRunResult,
   JsonObject,
   ToolCallRecord,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 
 export type {
   AgentContext,
@@ -20,7 +20,7 @@ export type {
   ToolCallRecord,
   ToolErrorRecord,
   ToolResultRecord,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 
 export interface ToolAuthorizationInput {
   toolCall: ToolCallRecord;

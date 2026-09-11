@@ -1,18 +1,18 @@
-# @agentdock/models
+# @agentdock-ai/models
 
 Optional provider configuration resolver for [AgentDock](https://www.npmjs.com/package/agentdock). It creates a standard LangChain `BaseChatModel`, so AgentDock stays provider-neutral.
 
 ## Install
 
 ```bash
-yarn add agentdock @agentdock/models
+yarn add agentdock @agentdock-ai/models
 ```
 
 ## Usage
 
 ```ts
 import { AgentDock } from "agentdock";
-import { AgentDockModel } from "@agentdock/models";
+import { AgentDockModel } from "@agentdock-ai/models";
 
 const model = AgentDockModel.openAI({
   model: "gpt-5.4-mini",

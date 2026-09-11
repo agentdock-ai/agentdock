@@ -6,7 +6,7 @@ import {
   MemoryCheckpoint,
   type CheckpointAdapter,
   type CheckpointManagerOptions,
-} from "@agentdock/checkpoint";
+} from "@agentdock-ai/checkpoint";
 import type { ToolApprovalDecision } from "./permissions/types.js";
 import type {
   AgentContext,

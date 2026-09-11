@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
 import { MemorySaver } from "@langchain/langgraph-checkpoint";
-import { MemoryCheckpoint } from "@agentdock/checkpoint";
+import { MemoryCheckpoint } from "@agentdock-ai/checkpoint";
 import { AgentDock } from "../../src/index.js";
 
 function createAgent(options = {}) {

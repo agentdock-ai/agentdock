@@ -11,7 +11,7 @@ import {
   type ContentPart,
   type JsonObject,
   type JsonValue,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 import type { Message } from "../../memory.js";
 import type {
   ToolCallRecord,

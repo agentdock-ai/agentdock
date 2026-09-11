@@ -5,7 +5,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { SqliteCheckpoint } from "@agentdock/checkpoint-sqlite";
+import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
 
 export function createScriptedMessageChunks(
   contents,

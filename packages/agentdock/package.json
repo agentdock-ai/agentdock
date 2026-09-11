@@ -5,12 +5,12 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "url": "git+https://github.com/agentdock-ai/agentdock.git",
     "directory": "packages/agentdock"
   },
-  "homepage": "https://github.com/Muhammad-Zain01/agentdock#readme",
+  "homepage": "https://github.com/agentdock-ai/agentdock#readme",
   "bugs": {
-    "url": "https://github.com/Muhammad-Zain01/agentdock/issues"
+    "url": "https://github.com/agentdock-ai/agentdock/issues"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -44,15 +44,15 @@
     "test:integration": "vitest run test/integration",
     "test:coverage": "vitest run --coverage",
     "test": "yarn test:types && yarn test:unit && yarn test:integration",
-    "test:scenarios": "yarn build && yarn workspace @agentdock/models build && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
+    "test:scenarios": "yarn build && yarn workspace @agentdock-ai/models build && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
     "test:watch": "vitest",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn build",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@agentdock/contracts": "^0.1.0",
-    "@agentdock/checkpoint": "^0.1.0",
+    "@agentdock-ai/contracts": "^0.1.0",
+    "@agentdock-ai/checkpoint": "^0.1.0",
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",
     "@langchain/langgraph-checkpoint": "^1.1.5",
@@ -61,10 +61,10 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "@agentdock/checkpoint-mongodb": "^0.1.0",
-    "@agentdock/checkpoint-postgres": "^0.1.0",
-    "@agentdock/checkpoint-redis": "^0.1.0",
-    "@agentdock/checkpoint-sqlite": "^0.1.0",
+    "@agentdock-ai/checkpoint-mongodb": "^0.1.0",
+    "@agentdock-ai/checkpoint-postgres": "^0.1.0",
+    "@agentdock-ai/checkpoint-redis": "^0.1.0",
+    "@agentdock-ai/checkpoint-sqlite": "^0.1.0",
     "@vitest/coverage-v8": "^4.1.11",
     "prettier": "^3.5.3",
     "typescript": "^7.0.2",

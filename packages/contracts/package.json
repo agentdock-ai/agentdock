@@ -1,14 +1,14 @@
 {
-  "name": "@agentdock/contracts",
+  "name": "@agentdock-ai/contracts",
   "version": "0.1.0",
   "description": "Framework-independent AgentDock data contracts",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "url": "git+https://github.com/agentdock-ai/agentdock.git",
     "directory": "packages/contracts"
   },
-  "homepage": "https://github.com/Muhammad-Zain01/agentdock#readme",
+  "homepage": "https://github.com/agentdock-ai/agentdock#readme",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

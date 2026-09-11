@@ -1,9 +1,9 @@
-# @agentdock/checkpoint-mongodb
+# @agentdock-ai/checkpoint-mongodb
 
 MongoDB checkpoint storage for AgentDock.
 
 ```ts
-import { MongoDBCheckpoint } from "@agentdock/checkpoint-mongodb";
+import { MongoDBCheckpoint } from "@agentdock-ai/checkpoint-mongodb";
 import { AgentDock } from "agentdock";
 
 const checkpoint = new MongoDBCheckpoint({

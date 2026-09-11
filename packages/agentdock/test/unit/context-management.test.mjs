@@ -10,7 +10,7 @@ import {
   SystemMessage,
   ToolMessage,
 } from "@langchain/core/messages";
-import { SqliteCheckpoint } from "@agentdock/checkpoint-sqlite";
+import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
 import { AgentDock, ToolRegistry } from "../../src/index.js";
 import {
   ContextCapacityError,

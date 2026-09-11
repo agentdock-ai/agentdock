@@ -5,8 +5,8 @@ import type {
 } from "./permissions/types.js";
 import type { AgentContext, RunAgentOptions } from "./types.js";
 import type { AgentDockOptions } from "./agent-dock.js";
-import type { CheckpointAdapter } from "@agentdock/checkpoint";
-import { cloneJsonObject } from "@agentdock/contracts";
+import type { CheckpointAdapter } from "@agentdock-ai/checkpoint";
+import { cloneJsonObject } from "@agentdock-ai/contracts";
 import { ToolRegistry } from "../tools/registry.js";
 import { isRecord } from "./value.js";
 

@@ -1,5 +1,5 @@
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
-import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import type { CheckpointAdapter } from "@agentdock-ai/checkpoint";
 
 export interface PostgresCheckpointOptions {
   readonly connectionString: string;

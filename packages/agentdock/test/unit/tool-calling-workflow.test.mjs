@@ -5,7 +5,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import {
   createAgentReducerState,
   reduceAgentEvent,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 import { AgentDock, AgentEventType, ToolRegistry } from "../../src/index.js";
 import {
   createToolCallArgumentChunks,

@@ -1,11 +1,11 @@
-import { AgentEventType as AgentEventTypeValue } from "@agentdock/contracts";
+import { AgentEventType as AgentEventTypeValue } from "@agentdock-ai/contracts";
 
 export {
   AGENT_EVENT_PROTOCOL_VERSION,
   assertAgentEventInput,
   cloneAgentEvent,
   cloneAgentEventInput,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 
 export const AgentEventType = AgentEventTypeValue;
 export type {
@@ -16,5 +16,5 @@ export type {
   ContentPart,
   AgentInterrupt,
   AgentUsage,
-} from "@agentdock/contracts";
-export type AgentEventType = import("@agentdock/contracts").AgentEventType;
+} from "@agentdock-ai/contracts";
+export type AgentEventType = import("@agentdock-ai/contracts").AgentEventType;

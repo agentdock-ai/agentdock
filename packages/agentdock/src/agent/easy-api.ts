@@ -1,7 +1,7 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import type { AnyAgentMiddleware } from "langchain";
-import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import type { CheckpointAdapter } from "@agentdock-ai/checkpoint";
 import {
   AgentDock,
   type AgentDockDefaults,

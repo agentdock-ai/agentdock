@@ -5,13 +5,13 @@ This repository contains the independently publishable AgentDock packages.
 ## Packages
 
 - `agentdock` — core AgentDock runtime.
-- `@agentdock/contracts` — framework-independent frontend/backend contracts.
-- `@agentdock/checkpoint` — shared checkpoint contract and memory adapter.
-- `@agentdock/checkpoint-postgres` — PostgreSQL checkpoint adapter.
-- `@agentdock/checkpoint-sqlite` — SQLite checkpoint adapter.
-- `@agentdock/checkpoint-mongodb` — MongoDB checkpoint adapter.
-- `@agentdock/checkpoint-redis` — Redis checkpoint adapter.
-- `@agentdock/models` — optional model resolver.
+- `@agentdock-ai/contracts` — framework-independent frontend/backend contracts.
+- `@agentdock-ai/checkpoint` — shared checkpoint contract and memory adapter.
+- `@agentdock-ai/checkpoint-postgres` — PostgreSQL checkpoint adapter.
+- `@agentdock-ai/checkpoint-sqlite` — SQLite checkpoint adapter.
+- `@agentdock-ai/checkpoint-mongodb` — MongoDB checkpoint adapter.
+- `@agentdock-ai/checkpoint-redis` — Redis checkpoint adapter.
+- `@agentdock-ai/models` — optional model resolver.
 
 ## Development
 
@@ -25,7 +25,7 @@ Run a single package command with Yarn workspaces:
 ```bash
 yarn workspace agentdock test
 yarn test:coverage
-yarn workspace @agentdock/checkpoint build
+yarn workspace @agentdock-ai/checkpoint build
 ```
 
 ## Publishing

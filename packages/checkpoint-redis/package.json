@@ -1,11 +1,11 @@
 {
-  "name": "@agentdock/checkpoint-redis",
+  "name": "@agentdock-ai/checkpoint-redis",
   "version": "0.1.0",
   "description": "Redis checkpoint adapter for AgentDock",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "url": "git+https://github.com/agentdock-ai/agentdock.git",
     "directory": "packages/checkpoint-redis"
   },
   "main": "./dist/index.js",
@@ -28,7 +28,7 @@
     "prepack": "yarn build"
   },
   "dependencies": {
-    "@agentdock/checkpoint": "^0.1.0",
+    "@agentdock-ai/checkpoint": "^0.1.0",
     "@langchain/langgraph-checkpoint-redis": "^1.0.11",
     "redis": "^4.7.0"
   },

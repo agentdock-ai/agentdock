@@ -8,7 +8,7 @@ import {
   cloneJsonObject,
   cloneJsonValue,
   type JsonValue,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 import type {
   AgentContext,
   Tool,

@@ -83,7 +83,7 @@
 
 ## Shared contracts
 
-- Framework-independent frontend/backend data contracts belong in `@agentdock/contracts`.
+- Framework-independent frontend/backend data contracts belong in `@agentdock-ai/contracts`.
 - The contracts package must not depend on LangChain, LangGraph, database drivers, or Node.js runtime APIs.
 - Keep function-bearing runtime types, workflow types, and provider-specific types inside their owning package.
 - Contracts must be JSON-compatible and versioned when they cross a transport boundary.

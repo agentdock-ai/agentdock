@@ -1,4 +1,4 @@
-# @agentdock/contracts
+# @agentdock-ai/contracts
 
 Framework-independent AgentDock contracts shared by backend runtimes, frontends, and future transport packages.
 
@@ -9,7 +9,7 @@ import type {
   AgentEvent,
   AgentRunResult,
   AgentSessionRecord,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 ```
 
 Runtime implementation types such as `BaseChatModel`, `BaseCheckpointSaver`, tool functions, and LangGraph workflow state remain in the `agentdock` package.

@@ -1,1 +1,1 @@
-export type { Message } from "@agentdock/contracts";
+export type { Message } from "@agentdock-ai/contracts";

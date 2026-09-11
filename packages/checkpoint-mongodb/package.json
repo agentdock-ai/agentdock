@@ -1,11 +1,11 @@
 {
-  "name": "@agentdock/checkpoint-mongodb",
+  "name": "@agentdock-ai/checkpoint-mongodb",
   "version": "0.1.0",
   "description": "MongoDB checkpoint adapter for AgentDock",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "url": "git+https://github.com/agentdock-ai/agentdock.git",
     "directory": "packages/checkpoint-mongodb"
   },
   "main": "./dist/index.js",
@@ -28,7 +28,7 @@
     "prepack": "yarn build"
   },
   "dependencies": {
-    "@agentdock/checkpoint": "^0.1.0",
+    "@agentdock-ai/checkpoint": "^0.1.0",
     "@langchain/langgraph-checkpoint-mongodb": "^1.4.1",
     "mongodb": "^6.21.0"
   },

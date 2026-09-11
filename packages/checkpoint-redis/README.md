@@ -1,4 +1,4 @@
-# @agentdock/checkpoint-redis
+# @agentdock-ai/checkpoint-redis
 
 Redis checkpoint storage for AgentDock.
 
@@ -7,7 +7,7 @@ JSON and Search modules. Use `redis/redis-stack-server` in development and CI,
 not a plain Redis server.
 
 ```ts
-import { RedisCheckpoint } from "@agentdock/checkpoint-redis";
+import { RedisCheckpoint } from "@agentdock-ai/checkpoint-redis";
 
 const checkpoint = new RedisCheckpoint({
   url: process.env.REDIS_URL!,

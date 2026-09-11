@@ -1,11 +1,11 @@
 {
-  "name": "@agentdock/checkpoint-sqlite",
+  "name": "@agentdock-ai/checkpoint-sqlite",
   "version": "0.1.0",
   "description": "SQLite checkpoint adapter for AgentDock",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "url": "git+https://github.com/agentdock-ai/agentdock.git",
     "directory": "packages/checkpoint-sqlite"
   },
   "main": "./dist/index.js",
@@ -28,7 +28,7 @@
     "prepack": "yarn build"
   },
   "dependencies": {
-    "@agentdock/checkpoint": "^0.1.0",
+    "@agentdock-ai/checkpoint": "^0.1.0",
     "@langchain/langgraph-checkpoint-sqlite": "^1.0.4",
     "better-sqlite3": "^12.10.0"
   },

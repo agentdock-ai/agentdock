@@ -1,11 +1,11 @@
 {
-  "name": "@agentdock/checkpoint",
+  "name": "@agentdock-ai/checkpoint",
   "version": "0.1.0",
   "description": "Shared checkpoint adapter contract for AgentDock",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Muhammad-Zain01/agentdock.git",
+    "url": "git+https://github.com/agentdock-ai/agentdock.git",
     "directory": "packages/checkpoint"
   },
   "main": "./dist/index.js",

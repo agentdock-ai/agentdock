@@ -23,7 +23,7 @@ import {
   cloneJsonValue,
   type JsonObject,
   type JsonValue,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 import {
   AgentEventType,
   type AgentEventInput,
@@ -32,7 +32,7 @@ import {
 } from "../../events.js";
 import type { Message } from "../../memory.js";
 import type { AgentContext } from "../../types.js";
-import type { AgentSessionHistory } from "@agentdock/contracts";
+import type { AgentSessionHistory } from "@agentdock-ai/contracts";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,

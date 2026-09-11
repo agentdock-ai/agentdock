@@ -1,10 +1,10 @@
-# @agentdock/checkpoint
+# @agentdock-ai/checkpoint
 
 Shared checkpoint lifecycle contract and in-memory implementation for AgentDock.
 
 ```ts
 import { AgentDock } from "agentdock";
-import { MemoryCheckpoint } from "@agentdock/checkpoint";
+import { MemoryCheckpoint } from "@agentdock-ai/checkpoint";
 
 const agent = new AgentDock({
   model,
@@ -12,7 +12,7 @@ const agent = new AgentDock({
 });
 ```
 
-Install a backend package such as `@agentdock/checkpoint-postgres` when durable storage is required.
+Install a backend package such as `@agentdock-ai/checkpoint-postgres` when durable storage is required.
 
 Adapters own their resources only when passed through `checkpoint`. A raw
 `checkpointer` is caller-owned and is never closed by AgentDock. Every adapter must

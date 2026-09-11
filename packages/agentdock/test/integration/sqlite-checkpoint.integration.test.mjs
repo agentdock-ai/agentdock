@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
-import { SqliteCheckpoint } from "@agentdock/checkpoint-sqlite";
+import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
 import { AgentDock, ToolRegistry } from "../../src/index.js";
 
 function contentText(content) {

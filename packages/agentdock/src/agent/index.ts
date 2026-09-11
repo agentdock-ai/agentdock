@@ -7,7 +7,7 @@ export type {
   ContextSummarizationOptions,
   ModelContextProfile,
 } from "./context-management.js";
-export type { CheckpointAdapter } from "@agentdock/checkpoint";
+export type { CheckpointAdapter } from "@agentdock-ai/checkpoint";
 export * from "./events.js";
 export type {
   AgentContext,

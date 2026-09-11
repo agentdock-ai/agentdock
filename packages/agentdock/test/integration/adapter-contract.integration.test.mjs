@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
-import { MemoryCheckpoint } from "@agentdock/checkpoint";
-import { MongoDBCheckpoint } from "@agentdock/checkpoint-mongodb";
-import { PostgresCheckpoint } from "@agentdock/checkpoint-postgres";
-import { RedisCheckpoint } from "@agentdock/checkpoint-redis";
-import { SqliteCheckpoint } from "@agentdock/checkpoint-sqlite";
+import { MemoryCheckpoint } from "@agentdock-ai/checkpoint";
+import { MongoDBCheckpoint } from "@agentdock-ai/checkpoint-mongodb";
+import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
+import { RedisCheckpoint } from "@agentdock-ai/checkpoint-redis";
+import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
 import { AgentDock, ToolRegistry, createThreadId } from "../../src/index.js";
 
 const externalId = crypto.randomUUID().replaceAll("-", "");

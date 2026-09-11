@@ -1,6 +1,6 @@
 import { MongoClient } from "mongodb";
 import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb";
-import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import type { CheckpointAdapter } from "@agentdock-ai/checkpoint";
 
 export interface MongoDBCheckpointOptions {
   readonly connectionString: string;

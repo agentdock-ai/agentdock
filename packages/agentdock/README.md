@@ -92,11 +92,11 @@ const dock = createAgentDock({
 
 ## Optional provider resolver
 
-`@agentdock/models` is a separate package for applications that prefer a small provider configuration object over importing LangChain provider classes directly. It returns the same `BaseChatModel`; it does not change AgentDock's workflow behavior.
+`@agentdock-ai/models` is a separate package for applications that prefer a small provider configuration object over importing LangChain provider classes directly. It returns the same `BaseChatModel`; it does not change AgentDock's workflow behavior.
 
 ```ts
 import { AgentDock } from "agentdock";
-import { AgentDockModel } from "@agentdock/models";
+import { AgentDockModel } from "@agentdock-ai/models";
 
 const dock = new AgentDock({
   model: AgentDockModel.openAI({
@@ -117,8 +117,8 @@ process recreation and approval resumes without a second graph or persistence sy
 
 ```ts
 import { AgentDock } from "agentdock";
-import { PostgresCheckpoint } from "@agentdock/checkpoint-postgres";
-import { AgentDockModel } from "@agentdock/models";
+import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
+import { AgentDockModel } from "@agentdock-ai/models";
 
 const model = AgentDockModel.openAI({
   model: "gpt-5.4-mini",
@@ -206,7 +206,7 @@ const completed = await dock.resume(
 Use a durable checkpoint adapter in production:
 
 ```ts
-import { PostgresCheckpoint } from "@agentdock/checkpoint-postgres";
+import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
 
 const dock = new AgentDock({
   model,
@@ -216,7 +216,7 @@ const dock = new AgentDock({
 });
 ```
 
-Install only the optional backend package you need, for example `yarn add @agentdock/checkpoint-postgres`. The default `MemoryCheckpoint` is process-local and intended for development and tests. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; AgentDock does not close those caller-owned savers.
+Install only the optional backend package you need, for example `yarn add @agentdock-ai/checkpoint-postgres`. The default `MemoryCheckpoint` is process-local and intended for development and tests. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; AgentDock does not close those caller-owned savers.
 
 ## Lifecycle and authoring rules
 

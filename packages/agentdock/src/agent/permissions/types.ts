@@ -2,4 +2,4 @@ export type {
   ToolApprovalDecision,
   ToolApprovalRequest,
   ToolApprovalResponse,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";

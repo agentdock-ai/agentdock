@@ -1,4 +1,4 @@
-import { cloneJsonObject } from "@agentdock/contracts";
+import { cloneJsonObject } from "@agentdock-ai/contracts";
 import { z } from "zod";
 import type {
   AgentContext,

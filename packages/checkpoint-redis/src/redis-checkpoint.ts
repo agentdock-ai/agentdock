@@ -2,7 +2,7 @@ import {
   RedisSaver,
   type TTLConfig,
 } from "@langchain/langgraph-checkpoint-redis";
-import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import type { CheckpointAdapter } from "@agentdock-ai/checkpoint";
 import { createClient } from "redis";
 
 export interface RedisCheckpointOptions {

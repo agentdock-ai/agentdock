@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
-import type { CheckpointAdapter } from "@agentdock/checkpoint";
+import type { CheckpointAdapter } from "@agentdock-ai/checkpoint";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 

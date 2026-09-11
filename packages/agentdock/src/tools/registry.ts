@@ -4,9 +4,9 @@ import {
   isJsonObject,
   type JsonObject,
   type ToolSchema,
-} from "@agentdock/contracts";
+} from "@agentdock-ai/contracts";
 
-export type { ToolSchema } from "@agentdock/contracts";
+export type { ToolSchema } from "@agentdock-ai/contracts";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
