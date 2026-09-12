@@ -12,7 +12,7 @@ import type {
 } from "@agentdock-ai/contracts";
 ```
 
-Runtime implementation types such as `BaseChatModel`, `BaseCheckpointSaver`, tool functions, and LangGraph workflow state remain in the `agentdock` package.
+Runtime implementation types such as `BaseChatModel`, `BaseCheckpointSaver`, tool functions, and LangGraph workflow state remain in the `@agentdock-ai/agentdock` package.
 
 The event contract provides structured content parts, explicit lifecycle events,
 generic interrupt records, usage and finish metadata, and `reduceAgentEvent()` for
@@ -41,4 +41,4 @@ second message-specific representation. Media parts identify exactly one source:
 
 `cloneJsonSchema()` accepts a JSON Schema object or boolean. AgentDock’s ordinary
 model-tool boundary requires an object-root schema; the supported raw subset is
-documented in the `agentdock` package.
+documented in the `@agentdock-ai/agentdock` package.

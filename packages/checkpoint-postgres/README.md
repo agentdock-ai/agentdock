@@ -3,7 +3,7 @@
 PostgreSQL checkpoint storage for AgentDock. Install it separately when PostgreSQL persistence is needed.
 
 ```ts
-import { AgentDock } from "agentdock";
+import { AgentDock } from "@agentdock-ai/agentdock";
 import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
 
 const agent = new AgentDock({

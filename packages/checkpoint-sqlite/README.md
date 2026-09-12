@@ -4,7 +4,7 @@ SQLite checkpoint storage for local AgentDock applications.
 
 ```ts
 import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
-import { AgentDock } from "agentdock";
+import { AgentDock } from "@agentdock-ai/agentdock";
 
 const checkpoint = new SqliteCheckpoint({ path: "./data/agentdock.sqlite" });
 const agent = new AgentDock({ model, checkpoint });

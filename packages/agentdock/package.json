@@ -1,5 +1,5 @@
 {
-  "name": "agentdock",
+  "name": "@agentdock-ai/agentdock",
   "version": "0.1.0",
   "description": "Reusable TypeScript agent infrastructure for AgentDock applications",
   "type": "module",

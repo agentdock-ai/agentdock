@@ -3,7 +3,7 @@
 Shared checkpoint lifecycle contract and in-memory implementation for AgentDock.
 
 ```ts
-import { AgentDock } from "agentdock";
+import { AgentDock } from "@agentdock-ai/agentdock";
 import { MemoryCheckpoint } from "@agentdock-ai/checkpoint";
 
 const agent = new AgentDock({

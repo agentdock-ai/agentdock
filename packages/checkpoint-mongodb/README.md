@@ -4,7 +4,7 @@ MongoDB checkpoint storage for AgentDock.
 
 ```ts
 import { MongoDBCheckpoint } from "@agentdock-ai/checkpoint-mongodb";
-import { AgentDock } from "agentdock";
+import { AgentDock } from "@agentdock-ai/agentdock";
 
 const checkpoint = new MongoDBCheckpoint({
   connectionString: process.env.MONGODB_URL!,

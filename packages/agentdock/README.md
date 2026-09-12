@@ -8,7 +8,7 @@ It owns the application contract: tool registration, approval policy, normalized
 ## Install
 
 ```bash
-yarn add agentdock @langchain/openai
+yarn add @agentdock-ai/agentdock @langchain/openai
 ```
 
 Applications install the LangChain provider they need and pass a configured chat model to AgentDock.
@@ -17,7 +17,7 @@ Applications install the LangChain provider they need and pass a configured chat
 
 ```ts
 import { ChatOpenAI } from "@langchain/openai";
-import { AgentDock } from "agentdock";
+import { AgentDock } from "@agentdock-ai/agentdock";
 
 const dock = new AgentDock({
   model: new ChatOpenAI({ model: "gpt-5.4-mini" }),
@@ -73,7 +73,7 @@ internally and returns the same logical result.
 For new code, the simpler typed API avoids hand-written raw schemas:
 
 ```ts
-import { createAgentDock, defineTool } from "agentdock";
+import { createAgentDock, defineTool } from "@agentdock-ai/agentdock";
 import { z } from "zod";
 
 const weather = defineTool({
@@ -95,7 +95,7 @@ const dock = createAgentDock({
 `@agentdock-ai/models` is a separate package for applications that prefer a small provider configuration object over importing LangChain provider classes directly. It returns the same `BaseChatModel`; it does not change AgentDock's workflow behavior.
 
 ```ts
-import { AgentDock } from "agentdock";
+import { AgentDock } from "@agentdock-ai/agentdock";
 import { AgentDockModel } from "@agentdock-ai/models";
 
 const dock = new AgentDock({
@@ -116,7 +116,7 @@ and retained messages through the existing LangGraph checkpoint. It therefore su
 process recreation and approval resumes without a second graph or persistence system.
 
 ```ts
-import { AgentDock } from "agentdock";
+import { AgentDock } from "@agentdock-ai/agentdock";
 import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
 import { AgentDockModel } from "@agentdock-ai/models";
 
