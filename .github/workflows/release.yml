@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "agentdock-release-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+jobs:
+  verify-release-commit:
+    name: Verify release tag points to main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check tag commit is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD
+
+  ci:
+    name: Run full CI
+    needs: verify-release-commit
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish packages to npm
+    needs: [verify-release-commit, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: corepack enable
+      - name: Set up npm for trusted publishing
+        run: npm install --global 'npm@^11.5.1'
+      - run: yarn install --frozen-lockfile
+      - name: Build and publish packages
+        run: yarn release
+      - name: Push package version tags
+        run: git push origin --follow-tags
