@@ -13,7 +13,7 @@
     "test:coverage": "yarn workspace @agentdock-ai/agentdock test:coverage",
     "test:integration:services": "yarn build && yarn workspace @agentdock-ai/agentdock test:integration",
     "build": "yarn build:contracts && yarn build:checkpoint && yarn build:agentdock && yarn build:checkpoint-postgres && yarn build:checkpoint-sqlite && yarn build:checkpoint-mongodb && yarn build:checkpoint-redis && yarn build:models",
-    "ci": "yarn format:check && yarn typecheck && yarn test && yarn test:coverage && yarn build",
+    "ci": "yarn format:check && yarn typecheck && yarn build && yarn test && yarn test:coverage",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "yarn build && changeset publish",
