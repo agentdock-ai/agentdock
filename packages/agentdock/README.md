@@ -1,26 +1,30 @@
 # AgentDock
 
-AgentDock is a durable, frontend-ready TypeScript runtime for a streamed LangChain
-tool-calling agent running on LangGraph.
+AgentDock is a durable, frontend-ready TypeScript runtime for streamed tool-calling
+agents running on LangGraph.
 
-It owns the application contract: tool registration, approval policy, normalized events, run lifecycle, and a small public API. LangChain owns models and tools; LangGraph owns the tool-calling loop, checkpoints, interrupts, and resume.
+It owns the application contract: tool registration, approval policy, normalized
+events, run lifecycle, and a small public API. Its companion `@agentdock-ai/models`
+package provides the app-facing model configuration API; LangChain and LangGraph
+run the model and agent workflow internally.
 
 ## Install
 
 ```bash
-yarn add @agentdock-ai/agentdock @langchain/openai
+yarn add @agentdock-ai/agentdock @agentdock-ai/models
 ```
 
-Applications install the LangChain provider they need and pass a configured chat model to AgentDock.
+Configure a provider with `@agentdock-ai/models` and pass it to AgentDock. Application
+code does not need to import provider classes from LangChain.
 
 ## Usage
 
 ```ts
-import { ChatOpenAI } from "@langchain/openai";
 import { AgentDock } from "@agentdock-ai/agentdock";
+import { AgentDockModel } from "@agentdock-ai/models";
 
 const dock = new AgentDock({
-  model: new ChatOpenAI({ model: "gpt-5.4-mini" }),
+  model: AgentDockModel.openAI({ model: "gpt-5.4-mini" }),
   defaults: {
     systemPrompt: "Answer clearly and use tools when they help.",
     maxSteps: 4,
@@ -90,9 +94,11 @@ const dock = createAgentDock({
 });
 ```
 
-## Optional provider resolver
+## Model providers
 
-`@agentdock-ai/models` is a separate package for applications that prefer a small provider configuration object over importing LangChain provider classes directly. It returns the same `BaseChatModel`; it does not change AgentDock's workflow behavior.
+`@agentdock-ai/models` keeps provider-specific setup behind AgentDock's model API.
+It currently supports `openai`, `ollama`, and `openrouter`; API keys can be passed in
+configuration or read from the provider's usual environment variable.
 
 ```ts
 import { AgentDock } from "@agentdock-ai/agentdock";
@@ -106,7 +112,7 @@ const dock = new AgentDock({
 });
 ```
 
-The optional resolver initially supports `openai`, `ollama`, and `openrouter`; applications that need a provider outside that set can continue to pass any LangChain `BaseChatModel` directly.
+The model package creates the provider implementation used internally by AgentDock.
 
 ## Optional automatic context management
 

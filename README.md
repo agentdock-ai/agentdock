@@ -11,7 +11,7 @@ This repository contains the independently publishable AgentDock packages.
 - `@agentdock-ai/checkpoint-sqlite` — SQLite checkpoint adapter.
 - `@agentdock-ai/checkpoint-mongodb` — MongoDB checkpoint adapter.
 - `@agentdock-ai/checkpoint-redis` — Redis checkpoint adapter.
-- `@agentdock-ai/models` — optional model resolver.
+- `@agentdock-ai/models` — app-facing provider configuration API for AgentDock.
 
 ## Development
 
