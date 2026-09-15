@@ -1,13 +1,7 @@
 <div align="center">
-  <table>
-    <tr>
-      <td align="center" bgcolor="#111827">
-        <img src="./logo.png" alt="AgentDock" width="460" />
-      </td>
-    </tr>
-  </table>
-
-  <h1>AgentDock</h1>
+  <p>
+    <img src="./logo.png" alt="AgentDock" width="360" />
+  </p>
 
   <p>
     Production-oriented TypeScript infrastructure for streamed, tool-using agents.
@@ -88,20 +82,25 @@ const agent = createAgentDock({
   tools: { weather },
 });
 
-const result = await agent.run(
-  "What is the weather in Lahore?",
-  { userId: "user-123" },
-  { sessionId: "session-123" },
-);
+try {
+  const result = await agent.run(
+    "What is the weather in Lahore?",
+    { userId: "user-123" },
+    { sessionId: "session-123" },
+  );
 
-const answer = result.content
-  .filter((part) => part.type === "text")
-  .map((part) => part.text)
-  .join("");
+  const answer = result.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
 
-console.log(answer);
-await agent.close();
+  console.log(answer);
+} finally {
+  await agent.close();
+}
 ```
+
+`get_weather` is an application-defined example tool. AgentDock does not provide a weather service; replace its `run` function with your own API or business logic.
 
 Every run has a `sessionId` and a JSON context object. Use `agent.stream()` when the application should show text and tool activity as it arrives:
 
