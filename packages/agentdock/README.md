@@ -1,227 +1,100 @@
-# Agentdock
+<div align="center">
+  <p>
+    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" />
+  </p>
 
-Agentdock is a durable, frontend-ready TypeScript runtime for streamed tool-calling
-agents running on LangGraph.
+  <p>Production-oriented TypeScript runtime for streamed, tool-using agents.</p>
 
-It owns the application contract: tool registration, approval policy, normalized
-events, run lifecycle, and a small public API. Its companion `@agentdock-ai/models`
-package provides the app-facing model configuration API; LangChain and LangGraph
-run the model and agent workflow internally.
+  <p>
+    <a href="https://www.npmjs.com/package/@agentdock-ai/agentdock"><img alt="npm version" src="https://img.shields.io/npm/v/%40agentdock-ai%2Fagentdock?label=release&color=6959DF" /></a>
+    <a href="https://github.com/agentdock-ai/agentdock/blob/main/LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827" /></a>
+    <img alt="Node.js 20+" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white" />
+    <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white" />
+  </p>
+</div>
 
-`AgentDock` is the single runtime entry point. Construct it with `new AgentDock(...)`
-and register tools on its `ToolRegistry` or with `registerTool()`. `defineTool()`
-only creates a typed tool definition and does not provide a second agent API.
+Agentdock gives TypeScript applications a focused runtime for model calls, typed
+tools, approvals, sessions, persistence, streaming, and lifecycle control. LangChain
+and LangGraph run internally; application code uses the Agentdock API.
 
-## Install
+## ✨ What you get
+
+- **Agent runtime:** one `AgentDock` class for runs, streams, and resumes.
+- **Typed tools:** validation, authorization, progress, cancellation, and approvals.
+- **Durable sessions:** memory, SQLite, PostgreSQL, MongoDB, and Redis adapters.
+- **Normalized events:** one frontend-friendly contract for text, tools, usage, and interrupts.
+- **Safe lifecycle:** timeouts, cancellation, cleanup, and owned resource management.
+
+## 🚀 Install
 
 ```bash
-yarn add @agentdock-ai/agentdock @agentdock-ai/models
+yarn add @agentdock-ai/agentdock @agentdock-ai/models zod
 ```
 
-Configure a provider with `@agentdock-ai/models` and pass it to Agentdock. Application
-code does not need to import provider classes from LangChain.
-
-## Usage
+## 💻 Quick start
 
 ```ts
-import { AgentDock } from "@agentdock-ai/agentdock";
+import { AgentDock, defineTool } from "@agentdock-ai/agentdock";
 import { AgentDockModel } from "@agentdock-ai/models";
+import { z } from "zod";
 
-const dock = new AgentDock({
-  model: AgentDockModel.openAI({ model: "gpt-5.4-mini" }),
-  defaults: {
-    systemPrompt: "Answer clearly and use tools when they help.",
-    maxSteps: 4,
-  },
-});
-
-dock.registerTool({
+const weather = defineTool({
   name: "get_weather",
-  description: "Look up the current weather for a city.",
-  parameters: {
-    type: "object",
-    properties: { city: { type: "string" } },
-    required: ["city"],
-    additionalProperties: false,
-  },
-  execute: async ({ input }) => ({ city: input.city, forecast: "sunny" }),
+  description: "Get the weather for a city.",
+  input: z.object({ city: z.string() }),
+  run: async ({ city }) => ({ city, forecast: "Sunny" }),
 });
 
-const { stream, result } = await dock.stream(
-  "What is the weather in Lahore?",
+const agent = new AgentDock({
+  model: AgentDockModel.openAI({ model: "gpt-5.4-mini" }),
+});
+
+agent.registerTool(weather);
+
+try {
+  const result = await agent.run(
+    "What is the weather in Lahore?",
+    { userId: "user-123" },
+    { sessionId: "session-123" },
+  );
+
+  console.log(result.content);
+} finally {
+  await agent.close();
+}
+```
+
+Use `agent.stream()` when the UI should receive text and tool activity as it arrives:
+
+```ts
+const { stream, result } = await agent.stream(
+  "Summarize my latest order.",
   { userId: "user-123" },
   { sessionId: "session-123" },
 );
 
 for await (const event of stream) {
-  if (event.type === "message.part.delta" && event.part.type === "text")
+  if (event.type === "message.part.delta" && event.part.type === "text") {
     process.stdout.write(event.part.text);
+  }
 }
 
 console.log(await result);
 ```
 
-`result.content` and every normalized message use `ContentPart[]`. Read text parts
-for plain terminal output while preserving reasoning, media, citations, custom JSON,
-and tool records for richer clients:
+## 🧠 Sessions and approvals
 
-```ts
-const text = (await result).content
-  .filter((part) => part.type === "text")
-  .map((part) => part.text)
-  .join("");
+Pass a stable `sessionId` to continue a conversation. Use a durable checkpoint
+adapter when sessions must survive restarts or be shared across instances:
+
+```bash
+yarn add @agentdock-ai/checkpoint-postgres
 ```
-
-The stream uses the canonical Agentdock event contract. Events include structured
-content (`message.part.delta`), tool lifecycle events (`tool.completed` and
-`tool.failed`), interrupts, terminal metadata, and stable run/session sequencing.
-There is one stream method and one event union; `run()` consumes the same stream
-internally and returns the same logical result.
-
-For typed tool input, use `defineTool()` with the single `AgentDock` runtime:
-
-```ts
-import { AgentDock, ToolRegistry, defineTool } from "@agentdock-ai/agentdock";
-import { z } from "zod";
-
-const weather = defineTool({
-  name: "get_weather",
-  description: "Look up weather.",
-  input: z.object({ city: z.string() }),
-  run: async ({ city }) => ({ city, forecast: "sunny" }),
-});
-
-const registry = new ToolRegistry();
-registry.register(weather);
-
-const dock = new AgentDock({
-  model,
-  defaults: { systemPrompt: "Answer clearly." },
-  registry,
-});
-```
-
-## Model providers
-
-`@agentdock-ai/models` keeps provider-specific setup behind Agentdock's model API.
-It currently supports `openai`, `ollama`, and `openrouter`; API keys can be passed in
-configuration or read from the provider's usual environment variable.
-
-```ts
-import { AgentDock } from "@agentdock-ai/agentdock";
-import { AgentDockModel } from "@agentdock-ai/models";
-
-const dock = new AgentDock({
-  model: AgentDockModel.openAI({
-    model: "gpt-5.4-mini",
-    apiKey: process.env.OPENAI_API_KEY,
-  }),
-});
-```
-
-The model package creates the provider implementation used internally by Agentdock.
-
-## Optional automatic context management
-
-Context compaction is opt-in. When enabled, Agentdock compacts older model-visible
-conversation state immediately before a primary-model call, then persists the summary
-and retained messages through the existing LangGraph checkpoint. It therefore survives
-process recreation and approval resumes without a second graph or persistence system.
-
-```ts
-import { AgentDock } from "@agentdock-ai/agentdock";
-import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
-import { AgentDockModel } from "@agentdock-ai/models";
-
-const model = AgentDockModel.openAI({
-  model: "gpt-5.4-mini",
-  apiKey: process.env.OPENAI_API_KEY,
-});
-const summaryModel = AgentDockModel.openAI({
-  model: "gpt-5.4-nano",
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-const dock = new AgentDock({
-  model,
-  checkpoint: new PostgresCheckpoint({
-    connectionString: process.env.DATABASE_URL!,
-  }),
-  contextManagement: {
-    summarization: {
-      summaryModel, // optional; defaults to model
-      trigger: "auto",
-    },
-  },
-});
-```
-
-`trigger: "auto"` uses the verified input-context profile of the **primary** model:
-it compacts at 75% of that capacity and retains the newest 25%. The summary model may
-be smaller; it never changes the primary-model budget, and Agentdock trims its summary
-input to fit safely. Supported provider models and `AgentDockModel` expose profile
-metadata. An unknown raw LangChain model must provide a profile override in automatic
-or fractional mode:
-
-```ts
-contextManagement: {
-  summarization: {
-    trigger: "auto",
-    primaryModelProfile: { maxInputTokens: 128_000 },
-  },
-}
-```
-
-Advanced callers can avoid profile discovery with explicit policies such as
-`trigger: { tokens: 96_000 }`, `trigger: { messages: 80 }`, and
-`keep: { tokens: 24_000 }`. `maxSteps` is unrelated: it limits main model calls,
-not the model context size. Agentdock preserves system instructions, recent messages,
-and whole assistant/tool-result groups. Runtime `ctx` remains tool and authorization
-context; it is not copied into model prompts or summaries.
-
-## Approval and resume
-
-Set `requiresApproval: true` on a side-effecting tool. Agentdock emits
-`interrupt.required` and returns a `waiting_for_approval` result. LangGraph keeps
-the graph checkpoint; resume the same session after a decision. A resume continues
-the same logical run and can cross any number of approval boundaries, including
-after recreating Agentdock from a durable checkpoint. Approval requests are read
-from the current interrupt only, so old approvals never reappear.
-
-Event sequence numbers are ordered within each returned stream. The logical
-sequence continues across phases and restarts, while each returned stream has its
-own phase sequence.
-
-The contracts package provides the event types with session/run/phase identifiers,
-logical ordering, structured content parts, generic interrupt records, usage, finish
-metadata, and a deterministic reducer. Tool approval is the first implemented
-interrupt kind; custom interrupt execution remains a later milestone.
-
-```ts
-const waiting = await dock.run("Publish the report.", context, {
-  sessionId: "session-123",
-  runId: "run-publish",
-});
-
-const completed = await dock.resume(
-  {
-    runId: waiting.runId,
-    approvals: waiting.approvalRequests.map((request) => ({
-      approvalId: request.approvalId,
-      approved: true,
-    })),
-  },
-  context,
-  { sessionId: "session-123" },
-);
-```
-
-Use a durable checkpoint adapter in production:
 
 ```ts
 import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
 
-const dock = new AgentDock({
+const agent = new AgentDock({
   model,
   checkpoint: new PostgresCheckpoint({
     connectionString: process.env.DATABASE_URL!,
@@ -229,45 +102,27 @@ const dock = new AgentDock({
 });
 ```
 
-Install only the optional backend package you need, for example `yarn add @agentdock-ai/checkpoint-postgres`. The default `MemoryCheckpoint` is process-local and intended for development and tests. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; Agentdock does not close those caller-owned savers.
+Set `requiresApproval: true` on a side-effecting tool. Agentdock pauses the run,
+persists the interrupt, and resumes it with `agent.resume()` after approval.
 
-## Lifecycle and authoring rules
+## 📚 Useful APIs
 
-`new AgentDock()` is the AgentDock runtime for raw LangChain models, checkpointers,
-adapters, defaults, coordinators, and middleware. `defineTool()` validates model
-input with Zod and infers the `run` input type. The execution callback receives
-JSON context, an abort signal, progress reporting, and the finalized tool-call ID.
-Raw JSON Schema is an explicit advanced escape hatch. Its supported subset is an
-object root with `properties`, `required`, `additionalProperties`, `items`,
-`enum`, `const`, `oneOf`, `anyOf`, and `allOf` (plus descriptive metadata);
-unsupported keywords are rejected at registration.
+| API                   | Use it for                                          |
+| --------------------- | --------------------------------------------------- |
+| `run()`               | Execute a prompt and receive one result.            |
+| `stream()`            | Consume normalized events while a run is executing. |
+| `resume()`            | Continue a paused approval run.                     |
+| `getSession()`        | Read the current normalized message state.          |
+| `getSessionHistory()` | Inspect checkpoint-by-checkpoint history.           |
+| `deleteSession()`     | Remove a session’s checkpoint context.              |
+| `close()`             | Stop active work and release owned resources.       |
 
-Tool input is validated before authorization and again before execution through the
-same runtime schema. For publish, write, send, or mutation tools, persist or pass the
-`toolCallId` as the external operation's idempotency key. Agentdock does not retry or
-undo a side effect that outlives cancellation; a timeout or cancellation is not proof
-that the external operation stopped.
+## 🔗 Related packages
 
-`getSession()` returns current normalized model-visible messages. Use
-`getSessionHistory()` for checkpoint-by-checkpoint history and `deleteSession()` to
-remove all model-visible checkpoint context. Deletion fails while the
-namespace/session has an active run. A `sessionNamespace` must be stable for the
-host/tenant that owns the session; host authorization and tenant metadata remain
-outside Agentdock.
+- [`@agentdock-ai/models`](https://www.npmjs.com/package/@agentdock-ai/models) — provider configuration.
+- [`@agentdock-ai/contracts`](https://www.npmjs.com/package/@agentdock-ai/contracts) — framework-independent events and data types.
+- [`@agentdock-ai/checkpoint`](https://www.npmjs.com/package/@agentdock-ai/checkpoint) — checkpoint contract and memory adapter.
 
-Use a durable `checkpoint` adapter when Agentdock owns the resource. If you pass a
-raw `checkpointer`, it remains caller-owned and Agentdock never closes it. Tool and
-authorization timeouts have hard deadlines even for code that ignores its abort
-signal, but an external side effect may still continue. `close({ gracePeriodMs })`
-aborts active runs, waits only for the grace period, closes owned resources once,
-and exposes unfinished run IDs through `getUnfinishedRunIds()`.
+## 📄 License
 
-Authorization is checked before an approval interrupt and again immediately before
-tool execution. A denied protected tool therefore does not create an approval prompt.
-
-Every event includes `protocolVersion` plus stable run, session, phase, event, and
-sequence fields. Consumers must reject unsupported protocol versions rather than
-guessing at payload shape. Usage may include input, cached-input, output, reasoning,
-and total tokens together with model, provider, and USD cost when a provider reports
-them. A configured model-call limit terminates with `agent_step_limit` and explicit
-limit metadata.
+MIT. See the [repository license](https://github.com/agentdock-ai/agentdock/blob/main/LICENSE).

@@ -1,24 +1,61 @@
-# @agentdock-ai/checkpoint-mongodb
+<div align="center">
+  <p>
+    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" />
+  </p>
 
-MongoDB checkpoint storage for Agentdock.
+  <p>MongoDB checkpoints for durable Agentdock sessions.</p>
 
-```ts
-import { MongoDBCheckpoint } from "@agentdock-ai/checkpoint-mongodb";
-import { AgentDock } from "@agentdock-ai/agentdock";
+  <p>
+    <a href="https://www.npmjs.com/package/@agentdock-ai/checkpoint-mongodb"><img alt="npm version" src="https://img.shields.io/npm/v/%40agentdock-ai%2Fcheckpoint-mongodb?label=release&color=6959DF" /></a>
+    <a href="https://github.com/agentdock-ai/agentdock/blob/main/LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827" /></a>
+    <img alt="Node.js 20+" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white" />
+    <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white" />
+  </p>
+</div>
 
-const checkpoint = new MongoDBCheckpoint({
-  connectionString: process.env.MONGODB_URL!,
-  database: "agentdock",
-});
+Use this adapter when Agentdock sessions should live alongside application data in
+MongoDB.
 
-const agent = new AgentDock({ model, checkpoint });
-await agent.run(prompt, context, {
-  sessionId: authorizedSessionId,
-  sessionNamespace: `my-app:${authorizedTenantId}`,
-});
+## 🚀 Install
+
+```bash
+yarn add @agentdock-ai/agentdock @agentdock-ai/checkpoint-mongodb
 ```
 
-`database`, `collection`, and `writesCollection` must be non-empty when provided;
-the checkpoint and writes collection names must differ. Agentdock owns and closes
-the adapter. The host must authorize session access and use a stable tenant namespace
-when one database is shared.
+## 💻 Usage
+
+```ts
+import { AgentDock } from "@agentdock-ai/agentdock";
+import { MongoDBCheckpoint } from "@agentdock-ai/checkpoint-mongodb";
+
+const agent = new AgentDock({
+  model,
+  checkpoint: new MongoDBCheckpoint({
+    connectionString: process.env.MONGODB_URL!,
+    database: "agentdock", // optional
+    collection: "checkpoints", // optional
+    writesCollection: "checkpoint_writes", // optional
+  }),
+});
+
+try {
+  await agent.run(
+    "Hello",
+    { userId: "user-123" },
+    { sessionId: "session-123" },
+  );
+} finally {
+  await agent.close();
+}
+```
+
+Agentdock creates and owns the MongoDB client, initializes the LangGraph saver,
+and closes the client through `agent.close()`. The checkpoint and writes collection
+names must be different when both are configured.
+
+Use a stable `sessionNamespace` and authorize every session operation in the host
+application when a database is shared across tenants.
+
+## 📄 License
+
+MIT. See the [repository license](https://github.com/agentdock-ai/agentdock/blob/main/LICENSE).

@@ -1,8 +1,36 @@
-# @agentdock-ai/contracts
+<div align="center">
+  <p>
+    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" />
+  </p>
 
-Framework-independent Agentdock contracts shared by backend runtimes, frontends, and future transport packages.
+  <p>Small, framework-independent data contracts for Agentdock applications.</p>
 
-This package contains JSON-compatible public data types only. It does not depend on LangChain, LangGraph, Node.js runtime APIs, or database adapters.
+  <p>
+    <a href="https://www.npmjs.com/package/@agentdock-ai/contracts"><img alt="npm version" src="https://img.shields.io/npm/v/%40agentdock-ai%2Fcontracts?label=release&color=6959DF" /></a>
+    <a href="https://github.com/agentdock-ai/agentdock/blob/main/LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827" /></a>
+    <img alt="Node.js 20+" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white" />
+    <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white" />
+  </p>
+</div>
+
+Use this package when a frontend, backend, or transport layer needs Agentdock’s
+JSON-compatible event and run types without importing LangChain or LangGraph.
+
+## ✨ Included
+
+- Agent events and run results.
+- Structured messages and content parts.
+- Interrupt, usage, and finish metadata.
+- `reduceAgentEvent()` for rebuilding a UI-safe snapshot.
+- Strict JSON cloning and validation helpers.
+
+## 🚀 Install
+
+```bash
+yarn add @agentdock-ai/contracts
+```
+
+## 💻 Usage
 
 ```ts
 import type {
@@ -10,35 +38,18 @@ import type {
   AgentRunResult,
   AgentSessionRecord,
 } from "@agentdock-ai/contracts";
+
+function render(event: AgentEvent) {
+  if (event.type === "message.part.delta" && event.part.type === "text") {
+    process.stdout.write(event.part.text);
+  }
+}
 ```
 
-Runtime implementation types such as `BaseChatModel`, `BaseCheckpointSaver`, tool functions, and LangGraph workflow state remain in the `@agentdock-ai/agentdock` package.
+The package intentionally contains types and JSON-safe helpers only. Runtime
+implementation types such as models, tools, and checkpoint savers belong to the
+Agentdock runtime package.
 
-The event contract provides structured content parts, explicit lifecycle events,
-generic interrupt records, usage and finish metadata, and `reduceAgentEvent()` for
-rebuilding a UI-safe snapshot. The reducer rejects out-of-order events and ignores
-exact duplicate event IDs so reconnects are deterministic; reusing an ID with
-different data is rejected. Every event carries the numeric
-`AGENT_EVENT_PROTOCOL_VERSION` and consumers must reject unsupported versions.
+## 📄 License
 
-The lifecycle event names are `run.started`, `message.started`,
-`message.part.delta`, `message.completed`, `tool.called`, `tool.progress`,
-`tool.completed`, `tool.failed`, `interrupt.required`, `interrupt.resolved`,
-`usage.updated`, `run.completed`, `run.failed`, and `run.cancelled`. The reducer
-tracks multiple assistant messages, tool progress/results/errors, the current
-interrupt, usage, limits, and terminal metadata. A delta requires a started
-message; tool results require a known tool call; events after a terminal event are
-rejected.
-
-All public contract values are strict JSON. `cloneJsonValue()` and
-`cloneJsonObject()` reject cycles, `undefined`, functions, symbols, `BigInt`,
-`Date`, `Map`, `Set`, and non-finite numbers.
-
-Normalized `Message.content` and `AgentRunResult.content` use the same
-`ContentPart[]` contract. Tool calls and tool results are content parts rather than a
-second message-specific representation. Media parts identify exactly one source:
-`url`, base64 `data`, or `fileId`.
-
-`cloneJsonSchema()` accepts a JSON Schema object or boolean. Agentdock’s ordinary
-model-tool boundary requires an object-root schema; the supported raw subset is
-documented in the `@agentdock-ai/agentdock` package.
+MIT. See the [repository license](https://github.com/agentdock-ai/agentdock/blob/main/LICENSE).

@@ -1,6 +1,34 @@
-# @agentdock-ai/checkpoint
+<div align="center">
+  <p>
+    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" />
+  </p>
 
-Shared checkpoint lifecycle contract and in-memory implementation for Agentdock.
+  <p>Shared checkpoint contract and in-memory adapter for Agentdock.</p>
+
+  <p>
+    <a href="https://www.npmjs.com/package/@agentdock-ai/checkpoint"><img alt="npm version" src="https://img.shields.io/npm/v/%40agentdock-ai%2Fcheckpoint?label=release&color=6959DF" /></a>
+    <a href="https://github.com/agentdock-ai/agentdock/blob/main/LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827" /></a>
+    <img alt="Node.js 20+" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white" />
+    <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white" />
+  </p>
+</div>
+
+This package is the small foundation shared by Agentdock checkpoint backends. It
+contains the adapter contract, lifecycle manager, and process-local `MemoryCheckpoint`.
+
+## ✨ Included
+
+- **`CheckpointAdapter`** — common `saver`, `initialize()`, and `close()` contract.
+- **`MemoryCheckpoint`** — fast, process-local storage for development and tests.
+- **`CheckpointManager`** — selects the adapter and owns its lifecycle.
+
+## 🚀 Install
+
+```bash
+yarn add @agentdock-ai/agentdock @agentdock-ai/checkpoint
+```
+
+## 💻 Usage
 
 ```ts
 import { AgentDock } from "@agentdock-ai/agentdock";
@@ -10,20 +38,32 @@ const agent = new AgentDock({
   model,
   checkpoint: new MemoryCheckpoint(),
 });
+
+try {
+  await agent.run(
+    "Hello",
+    { userId: "user-123" },
+    { sessionId: "session-123" },
+  );
+} finally {
+  await agent.close();
+}
 ```
 
-Install a backend package such as `@agentdock-ai/checkpoint-postgres` when durable storage is required.
+## 🗄️ Choose durable storage
 
-Adapters own their resources only when passed through `checkpoint`. A raw
-`checkpointer` is caller-owned and is never closed by Agentdock. Every adapter must
-support idempotent initialization and close, restart persistence, pending approval
-resume, tool-message serialization, deletion through `deleteThread()`, and cleanup
-after failures. SQLite is covered by the normal local integration suite. PostgreSQL,
-MongoDB, and Redis Stack run in the service-backed CI integration job; local unit
-tests do not require those services.
+Install only the backend you need:
 
-The host application must authorize a session before every run, resume, read,
-history, or delete operation. Use `sessionNamespace` to partition a shared saver by
-application and tenant; context metadata does not enforce ownership. Passing an
-adapter as `checkpoint` gives Agentdock lifecycle ownership, while a raw
-`checkpointer` always remains caller-owned.
+| Package                                                                                  | Best for                             |
+| ---------------------------------------------------------------------------------------- | ------------------------------------ |
+| [`checkpoint-sqlite`](https://www.npmjs.com/package/@agentdock-ai/checkpoint-sqlite)     | Local applications and one server.   |
+| [`checkpoint-postgres`](https://www.npmjs.com/package/@agentdock-ai/checkpoint-postgres) | Shared production deployments.       |
+| [`checkpoint-mongodb`](https://www.npmjs.com/package/@agentdock-ai/checkpoint-mongodb)   | MongoDB-based applications.          |
+| [`checkpoint-redis`](https://www.npmjs.com/package/@agentdock-ai/checkpoint-redis)       | Redis Stack and TTL-based retention. |
+
+Pass an adapter instance through `checkpoint`. A raw LangGraph `checkpointer` is
+also supported by Agentdock as an advanced, caller-owned escape hatch.
+
+## 📄 License
+
+MIT. See the [repository license](https://github.com/agentdock-ai/agentdock/blob/main/LICENSE).
