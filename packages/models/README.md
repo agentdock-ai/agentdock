@@ -1,6 +1,6 @@
 # @agentdock-ai/models
 
-Provider configuration API for [AgentDock](https://www.npmjs.com/package/@agentdock-ai/agentdock). Use `AgentDockModel` to configure a supported provider without importing provider classes from LangChain; AgentDock uses the configured model internally.
+Provider configuration API for [Agentdock](https://www.npmjs.com/package/@agentdock-ai/agentdock). Use `AgentDockModel` to configure a supported provider without importing provider classes from LangChain; Agentdock uses the configured model internally.
 
 ## Install
 

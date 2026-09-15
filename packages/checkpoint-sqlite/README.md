@@ -1,6 +1,6 @@
 # @agentdock-ai/checkpoint-sqlite
 
-SQLite checkpoint storage for local AgentDock applications.
+SQLite checkpoint storage for local Agentdock applications.
 
 ```ts
 import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
@@ -14,6 +14,6 @@ await agent.run(prompt, context, {
 });
 ```
 
-AgentDock owns and closes an adapter passed as `checkpoint`. The host still owns
+Agentdock owns and closes an adapter passed as `checkpoint`. The host still owns
 session authorization: never trust a client-provided session ID without checking
 access, and use a stable application/tenant namespace when a file is shared.

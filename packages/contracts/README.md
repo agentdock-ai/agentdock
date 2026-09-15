@@ -1,6 +1,6 @@
 # @agentdock-ai/contracts
 
-Framework-independent AgentDock contracts shared by backend runtimes, frontends, and future transport packages.
+Framework-independent Agentdock contracts shared by backend runtimes, frontends, and future transport packages.
 
 This package contains JSON-compatible public data types only. It does not depend on LangChain, LangGraph, Node.js runtime APIs, or database adapters.
 
@@ -39,6 +39,6 @@ Normalized `Message.content` and `AgentRunResult.content` use the same
 second message-specific representation. Media parts identify exactly one source:
 `url`, base64 `data`, or `fileId`.
 
-`cloneJsonSchema()` accepts a JSON Schema object or boolean. AgentDock’s ordinary
+`cloneJsonSchema()` accepts a JSON Schema object or boolean. Agentdock’s ordinary
 model-tool boundary requires an object-root schema; the supported raw subset is
 documented in the `@agentdock-ai/agentdock` package.

@@ -1,6 +1,6 @@
 <div align="center">
   <p>
-    <img src="./logo.png" alt="AgentDock" width="360" />
+    <img src="./logo.png" alt="Agentdock" width="360" />
   </p>
 
   <p>
@@ -8,7 +8,7 @@
   </p>
 
   <p>
-    <a href="https://agentdock-ai.vercel.app"><strong>Visit the AgentDock landing page →</strong></a>
+    <a href="https://agentdock-ai.vercel.app"><strong>Visit the Agentdock landing page →</strong></a>
   </p>
 
   <p>
@@ -20,9 +20,9 @@
   </p>
 </div>
 
-AgentDock gives a TypeScript application the runtime it needs to build a real agent: model calls, typed tools, approvals, sessions, persistence, streaming events, and lifecycle control.
+Agentdock gives a TypeScript application the runtime it needs to build a real agent: model calls, typed tools, approvals, sessions, persistence, streaming events, and lifecycle control.
 
-The public API belongs to AgentDock. Applications configure providers through `@agentdock-ai/models` and use AgentDock’s runtime and contracts. LangChain and LangGraph run the model and workflow internally; application code does not need to import provider classes from LangChain.
+The public API belongs to Agentdock. Applications configure providers through `@agentdock-ai/models` and use Agentdock’s runtime and contracts. LangChain and LangGraph run the model and workflow internally; application code does not need to import provider classes from LangChain.
 
 ## Features
 
@@ -104,7 +104,7 @@ try {
 }
 ```
 
-`get_weather` is an application-defined example tool. AgentDock does not provide a weather service; replace its `run` function with your own API or business logic.
+`get_weather` is an application-defined example tool. Agentdock does not provide a weather service; replace its `run` function with your own API or business logic.
 
 Every run has a `sessionId` and a JSON context object. Use `agent.stream()` when the application should show text and tool activity as it arrives:
 
@@ -149,7 +149,7 @@ Authorize every run, resume, read, history, and delete request in your applicati
 
 ## Production model
 
-AgentDock owns the application contract:
+Agentdock owns the application contract:
 
 - tool definitions and validation;
 - authorization and approval policy;
@@ -199,9 +199,9 @@ The repository is currently pre-1.0, so public APIs may continue to evolve befor
 
 ## Related projects
 
-- [`agentdock-ui`](https://github.com/agentdock-ai/agentdock-ui) — React components and hooks for displaying AgentDock event streams.
-- [`docs`](https://github.com/agentdock-ai/docs) — simple AgentDock usage documentation.
+- [`agentdock-ui`](https://github.com/agentdock-ai/agentdock-ui) — React components and hooks for displaying Agentdock event streams.
+- [`docs`](https://github.com/agentdock-ai/docs) — simple Agentdock usage documentation.
 
 ## License
 
-MIT. Use AgentDock in open-source and commercial software. Your application remains responsible for its own providers, infrastructure, security, and dependency obligations.
+MIT. Use Agentdock in open-source and commercial software. Your application remains responsible for its own providers, infrastructure, security, and dependency obligations.

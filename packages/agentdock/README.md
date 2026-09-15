@@ -1,6 +1,6 @@
-# AgentDock
+# Agentdock
 
-AgentDock is a durable, frontend-ready TypeScript runtime for streamed tool-calling
+Agentdock is a durable, frontend-ready TypeScript runtime for streamed tool-calling
 agents running on LangGraph.
 
 It owns the application contract: tool registration, approval policy, normalized
@@ -14,7 +14,7 @@ run the model and agent workflow internally.
 yarn add @agentdock-ai/agentdock @agentdock-ai/models
 ```
 
-Configure a provider with `@agentdock-ai/models` and pass it to AgentDock. Application
+Configure a provider with `@agentdock-ai/models` and pass it to Agentdock. Application
 code does not need to import provider classes from LangChain.
 
 ## Usage
@@ -68,7 +68,7 @@ const text = (await result).content
   .join("");
 ```
 
-The stream uses the canonical AgentDock event contract. Events include structured
+The stream uses the canonical Agentdock event contract. Events include structured
 content (`message.part.delta`), tool lifecycle events (`tool.completed` and
 `tool.failed`), interrupts, terminal metadata, and stable run/session sequencing.
 There is one stream method and one event union; `run()` consumes the same stream
@@ -96,7 +96,7 @@ const dock = createAgentDock({
 
 ## Model providers
 
-`@agentdock-ai/models` keeps provider-specific setup behind AgentDock's model API.
+`@agentdock-ai/models` keeps provider-specific setup behind Agentdock's model API.
 It currently supports `openai`, `ollama`, and `openrouter`; API keys can be passed in
 configuration or read from the provider's usual environment variable.
 
@@ -112,11 +112,11 @@ const dock = new AgentDock({
 });
 ```
 
-The model package creates the provider implementation used internally by AgentDock.
+The model package creates the provider implementation used internally by Agentdock.
 
 ## Optional automatic context management
 
-Context compaction is opt-in. When enabled, AgentDock compacts older model-visible
+Context compaction is opt-in. When enabled, Agentdock compacts older model-visible
 conversation state immediately before a primary-model call, then persists the summary
 and retained messages through the existing LangGraph checkpoint. It therefore survives
 process recreation and approval resumes without a second graph or persistence system.
@@ -151,7 +151,7 @@ const dock = new AgentDock({
 
 `trigger: "auto"` uses the verified input-context profile of the **primary** model:
 it compacts at 75% of that capacity and retains the newest 25%. The summary model may
-be smaller; it never changes the primary-model budget, and AgentDock trims its summary
+be smaller; it never changes the primary-model budget, and Agentdock trims its summary
 input to fit safely. Supported provider models and `AgentDockModel` expose profile
 metadata. An unknown raw LangChain model must provide a profile override in automatic
 or fractional mode:
@@ -168,17 +168,17 @@ contextManagement: {
 Advanced callers can avoid profile discovery with explicit policies such as
 `trigger: { tokens: 96_000 }`, `trigger: { messages: 80 }`, and
 `keep: { tokens: 24_000 }`. `maxSteps` is unrelated: it limits main model calls,
-not the model context size. AgentDock preserves system instructions, recent messages,
+not the model context size. Agentdock preserves system instructions, recent messages,
 and whole assistant/tool-result groups. Runtime `ctx` remains tool and authorization
 context; it is not copied into model prompts or summaries.
 
 ## Approval and resume
 
-Set `requiresApproval: true` on a side-effecting tool. AgentDock emits
+Set `requiresApproval: true` on a side-effecting tool. Agentdock emits
 `interrupt.required` and returns a `waiting_for_approval` result. LangGraph keeps
 the graph checkpoint; resume the same session after a decision. A resume continues
 the same logical run and can cross any number of approval boundaries, including
-after recreating AgentDock from a durable checkpoint. Approval requests are read
+after recreating Agentdock from a durable checkpoint. Approval requests are read
 from the current interrupt only, so old approvals never reappear.
 
 Event sequence numbers are ordered within each returned stream. The logical
@@ -222,7 +222,7 @@ const dock = new AgentDock({
 });
 ```
 
-Install only the optional backend package you need, for example `yarn add @agentdock-ai/checkpoint-postgres`. The default `MemoryCheckpoint` is process-local and intended for development and tests. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; AgentDock does not close those caller-owned savers.
+Install only the optional backend package you need, for example `yarn add @agentdock-ai/checkpoint-postgres`. The default `MemoryCheckpoint` is process-local and intended for development and tests. Raw LangGraph savers remain available through `checkpointer` for advanced integrations; Agentdock does not close those caller-owned savers.
 
 ## Lifecycle and authoring rules
 
@@ -239,7 +239,7 @@ unsupported keywords are rejected at registration.
 
 Tool input is validated before authorization and again before execution through the
 same runtime schema. For publish, write, send, or mutation tools, persist or pass the
-`toolCallId` as the external operation's idempotency key. AgentDock does not retry or
+`toolCallId` as the external operation's idempotency key. Agentdock does not retry or
 undo a side effect that outlives cancellation; a timeout or cancellation is not proof
 that the external operation stopped.
 
@@ -248,10 +248,10 @@ that the external operation stopped.
 remove all model-visible checkpoint context. Deletion fails while the
 namespace/session has an active run. A `sessionNamespace` must be stable for the
 host/tenant that owns the session; host authorization and tenant metadata remain
-outside AgentDock.
+outside Agentdock.
 
-Use a durable `checkpoint` adapter when AgentDock owns the resource. If you pass a
-raw `checkpointer`, it remains caller-owned and AgentDock never closes it. Tool and
+Use a durable `checkpoint` adapter when Agentdock owns the resource. If you pass a
+raw `checkpointer`, it remains caller-owned and Agentdock never closes it. Tool and
 authorization timeouts have hard deadlines even for code that ignores its abort
 signal, but an external side effect may still continue. `close({ gracePeriodMs })`
 aborts active runs, waits only for the grace period, closes owned resources once,

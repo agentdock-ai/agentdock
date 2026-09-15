@@ -1,6 +1,6 @@
 # @agentdock-ai/checkpoint-postgres
 
-PostgreSQL checkpoint storage for AgentDock. Install it separately when PostgreSQL persistence is needed.
+PostgreSQL checkpoint storage for Agentdock. Install it separately when PostgreSQL persistence is needed.
 
 ```ts
 import { AgentDock } from "@agentdock-ai/agentdock";
@@ -19,7 +19,7 @@ await agent.run(prompt, context, {
 });
 ```
 
-Passing the adapter as `checkpoint` transfers lifecycle ownership to AgentDock; it
+Passing the adapter as `checkpoint` transfers lifecycle ownership to Agentdock; it
 is initialized lazily and closed by `agent.close()`. The host must authorize the
 session ID before every run, resume, read, history, or delete call. Use a stable
 application/tenant `sessionNamespace` whenever storage is shared.

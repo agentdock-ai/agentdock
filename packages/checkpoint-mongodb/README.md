@@ -1,6 +1,6 @@
 # @agentdock-ai/checkpoint-mongodb
 
-MongoDB checkpoint storage for AgentDock.
+MongoDB checkpoint storage for Agentdock.
 
 ```ts
 import { MongoDBCheckpoint } from "@agentdock-ai/checkpoint-mongodb";
@@ -19,6 +19,6 @@ await agent.run(prompt, context, {
 ```
 
 `database`, `collection`, and `writesCollection` must be non-empty when provided;
-the checkpoint and writes collection names must differ. AgentDock owns and closes
+the checkpoint and writes collection names must differ. Agentdock owns and closes
 the adapter. The host must authorize session access and use a stable tenant namespace
 when one database is shared.
