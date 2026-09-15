@@ -74,10 +74,10 @@ content (`message.part.delta`), tool lifecycle events (`tool.completed` and
 There is one stream method and one event union; `run()` consumes the same stream
 internally and returns the same logical result.
 
-For new code, the simpler typed API avoids hand-written raw schemas:
+For typed tool input, use `defineTool()` with the single `AgentDock` runtime:
 
 ```ts
-import { createAgentDock, defineTool } from "@agentdock-ai/agentdock";
+import { AgentDock, ToolRegistry, defineTool } from "@agentdock-ai/agentdock";
 import { z } from "zod";
 
 const weather = defineTool({
@@ -87,10 +87,13 @@ const weather = defineTool({
   run: async ({ city }) => ({ city, forecast: "sunny" }),
 });
 
-const dock = createAgentDock({
+const registry = new ToolRegistry();
+registry.register(weather);
+
+const dock = new AgentDock({
   model,
-  instructions: "Answer clearly.",
-  tools: { weather },
+  defaults: { systemPrompt: "Answer clearly." },
+  registry,
 });
 ```
 
@@ -226,10 +229,8 @@ Install only the optional backend package you need, for example `yarn add @agent
 
 ## Lifecycle and authoring rules
 
-`new AgentDock()` is the advanced escape hatch for raw LangChain models,
-checkpointers, adapters, defaults, coordinators, and middleware. The easy factory
-accepts the same `middleware` option and passes it to this runtime without a second
-execution path. `defineTool()` validates model
+`new AgentDock()` is the AgentDock runtime for raw LangChain models, checkpointers,
+adapters, defaults, coordinators, and middleware. `defineTool()` validates model
 input with Zod and infers the `run` input type. The execution callback receives
 JSON context, an abort signal, progress reporting, and the finalized tool-call ID.
 Raw JSON Schema is an explicit advanced escape hatch. Its supported subset is an

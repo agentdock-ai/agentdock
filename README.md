@@ -26,18 +26,18 @@ The public API belongs to Agentdock. Applications configure providers through `@
 
 ## Features
 
-- **Typed agent runtime** — create an agent with `createAgentDock()` or use the advanced `AgentDock` class.
-- **Provider configuration** — configure OpenAI, Ollama, or OpenRouter with `AgentDockModel`.
-- **Typed tools** — define tools with Zod using `defineTool()`, validate input, report progress, and receive an abort signal.
-- **Tool registry** — register, inspect, and update tools at runtime.
-- **Approvals and authorization** — pause side effects for approval and check whether a user may call a tool before and during execution.
-- **Streaming events** — consume one normalized event contract for text, reasoning, media, tool calls, progress, usage, interrupts, and terminal states.
-- **Sessions** — continue conversations by `sessionId`, partition shared storage with `sessionNamespace`, read history, and delete sessions safely.
-- **Durable checkpoints** — use in-memory storage for development or SQLite, PostgreSQL, MongoDB, and Redis Stack for persistence.
-- **Context management** — opt in to conversation summarization when long sessions approach the model’s input limit.
-- **Run control** — set step and timeout limits, cancel active runs, resume approvals, and close resources cleanly.
-- **Framework-independent contracts** — share JSON-compatible events and run data between servers, frontends, and transports.
-- **Frontend-ready output** — normalized messages and content parts are designed for React and other clients.
+- **Typed agent runtime:** create an agent with the `AgentDock` class.
+- **Provider configuration:** configure OpenAI, Ollama, or OpenRouter with `AgentDockModel`.
+- **Typed tools:** define tools with Zod using `defineTool()`, validate input, report progress, and receive an abort signal.
+- **Tool registry:** register, inspect, and update tools at runtime.
+- **Approvals and authorization:** pause side effects for approval and check whether a user may call a tool before and during execution.
+- **Streaming events:** consume one normalized event contract for text, reasoning, media, tool calls, progress, usage, interrupts, and terminal states.
+- **Sessions:** continue conversations by `sessionId`, partition shared storage with `sessionNamespace`, read history, and delete sessions safely.
+- **Durable checkpoints:** use in-memory storage for development or SQLite, PostgreSQL, MongoDB, and Redis Stack for persistence.
+- **Context management:** opt in to conversation summarization when long sessions approach the model’s input limit.
+- **Run control:** set step and timeout limits, cancel active runs, resume approvals, and close resources cleanly.
+- **Framework-independent contracts:** share JSON-compatible events and run data between servers, frontends, and transports.
+- **Frontend-ready output:** normalized messages and content parts are designed for React and other clients.
 
 ## Packages
 
@@ -52,7 +52,7 @@ The public API belongs to Agentdock. Applications configure providers through `@
 | `@agentdock-ai/checkpoint-mongodb`  | MongoDB persistence for applications using MongoDB.                                                 |
 | `@agentdock-ai/checkpoint-redis`    | Redis Stack persistence for fast shared storage and TTL-based retention.                            |
 
-The core runtime is intentionally separate from the React package. For a ready-made chat surface, see [`agentdock-ui`](https://github.com/agentdock-ai/agentdock-ui). For the user guides, see [`docs`](https://github.com/agentdock-ai/docs).
+The core runtime is intentionally separate from the React package. For a ready-made chat surface, see [`agentdock-ui`](https://github.com/agentdock-ai/agentdock-ui).
 
 ## Install
 
@@ -69,7 +69,7 @@ Use Node.js 20 or newer for the core runtime. The `@agentdock-ai/models` package
 Set your provider key on the server, then create a model, define a tool, and run the agent:
 
 ```ts
-import { createAgentDock, defineTool } from "@agentdock-ai/agentdock";
+import { AgentDock, ToolRegistry, defineTool } from "@agentdock-ai/agentdock";
 import { AgentDockModel } from "@agentdock-ai/models";
 import { z } from "zod";
 
@@ -80,10 +80,15 @@ const weather = defineTool({
   run: async ({ city }) => ({ city, forecast: "Sunny" }),
 });
 
-const agent = createAgentDock({
+const registry = new ToolRegistry();
+registry.register(weather);
+
+const agent = new AgentDock({
   model: AgentDockModel.openAI({ model: "gpt-5.4-mini" }),
-  instructions: "Answer clearly and use the weather tool when it helps.",
-  tools: { weather },
+  defaults: {
+    systemPrompt: "Answer clearly and use the weather tool when it helps.",
+  },
+  registry,
 });
 
 try {
@@ -135,12 +140,10 @@ npm install @agentdock-ai/checkpoint-postgres
 ```ts
 import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
 
-const agent = createAgentDock({
+const agent = new AgentDock({
   model,
-  persistence: {
-    checkpoint: new PostgresCheckpoint({
-      connectionString: process.env.DATABASE_URL!,
-    }),
+  checkpoint: new PostgresCheckpoint({
+    connectionString: process.env.DATABASE_URL!,
   },
 });
 ```
@@ -199,8 +202,7 @@ The repository is currently pre-1.0, so public APIs may continue to evolve befor
 
 ## Related projects
 
-- [`agentdock-ui`](https://github.com/agentdock-ai/agentdock-ui) — React components and hooks for displaying Agentdock event streams.
-- [`docs`](https://github.com/agentdock-ai/docs) — simple Agentdock usage documentation.
+- [`agentdock-ui`](https://github.com/agentdock-ai/agentdock-ui): React components and hooks for displaying Agentdock event streams.
 
 ## License
 
