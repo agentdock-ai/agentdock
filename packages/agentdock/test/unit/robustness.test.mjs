@@ -8,7 +8,6 @@ import { z } from "zod";
 import {
   AgentDock,
   ToolRegistry,
-  createAgentDock,
   createSessionKey,
   createThreadId,
   defineTool,
@@ -141,14 +140,16 @@ test("defineTool infers and validates typed input at the execution boundary", as
       return { city, forecast: "sunny" };
     },
   });
-  const agent = createAgentDock({
+  const registry = new ToolRegistry();
+  registry.register(weather);
+  const agent = new AgentDock({
     model: new FakeToolCallingModel({
       toolCalls: [
         [{ name: "get_weather", args: { city: "Lahore" }, id: "call-weather" }],
         [],
       ],
     }),
-    tools: { weather },
+    registry,
   });
 
   const result = await agent.run(
@@ -165,7 +166,7 @@ test("defineTool infers and validates typed input at the execution boundary", as
   await agent.close();
 });
 
-test("the easy API runs multiple typed tools through a custom checkpoint adapter", async () => {
+test("the AgentDock class runs multiple typed tools through a custom checkpoint adapter", async () => {
   let initializationCalls = 0;
   let closeCalls = 0;
   const checkpoint = {
@@ -189,7 +190,10 @@ test("the easy API runs multiple typed tools through a custom checkpoint adapter
     input: z.object({ city: z.string() }),
     run: async ({ city }) => ({ city, timezone: "Asia/Karachi" }),
   });
-  const agent = createAgentDock({
+  const registry = new ToolRegistry();
+  registry.register(weather);
+  registry.register(timezone);
+  const agent = new AgentDock({
     model: new FakeToolCallingModel({
       toolCalls: [
         [
@@ -209,8 +213,8 @@ test("the easy API runs multiple typed tools through a custom checkpoint adapter
         [],
       ],
     }),
-    tools: { weather, timezone },
-    persistence: { checkpoint },
+    registry,
+    checkpoint,
   });
 
   const result = await agent.run(
@@ -237,80 +241,24 @@ test("the easy API runs multiple typed tools through a custom checkpoint adapter
   assert.equal(closeCalls, 1);
 });
 
-test("the easy and advanced APIs run caller-provided middleware", async () => {
-  let easyCalls = 0;
-  let advancedCalls = 0;
-  const easyMiddleware = createMiddleware({
-    name: "easy-observer",
+test("the AgentDock class runs caller-provided middleware", async () => {
+  let calls = 0;
+  const middleware = createMiddleware({
+    name: "observer",
     afterModel: () => {
-      easyCalls += 1;
+      calls += 1;
     },
   });
-  const advancedMiddleware = createMiddleware({
-    name: "advanced-observer",
-    afterModel: () => {
-      advancedCalls += 1;
-    },
-  });
-  const easyAgent = createAgentDock({
+  const agent = new AgentDock({
     model: new FakeToolCallingModel({ toolCalls: [[]] }),
-    middleware: [easyMiddleware],
-  });
-  const advancedAgent = new AgentDock({
-    model: new FakeToolCallingModel({ toolCalls: [[]] }),
-    middleware: [advancedMiddleware],
+    middleware: [middleware],
   });
 
-  const [easyResult, advancedResult] = await Promise.all([
-    easyAgent.run("Easy.", {}, { sessionId: "easy-middleware" }),
-    advancedAgent.run("Advanced.", {}, { sessionId: "advanced-middleware" }),
-  ]);
+  const result = await agent.run("Run.", {}, { sessionId: "middleware" });
 
-  assert.equal(easyResult.status, "completed");
-  assert.equal(advancedResult.status, "completed");
-  assert.equal(easyCalls, 1);
-  assert.equal(advancedCalls, 1);
-  await Promise.all([easyAgent.close(), advancedAgent.close()]);
-});
-
-test("the easy and advanced APIs produce equivalent canonical results", async () => {
-  const easyAgent = createAgentDock({
-    model: new FakeToolCallingModel({ toolCalls: [[]] }),
-    instructions: "Be concise.",
-  });
-  const advancedAgent = new AgentDock({
-    model: new FakeToolCallingModel({ toolCalls: [[]] }),
-    defaults: { systemPrompt: "Be concise." },
-  });
-  const easyExecution = await easyAgent.stream(
-    "Equivalent.",
-    {},
-    { sessionId: "easy-equivalent", runId: "easy-equivalent" },
-  );
-  const advancedExecution = await advancedAgent.stream(
-    "Equivalent.",
-    {},
-    { sessionId: "advanced-equivalent", runId: "advanced-equivalent" },
-  );
-  const [easyEvents, advancedEvents, easyResult, advancedResult] =
-    await Promise.all([
-      collect(easyExecution.stream),
-      collect(advancedExecution.stream),
-      easyExecution.result,
-      advancedExecution.result,
-    ]);
-
-  assert.deepEqual(
-    easyEvents.map((event) => event.type),
-    advancedEvents.map((event) => event.type),
-  );
-  assert.equal(easyResult.status, advancedResult.status);
-  assert.deepEqual(easyResult.content, advancedResult.content);
-  assert.deepEqual(
-    easyResult.messages.map(({ role, content }) => ({ role, content })),
-    advancedResult.messages.map(({ role, content }) => ({ role, content })),
-  );
-  await Promise.all([easyAgent.close(), advancedAgent.close()]);
+  assert.equal(result.status, "completed");
+  assert.equal(calls, 1);
+  await agent.close();
 });
 
 test("an approval-enabled typed tool uses its inferred validated input", async () => {
@@ -325,7 +273,9 @@ test("an approval-enabled typed tool uses its inferred validated input", async (
       return { published: reportId };
     },
   });
-  const agent = createAgentDock({
+  const registry = new ToolRegistry();
+  registry.register(publish);
+  const agent = new AgentDock({
     model: new FakeToolCallingModel({
       toolCalls: [
         [
@@ -338,7 +288,7 @@ test("an approval-enabled typed tool uses its inferred validated input", async (
         [],
       ],
     }),
-    tools: { publish },
+    registry,
   });
 
   const waiting = await agent.run(
@@ -492,7 +442,9 @@ test("typed tools receive the validated context, abort signal, and tool-call id"
       return "observed";
     },
   });
-  const agent = createAgentDock({
+  const registry = new ToolRegistry();
+  registry.register(typed);
+  const agent = new AgentDock({
     model: new FakeToolCallingModel({
       toolCalls: [
         [
@@ -505,7 +457,7 @@ test("typed tools receive the validated context, abort signal, and tool-call id"
         [],
       ],
     }),
-    tools: { typed },
+    registry,
   });
   const result = await agent.run(
     "Observe.",

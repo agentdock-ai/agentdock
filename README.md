@@ -24,6 +24,10 @@ Agentdock gives a TypeScript application the runtime it needs to build a real ag
 
 The public API belongs to Agentdock. Applications configure providers through `@agentdock-ai/models` and use Agentdock’s runtime and contracts. LangChain and LangGraph run the model and workflow internally; application code does not need to import provider classes from LangChain.
 
+Create the runtime with the `AgentDock` class. This is the only AgentDock agent
+construction API. `defineTool()` is a typed tool-definition helper; it does not
+create another agent runtime or execution path.
+
 ## Features
 
 - **Typed agent runtime:** create an agent with the `AgentDock` class.
@@ -144,7 +148,7 @@ const agent = new AgentDock({
   model,
   checkpoint: new PostgresCheckpoint({
     connectionString: process.env.DATABASE_URL!,
-  },
+  }),
 });
 ```
 

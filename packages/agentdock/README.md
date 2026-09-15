@@ -8,6 +8,10 @@ events, run lifecycle, and a small public API. Its companion `@agentdock-ai/mode
 package provides the app-facing model configuration API; LangChain and LangGraph
 run the model and agent workflow internally.
 
+`AgentDock` is the single runtime entry point. Construct it with `new AgentDock(...)`
+and register tools on its `ToolRegistry` or with `registerTool()`. `defineTool()`
+only creates a typed tool definition and does not provide a second agent API.
+
 ## Install
 
 ```bash

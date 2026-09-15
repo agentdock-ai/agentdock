@@ -1,6 +1,5 @@
 export * from "./agent-dock.js";
 export * from "./coordinator.js";
-export * from "./easy-api.js";
 export type {
   ContextBudget,
   ContextManagementOptions,
