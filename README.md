@@ -8,6 +8,10 @@
   </p>
 
   <p>
+    <a href="https://agentdock-ai.vercel.app"><strong>Visit the AgentDock landing page →</strong></a>
+  </p>
+
+  <p>
     <a href="https://github.com/agentdock-ai/agentdock"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827" /></a>
     <img alt="Node.js 20+" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white" />
     <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white" />
