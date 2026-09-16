@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { AIMessage } from "@langchain/core/messages";
 import { FakeToolCallingModel } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 import {
@@ -12,6 +13,7 @@ import {
   createScriptedChatModel,
   createScriptedMessageChunks,
 } from "../helpers/stream-fixtures.mjs";
+import { ToolCallingWorkflow } from "../../src/agent/workflows/tool-calling/workflow.ts";
 
 class InitializationScopedSaver extends MemorySaver {
   expectedOwner = null;
@@ -82,6 +84,114 @@ function createAgent(toolCalls, registry = new ToolRegistry()) {
     defaults: { maxSteps: 4 },
   });
 }
+
+test("does not replay historical assistant messages from stream payloads", async () => {
+  const historicalAssistant = new AIMessage({
+    id: "historical-assistant",
+    content: "The first answer.",
+  });
+  const currentAssistant = new AIMessage({
+    id: "current-assistant",
+    content: "The second answer.",
+  });
+  const workflow = new ToolCallingWorkflow({
+    model: {},
+    registry: new ToolRegistry(),
+    checkpointer: new MemorySaver(),
+  });
+  let stateReads = 0;
+
+  // Simulate LangGraph returning a checkpoint message in a live updates
+  // payload alongside the message created by the current run.
+  workflow.createAgent = () => ({
+    getState: async () => ({
+      values: {
+        messages:
+          stateReads++ === 0
+            ? [historicalAssistant]
+            : [historicalAssistant, currentAssistant],
+      },
+    }),
+    stream: async function* () {
+      yield ["messages", [historicalAssistant, {}]];
+      yield [
+        "updates",
+        { model: { messages: [historicalAssistant, currentAssistant] } },
+      ];
+    },
+    updateState: async () => undefined,
+  });
+
+  const execution = workflow.start({
+    runId: "second-run",
+    sessionId: "shared-session",
+    userPrompt: "The second prompt.",
+    ctx: {},
+    options: {},
+  });
+  const events = await collect(execution.stream);
+  const result = await execution.result;
+
+  const replayed = events.filter(
+    (event) =>
+      event.type === AgentEventType.MessagePartDelta &&
+      event.messageId === historicalAssistant.id,
+  );
+  const current = events.filter(
+    (event) =>
+      event.type === AgentEventType.MessagePartDelta &&
+      event.messageId === currentAssistant.id,
+  );
+  assert.equal(replayed.length, 0);
+  assert.equal(current.length, 1);
+  assert.equal(current[0].part.text, "The second answer.");
+  assert.equal(current[0].runId, "second-run");
+  assert.deepEqual(
+    result.messages.map((message) => message.content),
+    [[{ type: "text", text: "The second answer." }]],
+  );
+});
+
+test("streams only the current assistant response across session turns", async () => {
+  const agent = new AgentDock({
+    model: createScriptedChatModel({
+      streamSequences: [
+        createScriptedMessageChunks(["The first answer."], {
+          id: "first-assistant",
+        }),
+        createScriptedMessageChunks(["The second answer."], {
+          id: "second-assistant",
+        }),
+      ],
+    }),
+  });
+
+  const first = await agent.stream(
+    "The first prompt.",
+    {},
+    { sessionId: "stream-shared-session", runId: "first-run" },
+  );
+  await collect(first.stream);
+  await first.result;
+
+  const second = await agent.stream(
+    "The second prompt.",
+    {},
+    { sessionId: "stream-shared-session", runId: "second-run" },
+  );
+  const secondEvents = await collect(second.stream);
+  await second.result;
+
+  const secondDeltas = secondEvents.filter(
+    (event) => event.type === AgentEventType.MessagePartDelta,
+  );
+  assert.deepEqual(
+    secondDeltas.map((event) => [event.messageId, event.part.text]),
+    [["second-assistant", "The second answer."]],
+  );
+  assert.ok(secondEvents.every((event) => event.runId === "second-run"));
+  await agent.close();
+});
 
 test.each([
   ["identical chunks", ["same", "same", "same"], "samesamesame"],

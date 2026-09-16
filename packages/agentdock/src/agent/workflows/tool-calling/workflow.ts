@@ -150,6 +150,7 @@ interface ExecutionState {
   emittedPartFingerprints: Set<string>;
   startedMessageIds: Set<string>;
   assistantMessageIds: string[];
+  historicalAssistantMessageIds: Set<string>;
   anonymousMessageIds: Map<string, string>;
   persistedAssistantMessageIds: Set<string>;
   usageMessageIds: Set<string>;
@@ -322,7 +323,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         );
       }
       const initialRunMessages = initialMessages.slice(runStartIndex);
-      seedExecutionState(state, initialRunMessages);
+      seedExecutionState(
+        state,
+        initialRunMessages,
+        initialMessages.slice(0, runStartIndex),
+      );
       const initialAssistantCount =
         initialRunMessages.filter(isAIMessage).length;
       eventStream.setLogicalSequenceStart(
@@ -803,6 +808,9 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     emit: (event: AgentEventInput) => void,
     isChunk: boolean,
   ): void {
+    if (message.id && state.historicalAssistantMessageIds.has(message.id)) {
+      return;
+    }
     const finalizedToolCalls = isChunk
       ? []
       : (message.tool_calls ?? []).map(toToolCallRecord);
@@ -943,6 +951,7 @@ function createExecutionState(): ExecutionState {
     emittedPartFingerprints: new Set(),
     startedMessageIds: new Set(),
     assistantMessageIds: [],
+    historicalAssistantMessageIds: new Set(),
     anonymousMessageIds: new Map(),
     persistedAssistantMessageIds: new Set(),
     usageMessageIds: new Set(),
@@ -980,6 +989,7 @@ function ensureMessageStarted(
 function seedExecutionState(
   state: ExecutionState,
   messages: ReturnType<typeof readStateMessages>,
+  historicalMessages: ReturnType<typeof readStateMessages> = [],
 ): void {
   for (const toolCall of collectToolCalls(messages)) {
     state.toolCallsById.set(toolCall.toolCallId, toolCall);
@@ -993,6 +1003,11 @@ function seedExecutionState(
       message.response_metadata,
     );
     if (usage) state.usage = mergeUsage(state.usage, usage);
+  }
+  for (const message of historicalMessages) {
+    if (isAIMessage(message) && message.id) {
+      state.historicalAssistantMessageIds.add(message.id);
+    }
   }
 }
 
