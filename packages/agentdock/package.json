@@ -1,7 +1,7 @@
 {
   "name": "@agentdock-ai/agentdock",
-  "version": "0.1.0",
-  "description": "Reusable TypeScript agent infrastructure for AgentDock applications",
+  "version": "0.1.1",
+  "description": "An easy-to-use TypeScript wrapper around LangGraph for building AI agents.",
   "type": "module",
   "repository": {
     "type": "git",
