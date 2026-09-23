@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { AIMessage } from "@langchain/core/messages";
-import { GraphInterrupt, MemorySaver } from "@langchain/langgraph";
+import {
+  GraphInterrupt,
+  MemorySaver,
+  emptyCheckpoint,
+} from "@langchain/langgraph";
 import { FakeToolCallingModel } from "langchain";
 import {
   AgentCheckpointPersistenceError,
@@ -76,10 +80,11 @@ class ThrowingChatModel extends BaseChatModel {
 }
 
 class ProfiledChatModel extends BaseChatModel {
-  constructor({ maxInputTokens, response = "primary response" } = {}) {
+  constructor({ maxInputTokens, response = "primary response", usage } = {}) {
     super({});
     this.maxInputTokens = maxInputTokens;
     this.response = response;
+    this.usage = usage;
     this.calls = [];
   }
 
@@ -98,7 +103,14 @@ class ProfiledChatModel extends BaseChatModel {
   async _generate(messages) {
     this.calls.push(messages);
     return {
-      generations: [{ message: new AIMessage({ content: this.response }) }],
+      generations: [
+        {
+          message: new AIMessage({
+            content: this.response,
+            ...(this.usage ? { usage_metadata: this.usage } : {}),
+          }),
+        },
+      ],
     };
   }
 }
@@ -169,10 +181,13 @@ test("a final checkpoint failure emits one failed terminal event and never compl
     },
   );
   const events = await collect(execution.stream);
-  const result = await execution.result;
 
-  assert.equal(result.status, "failed");
-  assert.equal(result.errorCode, "agent_checkpoint_persistence_failed");
+  await assert.rejects(
+    execution.result,
+    (error) =>
+      error instanceof AgentCheckpointPersistenceError &&
+      error.code === "agent_checkpoint_persistence_failed",
+  );
   assert.equal(
     events.filter((event) => event.type === AgentEventType.RunCompleted).length,
     0,
@@ -185,6 +200,33 @@ test("a final checkpoint failure emits one failed terminal event and never compl
     terminalEvents(events)[0].code,
     "agent_checkpoint_persistence_failed",
   );
+  await agent.close();
+});
+
+test("a failed final write does not create a false durable run-history entry", async () => {
+  const saver = new SnapshotSaver({ failStatuses: ["completed"] });
+  const agent = new AgentDock({
+    model: new FakeToolCallingModel({ toolCalls: [[]] }),
+    checkpointer: saver,
+  });
+  const execution = await agent.stream(
+    "The final write will fail.",
+    {},
+    {
+      sessionId: "session-history-final-write-failure",
+      runId: "run-history-final-write-failure",
+    },
+  );
+  await collect(execution.stream);
+  await assert.rejects(
+    execution.result,
+    (error) => error instanceof AgentCheckpointPersistenceError,
+  );
+
+  const history = await agent.getSessionRunHistory(
+    "session-history-final-write-failure",
+  );
+  assert.deepEqual(history.runs, []);
   await agent.close();
 });
 
@@ -529,6 +571,60 @@ test("durable run history stores one normalized completed run with tool state", 
   await agent.close();
 });
 
+test("durable run history preserves transcript, usage, and finish metadata", async () => {
+  const agent = new AgentDock({
+    model: new ProfiledChatModel({
+      maxInputTokens: 1_000,
+      response: "Usage-aware answer.",
+      usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+    }),
+  });
+  await agent.run(
+    "Record this run.",
+    {},
+    {
+      sessionId: "session-run-history-metadata",
+      runId: "run-history-metadata",
+    },
+  );
+
+  const history = await agent.getSessionRunHistory(
+    "session-run-history-metadata",
+  );
+  const [run] = history.runs;
+  assert.ok(run.messages.some((message) => message.role === "user"));
+  assert.ok(run.messages.some((message) => message.role === "assistant"));
+  assert.deepEqual(run.usage, {
+    inputTokens: 3,
+    outputTokens: 2,
+    totalTokens: 5,
+  });
+  assert.equal(run.finishReason, "stop");
+  await agent.close();
+});
+
+test("legacy checkpoints without normalized run snapshots are ignored", async () => {
+  const saver = new MemorySaver();
+  const sessionId = "session-legacy-run-history";
+  await saver.put(
+    { configurable: { thread_id: createThreadId(sessionId) } },
+    {
+      ...emptyCheckpoint(),
+      channel_values: { agentdockRunId: "legacy-run" },
+    },
+    { source: "input", step: 0, parents: {} },
+    {},
+  );
+  const agent = new AgentDock({
+    model: new FakeToolCallingModel({ toolCalls: [[]] }),
+    checkpointer: saver,
+  });
+
+  const history = await agent.getSessionRunHistory(sessionId);
+  assert.deepEqual(history.runs, []);
+  await agent.close();
+});
+
 test("durable run history keeps exact waiting approval state across runtime recreation", async () => {
   const saver = new MemorySaver();
   const registry = new ToolRegistry();
@@ -675,6 +771,8 @@ test("durable run history pagination is chronological and duplicate-free", async
     firstPage.runs.map((run) => run.runId),
     ["run-page-one", "run-page-two"],
   );
+  assert.ok(firstPage.nextCursor);
+  assert.notEqual(firstPage.nextCursor, "2");
   assert.deepEqual(
     secondPage.runs.map((run) => run.runId),
     ["run-page-three"],
@@ -684,6 +782,16 @@ test("durable run history pagination is chronological and duplicate-free", async
     new Set([...firstPage.runs, ...secondPage.runs].map((run) => run.runId))
       .size,
     3,
+  );
+  await assert.rejects(
+    agent.getSessionRunHistory("session-run-history-pages", {
+      cursor: "2",
+    }),
+    /cursor is invalid/,
+  );
+  await assert.rejects(
+    agent.getSessionRunHistory("session-run-history-pages", { limit: 0 }),
+    /positive integer/,
   );
   await agent.close();
 });

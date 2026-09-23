@@ -81,6 +81,64 @@ test("the installed LangChain HITL payload has no canonical tool-call identity",
   );
 });
 
+test("uses a canonical action toolCallId without relying on action order", () => {
+  const interrupt = readApprovalInterruptFromPayload(
+    {
+      __interrupt__: [
+        {
+          id: "interrupt-canonical-ids",
+          value: {
+            actionRequests: [
+              {
+                name: "same_tool",
+                args: { value: 1 },
+                toolCallId: "call-second",
+              },
+              {
+                name: "same_tool",
+                args: { value: 1 },
+                toolCallId: "call-first",
+              },
+            ],
+          },
+        },
+      ],
+    },
+    finalizedCalls,
+  );
+
+  assert.deepEqual(
+    interrupt.requests.map((request) => request.approvalId),
+    ["call-second", "call-first"],
+  );
+  assert.deepEqual(
+    [...interrupt.canonicalToolCallIds],
+    ["call-second", "call-first"],
+  );
+});
+
+test("rejects an invalid canonical action toolCallId", () => {
+  assert.throws(
+    () =>
+      readApprovalInterruptFromPayload(
+        {
+          __interrupt__: [
+            {
+              id: "interrupt-invalid-tool-id",
+              value: {
+                actionRequests: [
+                  { name: "same_tool", args: { value: 1 }, toolCallId: "" },
+                ],
+              },
+            },
+          ],
+        },
+        finalizedCalls,
+      ),
+    /invalid toolCallId/,
+  );
+});
+
 test("does not silently accept an interrupt action without a finalized call", () => {
   assert.throws(
     () =>

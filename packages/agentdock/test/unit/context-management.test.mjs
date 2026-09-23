@@ -379,7 +379,7 @@ test("persists compacted state across AgentDock recreation with SQLite", async (
 
       assert.equal(result.status, "completed");
       assert.equal(summaryModel.calls.length, 1);
-      assert.match(
+      assert.doesNotMatch(
         JSON.stringify(history.current.messages),
         /restored durable facts/,
       );

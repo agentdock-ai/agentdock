@@ -357,14 +357,22 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       }))
       .sort(compareRunHistoryEntries);
 
-    const offset = readRunHistoryCursor(options.cursor);
     const limit = options.limit ?? runs.length;
-    const page = runs.slice(offset, offset + limit);
-    const nextOffset = offset + page.length;
+    const cursor = readRunHistoryCursor(options.cursor);
+    const cursorIndex =
+      cursor === null
+        ? 0
+        : runs.findIndex((entry) => compareRunHistoryKey(entry, cursor) > 0);
+    const startIndex = cursorIndex === -1 ? runs.length : cursorIndex;
+    const page = runs.slice(startIndex, startIndex + limit);
+    const nextIndex = startIndex + page.length;
+    const lastEntry = page[page.length - 1];
     return {
       sessionId,
       runs: page,
-      ...(nextOffset < runs.length ? { nextCursor: String(nextOffset) } : {}),
+      ...(nextIndex < runs.length && lastEntry
+        ? { nextCursor: encodeRunHistoryCursor(lastEntry) }
+        : {}),
     };
   }
 
@@ -519,6 +527,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
               id: approval.approvalId,
               name: approval.toolCall.name,
               input: approval.toolCall.input,
+              ...(approvalInterrupt.canonicalToolCallIds.has(
+                approval.toolCall.toolCallId,
+              )
+                ? { toolCallId: approval.toolCall.toolCallId }
+                : {}),
             })),
           },
         });
@@ -591,6 +604,14 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       });
       return persisted;
     } catch (error) {
+      if (error instanceof AgentCheckpointPersistenceError) {
+        emit({
+          type: AgentEventType.RunFailed,
+          code: error.code,
+          message: error.message,
+        });
+        throw error;
+      }
       const executionCause = input.signal.aborted
         ? (input.signal.reason ?? error)
         : error;
@@ -672,12 +693,17 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     eventSequence: number,
   ): Promise<AgentRunResult> {
     if (current.status === "waiting_for_approval") {
-      await this.persistCheckpointSnapshot(
-        config,
-        current,
-        currentRecords,
-        eventSequence,
-      );
+      try {
+        await this.persistCheckpointSnapshot(
+          config,
+          current,
+          currentRecords,
+          eventSequence,
+        );
+      } catch (error) {
+        if (error instanceof AgentCheckpointPersistenceError) throw error;
+        throw new AgentCheckpointPersistenceError(current, error);
+      }
       return current;
     }
     const previous = readRunSnapshot(graphState);
@@ -1794,6 +1820,23 @@ function readStateEventSequence(state: unknown): number {
   return Math.max(persistedSequence, checkpointSequence);
 }
 
+interface RunHistoryCursor {
+  startedAt: string;
+  checkpointId: string;
+}
+
+function compareRunHistoryKey(
+  entry: AgentSessionRunHistoryEntry,
+  cursor: RunHistoryCursor,
+): number {
+  const timestampOrder = (
+    entry.startedAt ?? entry.checkpointTimestamp
+  ).localeCompare(cursor.startedAt);
+  return timestampOrder !== 0
+    ? timestampOrder
+    : entry.checkpointId.localeCompare(cursor.checkpointId);
+}
+
 function compareRunHistoryEntries(
   left: AgentSessionRunHistoryEntry,
   right: AgentSessionRunHistoryEntry,
@@ -1806,14 +1849,40 @@ function compareRunHistoryEntries(
     : left.checkpointId.localeCompare(right.checkpointId);
 }
 
-function readRunHistoryCursor(value: string | undefined): number {
-  if (value === undefined) return 0;
-  if (!/^(0|[1-9]\d*)$/.test(value))
+function encodeRunHistoryCursor(entry: AgentSessionRunHistoryEntry): string {
+  return Buffer.from(
+    JSON.stringify({
+      startedAt: entry.startedAt ?? entry.checkpointTimestamp,
+      checkpointId: entry.checkpointId,
+    }),
+    "utf8",
+  ).toString("base64url");
+}
+
+function readRunHistoryCursor(
+  value: string | undefined,
+): RunHistoryCursor | null {
+  if (value === undefined) return null;
+  try {
+    const decoded: unknown = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    );
+    if (
+      !isRecord(decoded) ||
+      typeof decoded.startedAt !== "string" ||
+      decoded.startedAt.length === 0 ||
+      typeof decoded.checkpointId !== "string" ||
+      decoded.checkpointId.length === 0
+    ) {
+      throw new Error("invalid cursor payload");
+    }
+    return {
+      startedAt: decoded.startedAt,
+      checkpointId: decoded.checkpointId,
+    };
+  } catch {
     throw new Error("Agent run history cursor is invalid.");
-  const offset = Number(value);
-  if (!Number.isSafeInteger(offset))
-    throw new Error("Agent run history cursor is invalid.");
-  return offset;
+  }
 }
 
 function isRunStatus(value: unknown): value is AgentRunStatus {

@@ -5,6 +5,8 @@ import { isRecord } from "../../value.js";
 export interface PendingApprovalInterrupt {
   interruptId: string;
   requests: ToolApprovalRequest[];
+  /** IDs resolved from an action-level canonical toolCallId. */
+  canonicalToolCallIds: ReadonlySet<string>;
 }
 
 export function readApprovalInterruptFromCheckpoint(
@@ -82,24 +84,51 @@ function readApprovalInterrupt(
   }
 
   const remaining = [...finalizedToolCalls];
+  const canonicalToolCallIds = new Set<string>();
   const requests = value.actionRequests.map((action) => {
     if (!isRecord(action) || typeof action.name !== "string") {
       throw new Error("Current approval interrupt contains an invalid action.");
     }
-    const index = remaining.findIndex(
-      (toolCall) =>
-        toolCall.name === action.name &&
-        isEquivalentJson(toolCall.input, action.args),
-    );
+    const hasCanonicalToolCallId = "toolCallId" in action;
+    if (
+      hasCanonicalToolCallId &&
+      (typeof action.toolCallId !== "string" || !action.toolCallId)
+    ) {
+      throw new Error(
+        "Current approval interrupt contains an invalid toolCallId.",
+      );
+    }
+    const index = hasCanonicalToolCallId
+      ? remaining.findIndex(
+          (toolCall) => toolCall.toolCallId === action.toolCallId,
+        )
+      : remaining.findIndex(
+          (toolCall) =>
+            toolCall.name === action.name &&
+            isEquivalentJson(toolCall.input, action.args),
+        );
     if (index < 0) {
       throw new Error(
-        `Current approval interrupt references an unknown finalized tool call: ${action.name}`,
+        hasCanonicalToolCallId
+          ? `Current approval interrupt references an unknown toolCallId: ${action.toolCallId}`
+          : `Current approval interrupt references an unknown finalized tool call: ${action.name}`,
       );
     }
     const [toolCall] = remaining.splice(index, 1);
+    if (hasCanonicalToolCallId) {
+      if (
+        toolCall.name !== action.name ||
+        !isEquivalentJson(toolCall.input, action.args)
+      ) {
+        throw new Error(
+          `Current approval interrupt toolCallId does not match action ${action.name}.`,
+        );
+      }
+      canonicalToolCallIds.add(toolCall.toolCallId);
+    }
     return { approvalId: toolCall.toolCallId, toolCall };
   });
-  return { interruptId: interrupt.id, requests };
+  return { interruptId: interrupt.id, requests, canonicalToolCallIds };
 }
 
 function flattenInterrupts(interrupts: unknown[]): unknown[] {
