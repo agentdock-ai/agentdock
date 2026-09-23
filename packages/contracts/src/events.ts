@@ -51,11 +51,19 @@ export interface AgentLimitInfo {
   used?: number;
 }
 
+export interface AgentInterruptAction {
+  id: string;
+  name: string;
+  input: JsonValue;
+  /** Present only when Core can prove the originating tool-call identity. */
+  toolCallId?: string;
+}
+
 export interface AgentInterrupt {
   kind: "tool-approval" | "custom";
   interruptId: string;
   prompt: string;
-  actions: Array<{ id: string; name: string; input: JsonValue }>;
+  actions: AgentInterruptAction[];
   payload?: JsonValue;
 }
 
@@ -572,6 +580,13 @@ function assertInterrupt(
     assertString(action.id, `${actionPath}.id`);
     assertString(action.name, `${actionPath}.name`);
     cloneJsonValue(action.input, `${actionPath}.input`);
+    if (action.toolCallId !== undefined) {
+      if (
+        typeof action.toolCallId !== "string" ||
+        action.toolCallId.length === 0
+      )
+        throw new Error(`${actionPath}.toolCallId must be a non-empty string.`);
+    }
   });
   if (value.payload !== undefined)
     cloneJsonValue(value.payload, `${path}.payload`);

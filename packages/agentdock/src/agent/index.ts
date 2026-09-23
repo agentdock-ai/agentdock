@@ -1,5 +1,12 @@
 export * from "./agent-dock.js";
 export * from "./coordinator.js";
+export * from "./errors.js";
+export type {
+  AgentSessionHistory,
+  AgentSessionRunHistory,
+  AgentSessionRunHistoryEntry,
+  AgentSessionRunHistoryOptions,
+} from "./types.js";
 export type {
   ContextBudget,
   ContextManagementOptions,

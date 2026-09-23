@@ -6,7 +6,12 @@ import {
   isBaseMessageChunk,
   isToolMessage,
 } from "@langchain/core/messages";
-import { Command, type BaseCheckpointSaver } from "@langchain/langgraph";
+import {
+  Command,
+  emptyCheckpoint,
+  isGraphBubbleUp,
+  type BaseCheckpointSaver,
+} from "@langchain/langgraph";
 import {
   createAgent,
   humanInTheLoopMiddleware,
@@ -32,7 +37,12 @@ import {
 } from "../../events.js";
 import type { Message } from "../../memory.js";
 import type { AgentContext } from "../../types.js";
-import type { AgentSessionHistory } from "@agentdock-ai/contracts";
+import type {
+  AgentSessionHistory,
+  AgentSessionRunHistory,
+  AgentSessionRunHistoryEntry,
+  AgentSessionRunHistoryOptions,
+} from "@agentdock-ai/contracts";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -89,6 +99,7 @@ import type {
   WorkflowResumeInput,
   WorkflowStartInput,
 } from "../types.js";
+import { AgentCheckpointPersistenceError } from "../../errors.js";
 
 const AGENT_STATE_SCHEMA = z.object({
   agentdockRunId: z.string().optional(),
@@ -277,6 +288,86 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     };
   }
 
+  async getSessionRunHistory(
+    sessionId: string,
+    options: Pick<RunAgentOptions, "sessionNamespace"> &
+      AgentSessionRunHistoryOptions = {},
+  ): Promise<AgentSessionRunHistory> {
+    const config = this.runConfig(
+      sessionId,
+      {},
+      undefined,
+      options.sessionNamespace,
+    );
+    const latestByRun = new Map<
+      string,
+      {
+        snapshot: AgentRunResult;
+        checkpointId: string;
+        checkpointTimestamp: string;
+      }
+    >();
+    const earliestByRun = new Map<string, string>();
+
+    for await (const tuple of this.checkpointer.list(config)) {
+      const state = { values: tuple.checkpoint.channel_values };
+      const stateRunId = readStateRunId(state);
+      if (
+        stateRunId &&
+        (!earliestByRun.has(stateRunId) ||
+          tuple.checkpoint.ts.localeCompare(earliestByRun.get(stateRunId)!) < 0)
+      ) {
+        earliestByRun.set(stateRunId, tuple.checkpoint.ts);
+      }
+      const snapshot = readRunSnapshot(state);
+      if (!snapshot || snapshot.sessionId !== sessionId) continue;
+      const latest = latestByRun.get(snapshot.runId);
+      if (
+        !latest ||
+        tuple.checkpoint.ts.localeCompare(latest.checkpointTimestamp) > 0
+      ) {
+        latestByRun.set(snapshot.runId, {
+          snapshot,
+          checkpointId: tuple.checkpoint.id,
+          checkpointTimestamp: tuple.checkpoint.ts,
+        });
+      }
+      if (
+        !earliestByRun.has(snapshot.runId) ||
+        tuple.checkpoint.ts.localeCompare(earliestByRun.get(snapshot.runId)!) <
+          0
+      ) {
+        earliestByRun.set(snapshot.runId, tuple.checkpoint.ts);
+      }
+    }
+
+    const runs = [...latestByRun.entries()]
+      .map(([runId, value]): AgentSessionRunHistoryEntry => ({
+        ...value.snapshot,
+        checkpointId: value.checkpointId,
+        checkpointTimestamp: value.checkpointTimestamp,
+        ...(earliestByRun.get(runId)
+          ? { startedAt: earliestByRun.get(runId) }
+          : {}),
+        ...(value.snapshot.status === "completed" ||
+        value.snapshot.status === "failed" ||
+        value.snapshot.status === "cancelled"
+          ? { completedAt: value.checkpointTimestamp }
+          : {}),
+      }))
+      .sort(compareRunHistoryEntries);
+
+    const offset = readRunHistoryCursor(options.cursor);
+    const limit = options.limit ?? runs.length;
+    const page = runs.slice(offset, offset + limit);
+    const nextOffset = offset + page.length;
+    return {
+      sessionId,
+      runs: page,
+      ...(nextOffset < runs.length ? { nextCursor: String(nextOffset) } : {}),
+    };
+  }
+
   private startExecution(
     input: WorkflowStartInput | WorkflowResumeInput,
     mode: "start" | "resume",
@@ -331,7 +422,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
       const initialAssistantCount =
         initialRunMessages.filter(isAIMessage).length;
       eventStream.setLogicalSequenceStart(
-        readStateEventSequence(initialGraphState, input.runId),
+        readStateEventSequence(initialGraphState),
       );
       emit({ type: AgentEventType.RunStarted });
       if (mode === "resume" && "approvals" in input) {
@@ -465,12 +556,6 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         );
       }
 
-      emit({
-        type: AgentEventType.RunCompleted,
-        finishReason: "stop",
-        content,
-        ...(state.usage ? { usage: state.usage } : {}),
-      });
       const result = createResult(
         input,
         state,
@@ -490,7 +575,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           ),
         ),
       );
-      return this.persistResult(
+      const persisted = await this.persistResult(
         agent,
         config,
         graphState,
@@ -498,8 +583,20 @@ export class ToolCallingWorkflow implements AgentWorkflow {
         persistedRecords,
         eventStream.getLogicalSequence(),
       );
+      emit({
+        type: AgentEventType.RunCompleted,
+        finishReason: persisted.finishReason ?? "stop",
+        content: persisted.content,
+        ...(persisted.usage ? { usage: persisted.usage } : {}),
+      });
+      return persisted;
     } catch (error) {
-      const message = errorMessage(error);
+      const executionCause = input.signal.aborted
+        ? (input.signal.reason ?? error)
+        : error;
+      const priorPersistenceCause =
+        executionCause === error ? undefined : error;
+      const message = errorMessage(executionCause);
       if (input.signal.aborted) {
         emit({ type: AgentEventType.RunCancelled, reason: message });
         return this.persistFailedResult(
@@ -510,6 +607,9 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           "cancelled",
           message,
           eventStream.getLogicalSequence(),
+          {},
+          executionCause,
+          priorPersistenceCause,
         );
       }
       if (
@@ -536,6 +636,8 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           message,
           eventStream.getLogicalSequence(),
           { errorCode: "agent_step_limit", finishReason: "limit", limit },
+          executionCause,
+          priorPersistenceCause,
         );
       }
       emit({
@@ -555,6 +657,8 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           errorCode: readErrorCode(error) ?? "agent_execution_failed",
           finishReason: "error",
         },
+        executionCause,
+        priorPersistenceCause,
       );
     }
   }
@@ -567,19 +671,74 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     currentRecords: PersistedToolRecord[],
     eventSequence: number,
   ): Promise<AgentRunResult> {
-    if (current.status === "waiting_for_approval") return current;
+    if (current.status === "waiting_for_approval") {
+      await this.persistCheckpointSnapshot(
+        config,
+        current,
+        currentRecords,
+        eventSequence,
+      );
+      return current;
+    }
     const previous = readRunSnapshot(graphState);
     const result = mergeRunResults(previous, current);
     const records = mergeToolRecords(
       readStateToolRecords(graphState),
       currentRecords,
     );
-    await agent.updateState(config, {
-      agentdockRunSnapshot: cloneJsonObject(result, "AgentDock run snapshot"),
-      agentdockToolRecords: cloneJsonValue(records, "AgentDock tool records"),
-      agentdockEventSequence: eventSequence,
-    });
+    try {
+      await agent.updateState(config, {
+        agentdockRunSnapshot: cloneJsonObject(result, "AgentDock run snapshot"),
+        agentdockToolRecords: cloneJsonValue(records, "AgentDock tool records"),
+        agentdockEventSequence:
+          current.status === "completed" ? eventSequence + 1 : eventSequence,
+      });
+    } catch (error) {
+      throw new AgentCheckpointPersistenceError(result, error);
+    }
     return result;
+  }
+
+  private async persistCheckpointSnapshot(
+    config: ReturnType<ToolCallingWorkflow["runConfig"]>,
+    result: AgentRunResult,
+    currentRecords: PersistedToolRecord[],
+    eventSequence: number,
+  ): Promise<void> {
+    const tuple = await this.checkpointer.getTuple(config);
+    if (!tuple)
+      throw new Error("Agent checkpoint is missing its current state.");
+    const records = mergeToolRecords(
+      readStateToolRecords({ values: tuple.checkpoint.channel_values }),
+      currentRecords,
+    );
+    const freshCheckpoint = emptyCheckpoint();
+    const checkpoint = {
+      ...tuple.checkpoint,
+      id: freshCheckpoint.id,
+      ts: freshCheckpoint.ts,
+      channel_values: {
+        ...tuple.checkpoint.channel_values,
+        agentdockRunSnapshot: cloneJsonObject(result, "AgentDock run snapshot"),
+        agentdockToolRecords: cloneJsonValue(records, "AgentDock tool records"),
+        agentdockEventSequence: eventSequence,
+      },
+    };
+    const savedConfig = await this.checkpointer.put(
+      tuple.config,
+      checkpoint,
+      tuple.metadata ?? { source: "update", step: 0, parents: {} },
+      checkpoint.channel_versions,
+    );
+    const writesByTask = new Map<string, Array<[string, unknown]>>();
+    for (const write of tuple.pendingWrites ?? []) {
+      if (!Array.isArray(write) || typeof write[0] !== "string") continue;
+      const taskWrites = writesByTask.get(write[0]) ?? [];
+      taskWrites.push([String(write[1]), write[2]]);
+      writesByTask.set(write[0], taskWrites);
+    }
+    for (const [taskId, writes] of writesByTask)
+      await this.checkpointer.putWrites(savedConfig, writes, taskId);
   }
 
   private async persistFailedResult(
@@ -591,8 +750,17 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     error: string,
     eventSequence: number,
     terminal: Pick<AgentRunResult, "errorCode" | "finishReason" | "limit"> = {},
+    executionCause: unknown = undefined,
+    priorPersistenceCause: unknown = undefined,
   ): Promise<AgentRunResult> {
     const current = failedResult(input, state, status, error, terminal);
+    if (priorPersistenceCause !== undefined) {
+      throw new AgentCheckpointPersistenceError(
+        current,
+        priorPersistenceCause,
+        executionCause,
+      );
+    }
     try {
       const graphState = await agent.getState(config);
       const result = mergeRunResults(
@@ -622,13 +790,55 @@ export class ToolCallingWorkflow implements AgentWorkflow {
           ),
           agentdockEventSequence: eventSequence,
         });
-      } catch {
-        // An aborted graph signal can reject checkpoint mutation. The reconstructed
-        // logical result remains valid and is returned to the caller.
+      } catch (persistenceCause) {
+        if (isExpectedCheckpointAbort(persistenceCause, executionCause)) {
+          try {
+            await this.persistCheckpointSnapshot(
+              config,
+              result,
+              records,
+              eventSequence,
+            );
+          } catch (fallbackCause) {
+            if (!isExpectedCheckpointAbort(fallbackCause, executionCause)) {
+              throw new AgentCheckpointPersistenceError(
+                result,
+                fallbackCause,
+                executionCause,
+              );
+            }
+          }
+          return result;
+        }
+        throw new AgentCheckpointPersistenceError(
+          result,
+          persistenceCause,
+          executionCause,
+        );
       }
       return result;
-    } catch {
-      return current;
+    } catch (error) {
+      if (isExpectedCheckpointAbort(error, executionCause)) {
+        try {
+          await this.persistCheckpointSnapshot(
+            config,
+            current,
+            createPersistedToolRecords(state),
+            eventSequence,
+          );
+        } catch (fallbackCause) {
+          if (!isExpectedCheckpointAbort(fallbackCause, executionCause)) {
+            throw new AgentCheckpointPersistenceError(
+              current,
+              fallbackCause,
+              executionCause,
+            );
+          }
+        }
+        return current;
+      }
+      if (error instanceof AgentCheckpointPersistenceError) throw error;
+      throw new AgentCheckpointPersistenceError(current, error, executionCause);
     }
   }
 
@@ -1002,7 +1212,10 @@ function seedExecutionState(
       message.usage_metadata,
       message.response_metadata,
     );
-    if (usage) state.usage = mergeUsage(state.usage, usage);
+    if (usage) {
+      if (message.id) state.usageMessageIds.add(message.id);
+      state.usage = mergeUsage(state.usage, usage);
+    }
   }
   for (const message of historicalMessages) {
     if (isAIMessage(message) && message.id) {
@@ -1227,6 +1440,16 @@ function readErrorCode(value: unknown): string | undefined {
   return isRecord(value) && typeof value.code === "string"
     ? value.code
     : undefined;
+}
+
+function isExpectedCheckpointAbort(
+  error: unknown,
+  executionCause: unknown,
+): boolean {
+  return (
+    isGraphBubbleUp(error) ||
+    (executionCause !== undefined && error === executionCause)
+  );
 }
 
 function emitCompletedMessages(
@@ -1548,8 +1771,7 @@ function readLimitInfo(value: unknown): AgentRunResult["limit"] | null {
   };
 }
 
-function readStateEventSequence(state: unknown, runId: string): number {
-  if (readStateRunId(state) !== runId) return 0;
+function readStateEventSequence(state: unknown): number {
   if (!isRecord(state) || !isRecord(state.values)) return 0;
   const sequence = state.values.agentdockEventSequence;
   const persistedSequence =
@@ -1570,6 +1792,28 @@ function readStateEventSequence(state: unknown, runId: string): number {
       ? 0
       : (checkpointStep + 1) * EVENT_SEQUENCE_CHECKPOINT_STRIDE;
   return Math.max(persistedSequence, checkpointSequence);
+}
+
+function compareRunHistoryEntries(
+  left: AgentSessionRunHistoryEntry,
+  right: AgentSessionRunHistoryEntry,
+): number {
+  const timestampOrder = (
+    left.startedAt ?? left.checkpointTimestamp
+  ).localeCompare(right.startedAt ?? right.checkpointTimestamp);
+  return timestampOrder !== 0
+    ? timestampOrder
+    : left.checkpointId.localeCompare(right.checkpointId);
+}
+
+function readRunHistoryCursor(value: string | undefined): number {
+  if (value === undefined) return 0;
+  if (!/^(0|[1-9]\d*)$/.test(value))
+    throw new Error("Agent run history cursor is invalid.");
+  const offset = Number(value);
+  if (!Number.isSafeInteger(offset))
+    throw new Error("Agent run history cursor is invalid.");
+  return offset;
 }
 
 function isRunStatus(value: unknown): value is AgentRunStatus {
@@ -1699,7 +1943,7 @@ function mergeRunResults(
       ? { finishReason: current.finishReason ?? previous.finishReason }
       : {}),
     ...(current.usage || previous.usage
-      ? { usage: mergeUsage(previous.usage, current.usage ?? {}) }
+      ? { usage: current.usage ?? previous.usage }
       : {}),
     ...(current.limit || previous.limit
       ? { limit: current.limit ?? previous.limit }

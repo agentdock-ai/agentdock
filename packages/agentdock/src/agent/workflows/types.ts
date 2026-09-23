@@ -4,6 +4,8 @@ import type { PendingApprovalInterrupt } from "./tool-calling/interrupts.js";
 import type {
   AgentContext,
   AgentSessionHistory,
+  AgentSessionRunHistory,
+  AgentSessionRunHistoryOptions,
   RunAgentOptions,
   StreamAgentResult,
 } from "../types.js";
@@ -56,6 +58,11 @@ export interface AgentWorkflow {
       "systemPrompt" | "maxSteps" | "sessionNamespace"
     >,
   ): Promise<AgentSessionHistory>;
+  getSessionRunHistory(
+    sessionId: string,
+    options?: Pick<RunAgentOptions, "sessionNamespace"> &
+      AgentSessionRunHistoryOptions,
+  ): Promise<AgentSessionRunHistory>;
   deleteSession(
     sessionId: string,
     options?: Pick<RunAgentOptions, "sessionNamespace">,

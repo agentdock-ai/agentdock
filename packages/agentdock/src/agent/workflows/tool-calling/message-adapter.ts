@@ -232,6 +232,7 @@ export function normalizeMessages(
 
     const role = message.getType();
     if (role === "human") {
+      if (isContextSummaryMessage(message)) continue;
       normalized.push({
         role: "user",
         content: messageContentParts(message.content),
@@ -318,14 +319,22 @@ function addToolCall(
 }
 
 export function findFinalContent(messages: Message[]): ContentPart[] {
-  for (const message of [...messages].reverse()) {
-    if (
-      message.role === "assistant" &&
-      !message.content.some((part) => part.type === "tool-call")
-    )
-      return message.content;
-  }
-  return [];
+  const finalAssistant = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  return (
+    finalAssistant?.content.filter(
+      (part) => part.type !== "tool-call" && part.type !== "tool-result",
+    ) ?? []
+  );
+}
+
+export function isContextSummaryMessage(message: BaseMessage): boolean {
+  return (
+    message.getType() === "human" &&
+    isRecord(message.additional_kwargs) &&
+    message.additional_kwargs.agentdock_context_summary === true
+  );
 }
 
 export function toToolCallRecord(value: unknown): ToolCallRecord {

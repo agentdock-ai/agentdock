@@ -46,6 +46,41 @@ test("reads only the current checkpoint interrupt and preserves action order", (
   );
 });
 
+test("the installed LangChain HITL payload has no canonical tool-call identity", () => {
+  const payload = {
+    __interrupt__: [
+      {
+        id: "interrupt-identical-calls",
+        value: {
+          actionRequests: [
+            { name: "same_tool", args: { value: 1 } },
+            { name: "same_tool", args: { value: 1 } },
+          ],
+        },
+      },
+    ],
+  };
+
+  assert.deepEqual(payload.__interrupt__[0].value.actionRequests, [
+    { name: "same_tool", args: { value: 1 } },
+    { name: "same_tool", args: { value: 1 } },
+  ]);
+  assert.equal("id" in payload.__interrupt__[0].value.actionRequests[0], false);
+  assert.equal(
+    "toolCallId" in payload.__interrupt__[0].value.actionRequests[0],
+    false,
+  );
+
+  const requests = readApprovalInterruptFromPayload(
+    payload,
+    finalizedCalls,
+  ).requests;
+  assert.deepEqual(
+    requests.map((request) => request.toolCall.toolCallId),
+    ["call-first", "call-second"],
+  );
+});
+
 test("does not silently accept an interrupt action without a finalized call", () => {
   assert.throws(
     () =>

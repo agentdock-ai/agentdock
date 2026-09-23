@@ -12,6 +12,8 @@ import type {
   AgentContext,
   AgentRunResult,
   AgentSessionHistory,
+  AgentSessionRunHistory,
+  AgentSessionRunHistoryOptions,
   AgentSessionRecord,
   RunAgentOptions,
   StreamAgentResult,
@@ -85,6 +87,11 @@ export interface AgentDockWorkflowClient {
       "systemPrompt" | "maxSteps" | "sessionNamespace"
     >,
   ): Promise<AgentSessionHistory>;
+  getSessionRunHistory(
+    sessionId: string,
+    options?: Pick<RunAgentOptions, "sessionNamespace"> &
+      AgentSessionRunHistoryOptions,
+  ): Promise<AgentSessionRunHistory>;
   deleteSession(
     sessionId: string,
     options?: Pick<RunAgentOptions, "sessionNamespace">,
@@ -250,6 +257,14 @@ export class AgentDock {
     > = {},
   ): Promise<AgentSessionHistory> {
     return this.toolCalling.getSessionHistory(sessionId, options);
+  }
+
+  getSessionRunHistory(
+    sessionId: string,
+    options: Pick<RunAgentOptions, "sessionNamespace"> &
+      AgentSessionRunHistoryOptions = {},
+  ): Promise<AgentSessionRunHistory> {
+    return this.toolCalling.getSessionRunHistory(sessionId, options);
   }
 
   async deleteSession(
@@ -421,6 +436,8 @@ export class AgentDock {
         this.getSessionWithWorkflow(workflow, sessionId, options),
       getSessionHistory: (sessionId, options) =>
         this.getSessionHistoryWithWorkflow(workflow, sessionId, options),
+      getSessionRunHistory: (sessionId, options) =>
+        this.getSessionRunHistoryWithWorkflow(workflow, sessionId, options),
       deleteSession: (sessionId, options) =>
         this.deleteSessionWithWorkflow(workflow, sessionId, options),
     };
@@ -497,6 +514,24 @@ export class AgentDock {
     assertNonEmptyString(sessionId, "Agent session ID");
     const merged = { ...this.defaults, ...options };
     return workflow.getSessionHistory(sessionId, merged);
+  }
+
+  private async getSessionRunHistoryWithWorkflow(
+    workflow: AgentWorkflow,
+    sessionId: string,
+    options: Pick<RunAgentOptions, "sessionNamespace"> &
+      AgentSessionRunHistoryOptions = {},
+  ): Promise<AgentSessionRunHistory> {
+    await this.prepareOperation();
+    assertNonEmptyString(sessionId, "Agent session ID");
+    if (
+      options.limit !== undefined &&
+      (!Number.isSafeInteger(options.limit) || options.limit <= 0)
+    ) {
+      throw new Error("Agent run history limit must be a positive integer.");
+    }
+    const merged = { ...this.defaults, ...options };
+    return workflow.getSessionRunHistory(sessionId, merged);
   }
 
   async stop(runId: string): Promise<boolean> {

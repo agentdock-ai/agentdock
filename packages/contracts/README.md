@@ -21,6 +21,7 @@ JSON-compatible event and run types without importing LangChain or LangGraph.
 - Agent events and run results.
 - Structured messages and content parts.
 - Interrupt, usage, and finish metadata.
+- Durable session and normalized run-history contracts.
 - `reduceAgentEvent()` for rebuilding a UI-safe snapshot.
 - Strict JSON cloning and validation helpers.
 
@@ -37,6 +38,7 @@ import type {
   AgentEvent,
   AgentRunResult,
   AgentSessionRecord,
+  AgentSessionRunHistory,
 } from "@agentdock-ai/contracts";
 
 function render(event: AgentEvent) {
@@ -45,6 +47,10 @@ function render(event: AgentEvent) {
   }
 }
 ```
+
+`AgentSessionRunHistory` describes the normalized snapshots returned by
+Agentdock’s durable run-history API. Each entry is a logical run result with
+checkpoint timestamps and no raw event-log or replay requirement.
 
 The package intentionally contains types and JSON-safe helpers only. Runtime
 implementation types such as models, tools, and checkpoint savers belong to the

@@ -716,4 +716,142 @@ describe("AgentDock contracts", () => {
       }),
     ).toThrow(/terminal/);
   });
+
+  it("preserves an optional approval action tool identity through event cloning", () => {
+    const event: AgentEvent = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      eventId: "approval-clone",
+      runId: "run-approval-clone",
+      sessionId: "session-approval-clone",
+      phaseId: "phase-approval-clone",
+      logicalSequence: 1,
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "tool-approval",
+        interruptId: "interrupt-clone",
+        prompt: "Approve these tools.",
+        actions: [
+          {
+            id: "approval-1",
+            toolCallId: "tool-call-1",
+            name: "delete_file",
+            input: { path: "report.csv" },
+          },
+        ],
+      },
+    };
+
+    const cloned = cloneAgentEvent(event);
+    expect(cloned.interrupt.actions[0]).toMatchObject({
+      id: "approval-1",
+      toolCallId: "tool-call-1",
+    });
+  });
+
+  it("keeps legacy approval actions without toolCallId valid", () => {
+    const event: AgentEvent = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      eventId: "approval-legacy",
+      runId: "run-approval-legacy",
+      sessionId: "session-approval-legacy",
+      phaseId: "phase-approval-legacy",
+      logicalSequence: 1,
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "custom",
+        interruptId: "interrupt-legacy",
+        prompt: "Continue.",
+        actions: [{ id: "legacy-action", name: "continue", input: {} }],
+      },
+    };
+
+    expect(() => cloneAgentEvent(event)).not.toThrow();
+  });
+
+  it("rejects invalid present approval action toolCallId values", () => {
+    for (const toolCallId of ["", 42, [], {}]) {
+      const event = {
+        protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+        eventId: `approval-invalid-${String(toolCallId)}`,
+        runId: "run-approval-invalid",
+        sessionId: "session-approval-invalid",
+        phaseId: "phase-approval-invalid",
+        logicalSequence: 1,
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type: AgentEventType.InterruptRequired,
+        interrupt: {
+          kind: "tool-approval",
+          interruptId: "interrupt-invalid",
+          prompt: "Approve.",
+          actions: [
+            { id: "approval-invalid", toolCallId, name: "tool", input: {} },
+          ],
+        },
+      };
+
+      expect(() => cloneAgentEvent(event)).toThrow(/toolCallId/);
+    }
+  });
+
+  it("does not deduplicate approval events that differ by toolCallId", () => {
+    const base = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      runId: "run-approval-fingerprint",
+      sessionId: "session-approval-fingerprint",
+      phaseId: "phase-approval-fingerprint",
+      timestamp: new Date(0).toISOString(),
+    };
+    const started = {
+      ...base,
+      eventId: "approval-fingerprint-event",
+      logicalSequence: 1,
+      sequence: 1,
+      type: AgentEventType.RunStarted,
+    } as const;
+    const requiredEvent = {
+      ...base,
+      eventId: "approval-fingerprint-required",
+      logicalSequence: 2,
+      sequence: 2,
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "tool-approval" as const,
+        interruptId: "interrupt-fingerprint",
+        prompt: "Approve.",
+        actions: [
+          {
+            id: "approval-fingerprint",
+            name: "tool",
+            input: {},
+            toolCallId: "tool-call-a",
+          },
+        ],
+      },
+    } as const;
+    const requiredState = reduceAgentEvent(
+      reduceAgentEvent(createAgentReducerState(), started),
+      requiredEvent,
+    );
+
+    expect(() =>
+      reduceAgentEvent(requiredState, {
+        ...requiredEvent,
+        eventId: "approval-fingerprint-required",
+        interrupt: {
+          ...requiredEvent.interrupt,
+          actions: [
+            {
+              ...requiredEvent.interrupt.actions[0],
+              toolCallId: "tool-call-b",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/event ID was reused/);
+  });
 });
