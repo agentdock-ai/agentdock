@@ -1,0 +1,75 @@
+import type { AgentEvent } from "@agentdock-ai/contracts";
+
+export type StartRun<TInput, TContext extends Record<string, unknown>> = {
+  /** Input accepted by the compiled graph. */
+  input: TInput;
+  resume?: never;
+  /** Stable, application-authorized LangGraph thread identity. */
+  threadId: string;
+  /** Per-invocation graph context; never persisted by AgentDock. */
+  context?: TContext;
+  /** Aborts cooperative graph and tool work when signaled. */
+  signal?: AbortSignal;
+};
+
+export type ResumeRun<TContext extends Record<string, unknown>> = {
+  input?: never;
+  /** The same application-authorized thread ID used for the interrupted run. */
+  threadId: string;
+  /** Opaque value forwarded unchanged to LangGraph's `Command({ resume })`. */
+  resume: unknown;
+  context?: TContext;
+  signal?: AbortSignal;
+};
+
+export type Run<TInput, TContext extends Record<string, unknown>> =
+  StartRun<TInput, TContext> | ResumeRun<TContext>;
+
+export interface AgentRuntime<
+  TInput,
+  TContext extends Record<string, unknown>,
+> {
+  /** Transport-free event stream. Early iterator return aborts cooperative work. */
+  stream(run: Run<TInput, TContext>): AsyncIterable<AgentEvent>;
+  /** Writes SSE to a Node-compatible response and owns its response listeners. */
+  pipe(response: NodeSseResponse, run: Run<TInput, TContext>): Promise<void>;
+  /** Adapts the event stream to a Web `Response`; body cancellation aborts work. */
+  toResponse(run: Run<TInput, TContext>): Promise<Response>;
+}
+
+/** Minimal Node HTTP / Express-compatible response surface used by `pipe`. */
+export interface NodeSseResponse {
+  readonly destroyed: boolean;
+  readonly writableEnded: boolean;
+  writeHead(statusCode: number, headers: Record<string, string>): this;
+  write(frame: string): boolean;
+  end(): void;
+  on(event: "close" | "drain", listener: () => void): this;
+  off(event: "close" | "drain", listener: () => void): this;
+}
+
+type GraphStreamArguments<Graph> = Graph extends {
+  stream: (...args: infer Arguments) => unknown;
+}
+  ? Arguments
+  : never;
+
+export type GraphInput<Graph> =
+  GraphStreamArguments<Graph> extends [infer Input, ...unknown[]]
+    ? Input
+    : never;
+
+export type GraphContext<Graph> =
+  GraphStreamArguments<Graph> extends [unknown, (infer Options)?]
+    ? NonNullable<Options> extends { context?: infer Context }
+      ? Context extends Record<string, unknown>
+        ? Context
+        : Record<string, unknown>
+      : Record<string, unknown>
+    : Record<string, unknown>;
+
+export interface ServableCompiledGraph {
+  stream(input: never, options?: never): unknown;
+  getState(config: never): unknown;
+  updateState(config: never, update: never): unknown;
+}

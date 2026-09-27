@@ -1,6 +1,6 @@
 {
   "name": "@agentdock-ai/contracts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-independent AgentDock data contracts",
   "type": "module",
   "repository": {
@@ -34,7 +34,7 @@
     "vitest": "^4.1.11"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "MIT"
 }

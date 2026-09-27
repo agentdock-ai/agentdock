@@ -12,11 +12,10 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.d.ts"],
       thresholds: {
-        // Measured baseline from the current core test suite. Keep these floors
-        // stable so new changes cannot silently reduce coverage.
+        // Serving-only baseline after removing the legacy agent execution engine.
         statements: 85.33,
         branches: 76.52,
-        functions: 92.61,
+        functions: 90,
         lines: 88.47,
       },
     },

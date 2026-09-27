@@ -2,10 +2,6 @@ import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { ChatGenerationChunk } from "@langchain/core/outputs";
 import { AIMessage, AIMessageChunk } from "@langchain/core/messages";
 import { MemorySaver } from "@langchain/langgraph";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
 
 export function createScriptedMessageChunks(
   contents,
@@ -109,21 +105,6 @@ export function createNeverSettlingAuthorization() {
 
 export function createMemoryCheckpoint() {
   return new MemorySaver();
-}
-
-export async function createSQLiteCheckpoint() {
-  const directory = await mkdtemp(path.join(tmpdir(), "agentdock-phase0-"));
-  const checkpoint = new SqliteCheckpoint({
-    path: path.join(directory, "checkpoints.sqlite"),
-  });
-
-  return {
-    checkpoint,
-    cleanup: async () => {
-      await checkpoint.close();
-      await rm(directory, { recursive: true, force: true });
-    },
-  };
 }
 
 export function splitIntoChunks(value, chunkCount) {

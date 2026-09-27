@@ -2,17 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_EVENT_PROTOCOL_VERSION,
   AgentEventType,
-  type AgentResumeRequest,
-  type AgentRunRequest,
-  type AgentRunResult,
   type AgentEvent,
-  type AgentSessionRecord,
   type ToolApprovalRequest,
   type ToolApprovalResponse,
   createAgentReducerState,
   reduceAgentEvent,
   cloneJsonValue,
-  cloneJsonSchema,
   cloneAgentEvent,
   cloneContentParts,
 } from "../src/index.js";
@@ -34,7 +29,7 @@ describe("AgentDock contracts", () => {
     expect(JSON.parse(JSON.stringify(event))).toEqual(event);
   });
 
-  it("keeps approval and session data independent of runtime classes", () => {
+  it("keeps approval data independent of runtime classes", () => {
     const approval: ToolApprovalRequest = {
       approvalId: "approval-1",
       toolCall: {
@@ -43,26 +38,10 @@ describe("AgentDock contracts", () => {
         input: { message: "hello" },
       },
     };
-    const session: AgentSessionRecord = {
-      sessionId: "session-1",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "hello" }],
-        },
-      ],
-    };
-
-    expect(JSON.stringify({ approval, session })).toBeTruthy();
+    expect(JSON.stringify(approval)).toBeTruthy();
   });
 
-  it("describes frontend run and approval requests", () => {
-    const run: AgentRunRequest = {
-      sessionId: "session-1",
-      prompt: "Send the report.",
-      context: { userId: "user-1" },
-      maxSteps: 4,
-    };
+  it("describes approval responses", () => {
     const approval: ToolApprovalResponse = {
       approvalId: "approval-1",
       approved: true,
@@ -72,17 +51,7 @@ describe("AgentDock contracts", () => {
         input: { reportId: "report-1" },
       },
     };
-    const resume: AgentResumeRequest = {
-      sessionId: "session-1",
-      runId: "run-1",
-      context: { userId: "user-1" },
-      approvals: [approval],
-    };
-
-    expect(JSON.parse(JSON.stringify({ run, resume }))).toEqual({
-      run,
-      resume,
-    });
+    expect(JSON.parse(JSON.stringify(approval))).toEqual(approval);
   });
 
   it("rebuilds a structured event stream and suppresses reconnect duplicates", () => {
@@ -234,9 +203,6 @@ describe("AgentDock contracts", () => {
     expect(() => cloneJsonValue({ items: sparse }, "context")).toThrow(
       /context\.items\[0\] is a sparse array entry/,
     );
-    expect(() => cloneJsonSchema("string", "tool schema")).toThrow(
-      /tool schema must be a JSON Schema object or boolean/,
-    );
   });
 
   it("clones reserved JSON object keys without changing object prototypes", () => {
@@ -316,42 +282,6 @@ describe("AgentDock contracts", () => {
     };
 
     expect(JSON.parse(JSON.stringify(cloneAgentEvent(event)))).toEqual(event);
-  });
-
-  it("round-trips a complete public run result", () => {
-    const result: AgentRunResult = {
-      runId: "run-result",
-      sessionId: "session-result",
-      status: "completed",
-      content: [{ type: "text", text: "Done." }],
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "reasoning", text: "Checked." },
-            { type: "text", text: "Done." },
-          ],
-        },
-      ],
-      toolCalls: [],
-      toolResults: [],
-      toolErrors: [],
-      approvalRequests: [],
-      stepsCompleted: 1,
-      finishReason: "stop",
-      usage: {
-        inputTokens: 10,
-        cachedInputTokens: 4,
-        outputTokens: 3,
-        reasoningTokens: 1,
-        totalTokens: 13,
-        costUsd: 0.002,
-        model: "model-1",
-        provider: "provider-1",
-      },
-    };
-
-    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 
   it("validates media sources and protocol versions", () => {
@@ -442,7 +372,14 @@ describe("AgentDock contracts", () => {
           kind: "tool-approval",
           interruptId: "interrupt-1",
           prompt: "Approve?",
-          actions: [{ id: "call-1", name: "send", input: { text: "hello" } }],
+          actions: [
+            {
+              id: "call-1",
+              toolCallId: "call-1",
+              name: "send",
+              input: { text: "hello" },
+            },
+          ],
         },
       },
       {
@@ -715,5 +652,164 @@ describe("AgentDock contracts", () => {
         message: "late",
       }),
     ).toThrow(/terminal/);
+  });
+
+  it("requires and preserves tool-call identity on tool-approval actions", () => {
+    const event: AgentEvent = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      eventId: "approval-clone",
+      runId: "run-approval-clone",
+      sessionId: "session-approval-clone",
+      phaseId: "phase-approval-clone",
+      logicalSequence: 1,
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "tool-approval",
+        interruptId: "interrupt-clone",
+        prompt: "Approve these tools.",
+        actions: [
+          {
+            id: "tool-call-1",
+            toolCallId: "tool-call-1",
+            name: "delete_file",
+            input: { path: "report.csv" },
+          },
+        ],
+      },
+    };
+
+    const cloned = cloneAgentEvent(event);
+    expect(cloned.interrupt.actions[0]).toMatchObject({
+      id: "tool-call-1",
+      toolCallId: "tool-call-1",
+    });
+  });
+
+  it("keeps custom interrupt actions without toolCallId valid", () => {
+    const event: AgentEvent = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      eventId: "approval-legacy",
+      runId: "run-approval-legacy",
+      sessionId: "session-approval-legacy",
+      phaseId: "phase-approval-legacy",
+      logicalSequence: 1,
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "custom",
+        interruptId: "interrupt-legacy",
+        prompt: "Continue.",
+        actions: [{ id: "legacy-action", name: "continue", input: {} }],
+      },
+    };
+
+    expect(() => cloneAgentEvent(event)).not.toThrow();
+  });
+
+  it("rejects tool-approval actions without toolCallId", () => {
+    const event = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      eventId: "approval-missing-tool-call-id",
+      runId: "run-approval-missing-tool-call-id",
+      sessionId: "session-approval-missing-tool-call-id",
+      phaseId: "phase-approval-missing-tool-call-id",
+      logicalSequence: 1,
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "tool-approval",
+        interruptId: "interrupt-missing-tool-call-id",
+        prompt: "Approve.",
+        actions: [{ id: "approval", name: "tool", input: {} }],
+      },
+    };
+    expect(() => cloneAgentEvent(event)).toThrow(/toolCallId/);
+  });
+
+  it("rejects invalid present approval action toolCallId values", () => {
+    for (const toolCallId of ["", 42, [], {}]) {
+      const event = {
+        protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+        eventId: `approval-invalid-${String(toolCallId)}`,
+        runId: "run-approval-invalid",
+        sessionId: "session-approval-invalid",
+        phaseId: "phase-approval-invalid",
+        logicalSequence: 1,
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type: AgentEventType.InterruptRequired,
+        interrupt: {
+          kind: "tool-approval",
+          interruptId: "interrupt-invalid",
+          prompt: "Approve.",
+          actions: [
+            { id: "approval-invalid", toolCallId, name: "tool", input: {} },
+          ],
+        },
+      };
+
+      expect(() => cloneAgentEvent(event)).toThrow(/toolCallId/);
+    }
+  });
+
+  it("does not deduplicate approval events that differ by toolCallId", () => {
+    const base = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      runId: "run-approval-fingerprint",
+      sessionId: "session-approval-fingerprint",
+      phaseId: "phase-approval-fingerprint",
+      timestamp: new Date(0).toISOString(),
+    };
+    const started = {
+      ...base,
+      eventId: "approval-fingerprint-event",
+      logicalSequence: 1,
+      sequence: 1,
+      type: AgentEventType.RunStarted,
+    } as const;
+    const requiredEvent = {
+      ...base,
+      eventId: "approval-fingerprint-required",
+      logicalSequence: 2,
+      sequence: 2,
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "tool-approval" as const,
+        interruptId: "interrupt-fingerprint",
+        prompt: "Approve.",
+        actions: [
+          {
+            id: "approval-fingerprint",
+            name: "tool",
+            input: {},
+            toolCallId: "tool-call-a",
+          },
+        ],
+      },
+    } as const;
+    const requiredState = reduceAgentEvent(
+      reduceAgentEvent(createAgentReducerState(), started),
+      requiredEvent,
+    );
+
+    expect(() =>
+      reduceAgentEvent(requiredState, {
+        ...requiredEvent,
+        eventId: "approval-fingerprint-required",
+        interrupt: {
+          ...requiredEvent.interrupt,
+          actions: [
+            {
+              ...requiredEvent.interrupt.actions[0],
+              toolCallId: "tool-call-b",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/event ID was reused/);
   });
 });

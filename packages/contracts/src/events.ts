@@ -51,13 +51,33 @@ export interface AgentLimitInfo {
   used?: number;
 }
 
-export interface AgentInterrupt {
-  kind: "tool-approval" | "custom";
+export interface AgentInterruptAction {
+  id: string;
+  name: string;
+  input: JsonValue;
+  /** Required on tool-approval actions; optional for custom interrupts. */
+  toolCallId?: string;
+}
+
+export interface AgentToolApprovalInterruptAction extends AgentInterruptAction {
+  toolCallId: string;
+}
+
+interface AgentInterruptBase {
   interruptId: string;
   prompt: string;
-  actions: Array<{ id: string; name: string; input: JsonValue }>;
   payload?: JsonValue;
 }
+
+export type AgentInterrupt =
+  | (AgentInterruptBase & {
+      kind: "tool-approval";
+      actions: AgentToolApprovalInterruptAction[];
+    })
+  | (AgentInterruptBase & {
+      kind: "custom";
+      actions: AgentInterruptAction[];
+    });
 
 export const AGENT_EVENT_PROTOCOL_VERSION = 1 as const;
 
@@ -572,6 +592,16 @@ function assertInterrupt(
     assertString(action.id, `${actionPath}.id`);
     assertString(action.name, `${actionPath}.name`);
     cloneJsonValue(action.input, `${actionPath}.input`);
+    if (action.toolCallId !== undefined) {
+      if (
+        typeof action.toolCallId !== "string" ||
+        action.toolCallId.length === 0
+      )
+        throw new Error(`${actionPath}.toolCallId must be a non-empty string.`);
+    }
+    if (value.kind === "tool-approval") {
+      assertString(action.toolCallId, `${actionPath}.toolCallId`);
+    }
   });
   if (value.payload !== undefined)
     cloneJsonValue(value.payload, `${path}.payload`);

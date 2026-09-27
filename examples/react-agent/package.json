@@ -1,0 +1,23 @@
+{
+  "name": "agentdock-react-agent-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentdock-ai/agentdock": "^0.2.0",
+    "@langchain/core": "^1.2.11",
+    "@langchain/langgraph": "^1.4.13",
+    "@langchain/openrouter": "^0.4.10",
+    "langchain": "^1.5.10",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "tsx": "^4.20.0",
+    "typescript": "^7.0.2"
+  }
+}
