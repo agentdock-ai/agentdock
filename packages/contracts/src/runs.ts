@@ -22,13 +22,6 @@ export interface AgentRunRequest {
   authorizationTimeout?: number;
 }
 
-export interface AgentResumeRequest {
-  sessionId: string;
-  runId: string;
-  context: AgentContext;
-  approvals: import("./approvals.js").ToolApprovalDecision[];
-}
-
 export type AgentRunStatus =
   "waiting_for_approval" | "completed" | "failed" | "cancelled";
 

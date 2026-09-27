@@ -44,7 +44,7 @@
     "test:integration": "vitest run test/integration",
     "test:coverage": "vitest run --coverage",
     "test": "yarn test:types && yarn test:unit && yarn test:integration",
-    "test:scenarios": "yarn build && yarn workspace @agentdock-ai/models build && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
+    "test:scenarios": "yarn build && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
     "test:watch": "vitest",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn build",
@@ -52,7 +52,6 @@
   },
   "dependencies": {
     "@agentdock-ai/contracts": "^0.1.0",
-    "@agentdock-ai/checkpoint": "^0.1.0",
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",
     "@langchain/langgraph-checkpoint": "^1.1.5",
@@ -61,11 +60,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "@agentdock-ai/checkpoint-mongodb": "^0.1.0",
-    "@agentdock-ai/checkpoint-postgres": "^0.1.0",
-    "@agentdock-ai/checkpoint-redis": "^0.1.0",
-    "@agentdock-ai/checkpoint-sqlite": "^0.1.0",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.4",
     "@vitest/coverage-v8": "^4.1.11",
+    "@langchain/openrouter": "^0.4.10",
     "prettier": "^3.5.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

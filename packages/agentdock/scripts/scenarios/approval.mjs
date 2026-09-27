@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { AgentDockModel } from "../../../models/dist/index.js";
+import { ChatOpenRouter } from "@langchain/openrouter";
 import { AgentDock } from "../../dist/index.js";
 import {
   requireScenarioEnvironment,
@@ -11,7 +11,7 @@ import {
 let executions = 0;
 const runner = new ScenarioRunner({
   agent: new AgentDock({
-    model: AgentDockModel.openRouter({
+    model: new ChatOpenRouter({
       model:
         process.env.AGENTDOCK_OPENROUTER_MODEL ??
         "deepseek/deepseek-v4-flash-0731",

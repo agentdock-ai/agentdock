@@ -1,12 +1,6 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
+import { MemorySaver, type BaseCheckpointSaver } from "@langchain/langgraph";
 import type { AnyAgentMiddleware } from "langchain";
-import {
-  CheckpointManager,
-  MemoryCheckpoint,
-  type CheckpointAdapter,
-  type CheckpointManagerOptions,
-} from "@agentdock-ai/checkpoint";
 import type { ToolApprovalDecision } from "./permissions/types.js";
 import type {
   AgentContext,
@@ -105,7 +99,7 @@ export interface AgentDockCloseOptions {
 export interface AgentDockOptions {
   model: BaseChatModel;
   registry?: ToolRegistry;
-  checkpoint?: CheckpointAdapter;
+  /** Application-owned LangGraph saver; AgentDock never closes it. */
   checkpointer?: BaseCheckpointSaver;
   defaults?: AgentDockDefaults;
   coordinator?: RunCoordinator;
@@ -126,7 +120,7 @@ export class AgentDock {
   readonly toolCalling: AgentDockWorkflowClient;
 
   private readonly defaults: AgentDockDefaults;
-  private readonly checkpointManager: CheckpointManager;
+  private readonly checkpointer: BaseCheckpointSaver;
   private readonly toolCallingWorkflow: AgentWorkflow;
   private readonly coordinator: RunCoordinator;
   private readonly activeRuns = new Map<string, ActiveRun>();
@@ -146,14 +140,11 @@ export class AgentDock {
     this.registry = options.registry ?? new ToolRegistry();
     this.defaults = options.defaults ?? {};
     this.coordinator = options.coordinator ?? defaultRunCoordinator;
-    const checkpointOptions: CheckpointManagerOptions = options.checkpointer
-      ? { checkpointer: options.checkpointer }
-      : { checkpoint: options.checkpoint ?? new MemoryCheckpoint() };
-    this.checkpointManager = new CheckpointManager(checkpointOptions);
+    this.checkpointer = options.checkpointer ?? new MemorySaver();
     this.toolCallingWorkflow = new ToolCallingWorkflow({
       model: this.model,
       registry: this.registry,
-      checkpointer: this.checkpointManager.saver,
+      checkpointer: this.checkpointer,
       middleware: options.middleware,
       contextManagement: ContextManagement.create(
         this.model,
@@ -165,7 +156,6 @@ export class AgentDock {
 
   async initialize(): Promise<void> {
     this.assertOpen();
-    await this.checkpointManager.initialize();
   }
 
   close(options: AgentDockCloseOptions = {}): Promise<void> {
@@ -205,7 +195,6 @@ export class AgentDock {
     this.closePromise = boundedWait
       .then(() => {
         this.unfinishedRunIds = [...this.activeRuns.keys()];
-        return waitForClose(this.checkpointManager.close(), gracePeriodMs);
       })
       .finally(() => {
         this.lifecycle = "closed";
@@ -284,7 +273,7 @@ export class AgentDock {
       runId: `delete-${crypto.randomUUID()}`,
     });
     try {
-      await this.checkpointManager.initialize();
+      this.assertOpen();
       await this.toolCalling.deleteSession(sessionId, options);
     } finally {
       await lease.release();
@@ -583,8 +572,6 @@ export class AgentDock {
 
   private async prepareOperation(): Promise<void> {
     this.assertOpen();
-    await this.checkpointManager.initialize();
-    this.assertOpen();
   }
 
   private assertOpen(): void {
@@ -640,24 +627,4 @@ export class AgentDock {
   ): RunAgentOptions {
     return { ...this.defaults, ...options };
   }
-}
-
-function waitForClose(
-  closing: Promise<void>,
-  gracePeriodMs: number,
-): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return new Promise((resolve, reject) => {
-    timer = setTimeout(resolve, gracePeriodMs);
-    void closing.then(
-      () => {
-        if (timer !== undefined) clearTimeout(timer);
-        resolve();
-      },
-      (error: unknown) => {
-        if (timer !== undefined) clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }

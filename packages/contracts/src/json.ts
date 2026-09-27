@@ -27,16 +27,6 @@ export function cloneJsonObject(value: unknown, label = "object"): JsonObject {
   return cloneJsonValue(value, label) as JsonObject;
 }
 
-export function cloneJsonSchema(value: unknown, label = "schema"): JsonSchema {
-  if (typeof value === "boolean") return value;
-  if (!isJsonObject(value)) {
-    throw new JsonValidationError(
-      `${label} must be a JSON Schema object or boolean.`,
-    );
-  }
-  return cloneJsonValue(value, label) as JsonSchema;
-}
-
 export function assertJsonValue(
   value: unknown,
   label = "value",

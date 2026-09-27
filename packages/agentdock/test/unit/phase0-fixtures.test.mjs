@@ -76,9 +76,8 @@ test("Phase 0 checkpoint fixtures provide reusable memory and SQLite storage", a
 
   const storage = await createSQLiteCheckpoint();
   try {
-    assert.equal(typeof storage.checkpoint.initialize, "function");
-    assert.equal(typeof storage.checkpoint.close, "function");
-    await storage.checkpoint.initialize();
+    assert.equal(typeof storage.checkpointer.getTuple, "function");
+    assert.equal(typeof storage.checkpointer.put, "function");
   } finally {
     await storage.cleanup();
   }

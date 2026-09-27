@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_EVENT_PROTOCOL_VERSION,
   AgentEventType,
-  type AgentResumeRequest,
   type AgentRunRequest,
   type AgentRunResult,
   type AgentEvent,
@@ -12,7 +11,6 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
   cloneJsonValue,
-  cloneJsonSchema,
   cloneAgentEvent,
   cloneContentParts,
 } from "../src/index.js";
@@ -72,16 +70,9 @@ describe("AgentDock contracts", () => {
         input: { reportId: "report-1" },
       },
     };
-    const resume: AgentResumeRequest = {
-      sessionId: "session-1",
-      runId: "run-1",
-      context: { userId: "user-1" },
-      approvals: [approval],
-    };
-
-    expect(JSON.parse(JSON.stringify({ run, resume }))).toEqual({
+    expect(JSON.parse(JSON.stringify({ run, approval }))).toEqual({
       run,
-      resume,
+      approval,
     });
   });
 
@@ -233,9 +224,6 @@ describe("AgentDock contracts", () => {
     sparse.length = 2;
     expect(() => cloneJsonValue({ items: sparse }, "context")).toThrow(
       /context\.items\[0\] is a sparse array entry/,
-    );
-    expect(() => cloneJsonSchema("string", "tool schema")).toThrow(
-      /tool schema must be a JSON Schema object or boolean/,
     );
   });
 

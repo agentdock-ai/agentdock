@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { afterEach, test } from "vitest";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import {
   AIMessage,
@@ -10,12 +10,24 @@ import {
   SystemMessage,
   ToolMessage,
 } from "@langchain/core/messages";
-import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
+import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { AgentDock, ToolRegistry } from "../../src/index.js";
 import {
   ContextCapacityError,
   ContextManagement,
 } from "../../src/agent/context-management.js";
+
+const sqliteSavers = new Set();
+afterEach(() => {
+  for (const saver of sqliteSavers) saver.db.close();
+  sqliteSavers.clear();
+});
+
+function createSqliteSaver(databasePath) {
+  const saver = SqliteSaver.fromConnString(databasePath);
+  sqliteSavers.add(saver);
+  return saver;
+}
 
 class ProfiledChatModel extends BaseChatModel {
   constructor({
@@ -350,7 +362,7 @@ test("persists compacted state across AgentDock recreation with SQLite", async (
   const firstModel = new ProfiledChatModel({ maxInputTokens: 1_000 });
   const first = new AgentDock({
     model: firstModel,
-    checkpoint: new SqliteCheckpoint({ path: databasePath }),
+    checkpointer: createSqliteSaver(databasePath),
     contextManagement: { summarization: { trigger: "auto" } },
   });
 
@@ -365,7 +377,7 @@ test("persists compacted state across AgentDock recreation with SQLite", async (
     });
     const second = new AgentDock({
       model: new ProfiledChatModel({ maxInputTokens: 1_000 }),
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
       contextManagement: { summarization: { summaryModel, trigger: "auto" } },
     });
     try {
@@ -423,7 +435,7 @@ test("resumes an approval after compaction without replaying the side effect", a
     const first = new AgentDock({
       model: firstModel,
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
       contextManagement: {
         summarization: { summaryModel, trigger: "auto" },
       },
@@ -448,7 +460,7 @@ test("resumes an approval after compaction without replaying the side effect", a
     const second = new AgentDock({
       model: new ProfiledChatModel({ maxInputTokens: 1_000, toolCalls: [[]] }),
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
       contextManagement: { summarization: { trigger: "auto" } },
     });
     await second.initialize();

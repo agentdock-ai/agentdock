@@ -28,14 +28,14 @@ and LangGraph run internally; application code uses the Agentdock API.
 ## 🚀 Install
 
 ```bash
-yarn add @agentdock-ai/agentdock @agentdock-ai/models zod
+yarn add @agentdock-ai/agentdock @langchain/openai zod
 ```
 
 ## 💻 Quick start
 
 ```ts
 import { AgentDock, defineTool } from "@agentdock-ai/agentdock";
-import { AgentDockModel } from "@agentdock-ai/models";
+import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
 const weather = defineTool({
@@ -46,7 +46,7 @@ const weather = defineTool({
 });
 
 const agent = new AgentDock({
-  model: AgentDockModel.openAI({ model: "gpt-5.4-mini" }),
+  model: new ChatOpenAI({ model: "gpt-4.1-mini" }),
 });
 
 agent.registerTool(weather);
@@ -84,22 +84,20 @@ console.log(await result);
 
 ## 🧠 Sessions and approvals
 
-Pass a stable `sessionId` to continue a conversation. Use a durable checkpoint
-adapter when sessions must survive restarts or be shared across instances:
+Pass a stable `sessionId` to continue a conversation. Use a LangGraph saver when
+sessions must survive restarts or be shared across instances:
 
 ```bash
-yarn add @agentdock-ai/checkpoint-postgres
+yarn add @langchain/langgraph-checkpoint-sqlite
 ```
 
 ```ts
-import { PostgresCheckpoint } from "@agentdock-ai/checkpoint-postgres";
+import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 
-const agent = new AgentDock({
-  model,
-  checkpoint: new PostgresCheckpoint({
-    connectionString: process.env.DATABASE_URL!,
-  }),
-});
+const checkpointer = SqliteSaver.fromConnString("./checkpoints.sqlite");
+const agent = new AgentDock({ model, checkpointer });
+// The application owns and closes this saver.
+checkpointer.db.close();
 ```
 
 Set `requiresApproval: true` on a side-effecting tool. Agentdock pauses the run,
@@ -119,9 +117,7 @@ persists the interrupt, and resumes it with `agent.resume()` after approval.
 
 ## 🔗 Related packages
 
-- [`@agentdock-ai/models`](https://www.npmjs.com/package/@agentdock-ai/models) — provider configuration.
 - [`@agentdock-ai/contracts`](https://www.npmjs.com/package/@agentdock-ai/contracts) — framework-independent events and data types.
-- [`@agentdock-ai/checkpoint`](https://www.npmjs.com/package/@agentdock-ai/checkpoint) — checkpoint contract and memory adapter.
 
 ## 📄 License
 

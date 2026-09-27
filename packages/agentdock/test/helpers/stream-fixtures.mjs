@@ -2,10 +2,10 @@ import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { ChatGenerationChunk } from "@langchain/core/outputs";
 import { AIMessage, AIMessageChunk } from "@langchain/core/messages";
 import { MemorySaver } from "@langchain/langgraph";
+import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
 
 export function createScriptedMessageChunks(
   contents,
@@ -113,14 +113,14 @@ export function createMemoryCheckpoint() {
 
 export async function createSQLiteCheckpoint() {
   const directory = await mkdtemp(path.join(tmpdir(), "agentdock-phase0-"));
-  const checkpoint = new SqliteCheckpoint({
-    path: path.join(directory, "checkpoints.sqlite"),
-  });
+  const checkpointer = SqliteSaver.fromConnString(
+    path.join(directory, "checkpoints.sqlite"),
+  );
 
   return {
-    checkpoint,
+    checkpointer,
     cleanup: async () => {
-      await checkpoint.close();
+      checkpointer.db.close();
       await rm(directory, { recursive: true, force: true });
     },
   };

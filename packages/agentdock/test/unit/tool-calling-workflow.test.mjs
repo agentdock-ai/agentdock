@@ -15,49 +15,6 @@ import {
 } from "../helpers/stream-fixtures.mjs";
 import { ToolCallingWorkflow } from "../../src/agent/workflows/tool-calling/workflow.ts";
 
-class InitializationScopedSaver extends MemorySaver {
-  expectedOwner = null;
-  activeOwner = null;
-
-  getTuple(...args) {
-    this.assertInitialized();
-    return super.getTuple(...args);
-  }
-
-  put(...args) {
-    this.assertInitialized();
-    return super.put(...args);
-  }
-
-  putWrites(...args) {
-    this.assertInitialized();
-    return super.putWrites(...args);
-  }
-
-  assertInitialized() {
-    if (this.expectedOwner !== this.activeOwner) {
-      throw new Error("Checkpoint adapter was not initialized.");
-    }
-  }
-}
-
-class InitializationScopedCheckpoint {
-  constructor(saver) {
-    this.saver = saver;
-    this.owner = Symbol("checkpoint-owner");
-    saver.expectedOwner = this.owner;
-  }
-
-  initialize() {
-    this.saver.activeOwner = this.owner;
-    return Promise.resolve();
-  }
-
-  close() {
-    return Promise.resolve();
-  }
-}
-
 async function collect(iterable) {
   const events = [];
   for await (const event of iterable) events.push(event);
@@ -1229,8 +1186,7 @@ test("AgentDock keeps logical event ordering across an approval restart", async 
 });
 
 test("AgentDock resumes a checkpoint from a recreated instance", async () => {
-  const checkpointer = new InitializationScopedSaver();
-  const firstCheckpoint = new InitializationScopedCheckpoint(checkpointer);
+  const checkpointer = new MemorySaver();
   const registry = new ToolRegistry();
   let executions = 0;
   registry.register({
@@ -1255,18 +1211,17 @@ test("AgentDock resumes a checkpoint from a recreated instance", async () => {
       ],
     }),
     registry,
-    checkpoint: firstCheckpoint,
+    checkpointer,
   });
   const waiting = await firstDock.run(
     "Send the message.",
     {},
     { sessionId: "session-recreated", runId: "run-recreated" },
   );
-  const resumedCheckpoint = new InitializationScopedCheckpoint(checkpointer);
   const resumedDock = new AgentDock({
     model: new FakeToolCallingModel({ toolCalls: [[]] }),
     registry,
-    checkpoint: resumedCheckpoint,
+    checkpointer,
   });
 
   const resumed = await resumedDock.resume(

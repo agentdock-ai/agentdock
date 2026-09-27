@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
-import { MemorySaver } from "@langchain/langgraph-checkpoint";
-import { MemoryCheckpoint } from "@agentdock-ai/checkpoint";
+import { MemorySaver } from "@langchain/langgraph";
 import { AgentDock } from "../../src/index.js";
 
 function createAgent(options = {}) {
@@ -12,42 +11,30 @@ function createAgent(options = {}) {
   });
 }
 
-test("AgentDock accepts a memory checkpoint adapter", async () => {
-  const agent = createAgent({ checkpoint: new MemoryCheckpoint() });
-
-  await agent.initialize();
-  await agent.initialize();
+test("AgentDock defaults to a LangGraph in-memory saver", async () => {
+  const agent = createAgent();
   const result = await agent.run(
     "Use memory checkpoints.",
     {},
     { sessionId: "memory-session" },
   );
-
   assert.equal(result.status, "completed");
   await agent.close();
+});
+
+test("AgentDock accepts a vendor BaseCheckpointSaver instance", async () => {
+  const checkpointer = new MemorySaver();
+  const agent = createAgent({ checkpointer });
+  const result = await agent.run(
+    "Use the supplied saver.",
+    {},
+    { sessionId: "external-saver-session" },
+  );
+  assert.equal(result.status, "completed");
   await agent.close();
 });
 
-test("invalid checkpoint adapters fail at construction", () => {
-  assert.throws(
-    () =>
-      createAgent({
-        checkpoint: {},
-      }),
-    /must be a CheckpointAdapter instance/,
-  );
-
-  assert.throws(
-    () =>
-      createAgent({
-        checkpoint: new MemoryCheckpoint(),
-        checkpointer: new MemorySaver(),
-      }),
-    /cannot be used together/,
-  );
-});
-
-test("AgentDock does not close an externally injected checkpointer", async () => {
+test("AgentDock does not close an application-owned checkpointer", async () => {
   class TrackingSaver extends MemorySaver {
     closed = 0;
 
@@ -58,84 +45,29 @@ test("AgentDock does not close an externally injected checkpointer", async () =>
 
   const checkpointer = new TrackingSaver();
   const agent = createAgent({ checkpointer });
-
   await agent.close();
-
   assert.equal(checkpointer.closed, 0);
+});
+
+test("malformed checkpointer values fail at construction", () => {
+  assert.throws(
+    () => createAgent({ checkpointer: {} }),
+    /must be a LangGraph checkpointer/,
+  );
+});
+
+test("the removed checkpoint adapter option is rejected clearly", () => {
+  assert.throws(
+    () => createAgent({ checkpoint: {} }),
+    /checkpoint option was removed; use checkpointer/,
+  );
 });
 
 test("AgentDock rejects operations after close", async () => {
   const agent = createAgent();
   await agent.close();
-
   await assert.rejects(
     () => agent.getSession("closed-session"),
     /AgentDock is closed or closing/,
   );
-});
-
-test("AgentDock bounds an owned adapter close", async () => {
-  let closeCalls = 0;
-  const agent = createAgent({
-    checkpoint: {
-      saver: new MemorySaver(),
-      initialize: async () => {},
-      close: async () => {
-        closeCalls += 1;
-        await new Promise(() => {});
-      },
-    },
-  });
-
-  await agent.close({ gracePeriodMs: 10 });
-  assert.equal(closeCalls, 1);
-});
-
-test("AgentDock bounds shutdown during checkpoint initialization and reports the run", async () => {
-  let initializationStarted;
-  const started = new Promise((resolve) => {
-    initializationStarted = resolve;
-  });
-  const agent = createAgent({
-    checkpoint: {
-      saver: new MemorySaver(),
-      initialize: async () => {
-        initializationStarted();
-        await new Promise(() => {});
-      },
-      close: async () => {},
-    },
-  });
-
-  void agent.stream(
-    "Wait during initialization.",
-    {},
-    { sessionId: "initialization-close", runId: "initialization-close" },
-  );
-  await started;
-  const beforeClose = Date.now();
-  await agent.close({ gracePeriodMs: 20 });
-
-  assert.ok(Date.now() - beforeClose >= 15);
-  assert.ok(Date.now() - beforeClose < 500);
-  assert.deepEqual(agent.getUnfinishedRunIds(), ["initialization-close"]);
-});
-
-test("AgentDock stays deterministically closed when owned adapter close fails", async () => {
-  const agent = createAgent({
-    checkpoint: {
-      saver: new MemorySaver(),
-      initialize: async () => {},
-      close: async () => {
-        throw new Error("adapter close failed");
-      },
-    },
-  });
-
-  const firstClose = agent.close();
-  const secondClose = agent.close();
-  assert.equal(firstClose, secondClose);
-  await assert.rejects(firstClose, /adapter close failed/);
-  await assert.rejects(agent.close(), /adapter close failed/);
-  await assert.rejects(agent.initialize(), /closed or closing/);
 });

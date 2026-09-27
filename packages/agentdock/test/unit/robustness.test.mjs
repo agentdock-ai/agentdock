@@ -166,18 +166,8 @@ test("defineTool infers and validates typed input at the execution boundary", as
   await agent.close();
 });
 
-test("the AgentDock class runs multiple typed tools through a custom checkpoint adapter", async () => {
-  let initializationCalls = 0;
-  let closeCalls = 0;
-  const checkpoint = {
-    saver: new MemorySaver(),
-    initialize: async () => {
-      initializationCalls += 1;
-    },
-    close: async () => {
-      closeCalls += 1;
-    },
-  };
+test("the AgentDock class runs multiple typed tools with a LangGraph saver", async () => {
+  const checkpointer = new MemorySaver();
   const weather = defineTool({
     name: "typed_weather",
     description: "Return typed weather.",
@@ -214,7 +204,7 @@ test("the AgentDock class runs multiple typed tools through a custom checkpoint 
       ],
     }),
     registry,
-    checkpoint,
+    checkpointer,
   });
 
   const result = await agent.run(
@@ -236,9 +226,7 @@ test("the AgentDock class runs multiple typed tools through a custom checkpoint 
       },
     ],
   );
-  assert.equal(initializationCalls, 1);
   await agent.close();
-  assert.equal(closeCalls, 1);
 });
 
 test("the AgentDock class runs caller-provided middleware", async () => {
@@ -1304,57 +1292,6 @@ test("coordinator acquisition failure prevents execution and does not leave a lo
     /coordinator unavailable/,
   );
   assert.equal(executions, 0);
-  await agent.close();
-});
-
-test("checkpoint initialization happens under the coordinator lease and releases on failure", async () => {
-  const coordinator = new TrackingCoordinator();
-  let initializationAttempts = 0;
-  let modelCalls = 0;
-  const checkpoint = {
-    saver: new MemorySaver(),
-    initialize: async () => {
-      initializationAttempts += 1;
-      if (initializationAttempts === 1) {
-        throw new Error("checkpoint unavailable");
-      }
-    },
-    close: async () => {},
-  };
-  const middleware = createMiddleware({
-    name: "countModelCallsAfterCheckpointInitialization",
-    wrapModelCall: async (request, handler) => {
-      modelCalls += 1;
-      return handler(request);
-    },
-  });
-  const agent = createAgent([[]], new ToolRegistry(), {
-    checkpoint,
-    coordinator,
-    middleware: [middleware],
-  });
-
-  await assert.rejects(
-    agent.run(
-      "Initialization fails.",
-      {},
-      { sessionId: "initialization-lease", runId: "initialization-failed" },
-    ),
-    /checkpoint unavailable/,
-  );
-  assert.equal(modelCalls, 0);
-
-  const completed = await agent.run(
-    "Initialization succeeds.",
-    {},
-    { sessionId: "initialization-lease", runId: "initialization-succeeded" },
-  );
-  assert.equal(completed.status, "completed");
-  assert.equal(modelCalls, 1);
-  assert.deepEqual(coordinator.releasedRunIds, [
-    "initialization-failed",
-    "initialization-succeeded",
-  ]);
   await agent.close();
 });
 

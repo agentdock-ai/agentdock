@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { afterEach, test } from "vitest";
 import { FakeToolCallingModel } from "langchain";
-import { SqliteCheckpoint } from "@agentdock-ai/checkpoint-sqlite";
+import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { AgentDock, ToolRegistry } from "../../src/index.js";
+
+const sqliteSavers = new Set();
+afterEach(() => {
+  for (const saver of sqliteSavers) saver.db.close();
+  sqliteSavers.clear();
+});
+
+function createSqliteSaver(databasePath) {
+  const saver = SqliteSaver.fromConnString(databasePath);
+  sqliteSavers.add(saver);
+  return saver;
+}
 
 function contentText(content) {
   return content
@@ -56,7 +68,7 @@ test("persists a pending approval across AgentDock recreation", async () => {
         ],
       }),
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
 
     const waiting = await firstAgent.run(
@@ -70,7 +82,7 @@ test("persists a pending approval across AgentDock recreation", async () => {
     const secondAgent = new AgentDock({
       model: new FakeToolCallingModel({ toolCalls: [[]] }),
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
 
     const resumed = await secondAgent.resume(
@@ -158,7 +170,7 @@ test("restarts SQLite approval phases without replaying prior actions", async ()
     const firstAgent = new AgentDock({
       model,
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
     const firstWaiting = await firstAgent.run(
       "Run the three actions.",
@@ -174,7 +186,7 @@ test("restarts SQLite approval phases without replaying prior actions", async ()
     const secondAgent = new AgentDock({
       model,
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
     const secondWaiting = await secondAgent.resume(
       {
@@ -194,7 +206,7 @@ test("restarts SQLite approval phases without replaying prior actions", async ()
     const thirdAgent = new AgentDock({
       model,
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
     const completed = await thirdAgent.resume(
       {
@@ -253,7 +265,7 @@ test("preserves a typed tool error through a later approval restart", async () =
         ],
       }),
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
     const waiting = await first.run(
       "Fail and then pause.",
@@ -267,7 +279,7 @@ test("preserves a typed tool error through a later approval restart", async () =
     const second = new AgentDock({
       model: new FakeToolCallingModel({ toolCalls: [[]] }),
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
     const completed = await second.resume(
       {
@@ -343,7 +355,7 @@ test("rejects incomplete or stale approval decisions against SQLite checkpoints"
         ],
       }),
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
 
     const waiting = await firstAgent.run(
@@ -361,7 +373,7 @@ test("rejects incomplete or stale approval decisions against SQLite checkpoints"
     const secondAgent = new AgentDock({
       model: new FakeToolCallingModel({ toolCalls: [[]] }),
       registry,
-      checkpoint: new SqliteCheckpoint({ path: databasePath }),
+      checkpointer: createSqliteSaver(databasePath),
     });
     const firstApproval = {
       approvalId: "call-first",
