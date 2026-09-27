@@ -1,4 +1,4 @@
-# @agentdock-ai/agentdock
+# @agentdock-ai/contracts
 
 ## 0.2.0
 
@@ -7,14 +7,3 @@
 - Narrow AgentDock to compiled-graph serving with event continuity, add the
   LangChain createAgent HTTP example, and document the migration from the former
   all-in-one runtime and checkpoint/provider packages.
-
-### Patch Changes
-
-- Updated dependencies
-  - @agentdock-ai/contracts@0.2.0
-
-## 0.1.1
-
-### Patch Changes
-
-- cbce073: Fix duplicate historical assistant messages in streamed responses

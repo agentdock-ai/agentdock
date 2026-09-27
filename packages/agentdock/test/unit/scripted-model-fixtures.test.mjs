@@ -6,11 +6,10 @@ import {
   createMemoryCheckpoint,
   createScriptedChatModel,
   createScriptedMessageChunks,
-  createSQLiteCheckpoint,
   createToolCallArgumentChunks,
 } from "../helpers/stream-fixtures.mjs";
 
-test("Phase 0 fixtures preserve repeated chunks and omitted message IDs", async () => {
+test("scripted model fixtures preserve repeated chunks and omitted message IDs", async () => {
   const model = createScriptedChatModel({
     chunks: createScriptedMessageChunks(["x", "x"], {
       id: "assistant-1",
@@ -39,7 +38,7 @@ test("Phase 0 fixtures preserve repeated chunks and omitted message IDs", async 
   );
 });
 
-test("Phase 0 fixtures create complete snapshots and split tool JSON into chunks", () => {
+test("scripted model fixtures create snapshots and split tool JSON chunks", () => {
   const snapshots = createCompleteAssistantMessages(["before", "after"], {
     ids: ["assistant-1", "assistant-2"],
   });
@@ -69,21 +68,13 @@ test("Phase 0 fixtures create complete snapshots and split tool JSON into chunks
   assert.equal(chunks[2].tool_call_chunks[0].id, "call-weather");
 });
 
-test("Phase 0 checkpoint fixtures provide reusable memory and SQLite storage", async () => {
+test("checkpoint fixture provides reusable in-memory storage", () => {
   const memory = createMemoryCheckpoint();
   assert.equal(typeof memory.getTuple, "function");
   assert.equal(typeof memory.put, "function");
-
-  const storage = await createSQLiteCheckpoint();
-  try {
-    assert.equal(typeof storage.checkpointer.getTuple, "function");
-    assert.equal(typeof storage.checkpointer.put, "function");
-  } finally {
-    await storage.cleanup();
-  }
 });
 
-test("Phase 0 cooperative timeout fixture observes an abort signal", async () => {
+test("cooperative timeout fixture observes an abort signal", async () => {
   let aborts = 0;
   const tool = createCooperativeTimeoutTool({
     onAbort: () => {

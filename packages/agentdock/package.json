@@ -1,7 +1,7 @@
 {
   "name": "@agentdock-ai/agentdock",
-  "version": "0.1.1",
-  "description": "An easy-to-use TypeScript wrapper around LangGraph for building AI agents.",
+  "version": "0.2.0",
+  "description": "A small SSE serving adapter for compiled LangGraph agents.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -28,33 +28,29 @@
   "scripts": {
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "yarn clean && tsc -p tsconfig.json",
-    "format": "prettier --write src test scripts package.json README.md",
-    "format:check": "prettier --check src test scripts package.json README.md",
+    "format": "prettier --write src test package.json README.md",
+    "format:check": "prettier --check src test package.json README.md",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:unit": "vitest run test/unit",
     "test:types": "tsc -p tsconfig.type-tests.json --noEmit",
     "test:integration": "vitest run test/integration",
     "test:coverage": "vitest run --coverage",
     "test": "yarn test:types && yarn test:unit && yarn test:integration",
-    "test:scenarios": "yarn build && node scripts/scenarios/streaming.mjs && node scripts/scenarios/tool-call.mjs && node scripts/scenarios/approval.mjs",
     "test:watch": "vitest",
     "pack:artifact": "yarn pack --filename agentdock.tgz",
     "prepack": "yarn build",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@agentdock-ai/contracts": "^0.1.0",
-    "@langchain/core": "^1.2.9",
+    "@agentdock-ai/contracts": "^0.2.0",
     "@langchain/langgraph": "^1.4.13",
-    "@langchain/langgraph-checkpoint": "^1.1.5",
-    "langchain": "^1.5.10",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "@langchain/langgraph-checkpoint-sqlite": "^1.0.4",
+    "@langchain/core": "^1.2.11",
     "@vitest/coverage-v8": "^4.1.11",
-    "@langchain/openrouter": "^0.4.10",
+    "langchain": "^1.5.10",
     "prettier": "^3.5.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

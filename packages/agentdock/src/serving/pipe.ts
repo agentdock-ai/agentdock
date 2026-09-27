@@ -9,14 +9,21 @@ import type { NodeSseResponse, Run } from "./types.js";
 
 type WaitResult = "drain" | "close" | "abort";
 
-export async function pipeEvents<TInput, TContext extends Record<string, unknown>>(
+export async function pipeEvents<
+  TInput,
+  TContext extends Record<string, unknown>,
+>(
   response: NodeSseResponse,
   run: Run<TInput, TContext>,
   source: (run: Run<TInput, TContext>) => AsyncIterable<AgentEvent>,
 ): Promise<void> {
   const clientController = new AbortController();
   const composed = composeAbortSignals(run.signal, clientController.signal);
-  const streamRun = { ...run, signal: composed.signal } as Run<TInput, TContext>;
+  // Preserve the start/resume discriminator while replacing only the signal.
+  const streamRun: Run<TInput, TContext> = {
+    ...run,
+    signal: composed.signal,
+  };
   const iterator = source(streamRun)[Symbol.asyncIterator]();
   let headersSent = false;
   let ended = false;
@@ -33,7 +40,8 @@ export async function pipeEvents<TInput, TContext extends Record<string, unknown
   response.on("close", onClose);
 
   const writeEvent = async (event: AgentEvent): Promise<boolean> => {
-    if (disconnected || response.destroyed || response.writableEnded) return false;
+    if (disconnected || response.destroyed || response.writableEnded)
+      return false;
     if (terminalSent) return false;
     const writable = response.write(encodeSseEvent(event));
     lastEvent = event;
@@ -57,7 +65,12 @@ export async function pipeEvents<TInput, TContext extends Record<string, unknown
       if (!(await writeEvent(next.value))) break;
     }
   } catch (error) {
-    if (!headersSent || disconnected || response.destroyed || response.writableEnded) {
+    if (
+      !headersSent ||
+      disconnected ||
+      response.destroyed ||
+      response.writableEnded
+    ) {
       throw error;
     }
     if (!terminalSent && lastEvent) {
@@ -67,7 +80,12 @@ export async function pipeEvents<TInput, TContext extends Record<string, unknown
   } finally {
     response.off("close", onClose);
     composed.dispose();
-    if (!ended && headersSent && !response.destroyed && !response.writableEnded) {
+    if (
+      !ended &&
+      headersSent &&
+      !response.destroyed &&
+      !response.writableEnded
+    ) {
       ended = true;
       response.end();
     }
@@ -82,7 +100,8 @@ function waitForDrain(
   response: NodeSseResponse,
   signal: AbortSignal,
 ): Promise<WaitResult> {
-  if (response.destroyed || response.writableEnded) return Promise.resolve("close");
+  if (response.destroyed || response.writableEnded)
+    return Promise.resolve("close");
   if (signal.aborted) return Promise.resolve("abort");
 
   return new Promise((resolve) => {

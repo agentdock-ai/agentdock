@@ -72,14 +72,10 @@
 
 ## Optional integrations
 
-- Every external database or vendor integration belongs in its own package under `packages/`.
-- The core `agentdock` package must not install optional database drivers.
-- Backend integrations implement the shared `CheckpointAdapter` contract and are passed as configured class instances, not string backend keys.
-- Provider-specific configuration stays inside the provider package.
-- Do not create a central registry or God class for external providers.
-- Each adapter owns only its backend saver creation, setup, and resource cleanup.
-- The core package may depend on shared checkpoint contracts, but not on every backend integration.
-- Custom integrations must work through the public `CheckpointAdapter` contract or a raw LangGraph `BaseCheckpointSaver`.
+- Keep database drivers and provider integrations out of the core serving package.
+- Applications choose LangChain/LangGraph integrations directly and own their setup and resource lifecycle.
+- The serving package accepts a compiled graph and forwards its configured checkpointer behavior; it does not wrap or manage savers.
+- Do not add a provider registry or recreate framework integration APIs in AgentDock.
 
 ## Shared contracts
 

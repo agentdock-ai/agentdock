@@ -41,12 +41,16 @@ interface RuntimeGraph {
 }
 
 /** Drives one compiled graph invocation and projects its stream to AgentEvents. */
-export async function* streamGraph(
+export async function* streamGraph<
+  TInput,
+  TContext extends Record<string, unknown>,
+>(
   graph: ServableCompiledGraph,
-  run: Run<unknown, Record<string, unknown>>,
+  run: Run<TInput, TContext>,
   options: StreamOptions,
 ): AsyncGenerator<AgentEvent> {
   assertRun(run);
+  // CompiledGraph methods lose useful input typing at LangGraph's broad stream boundary.
   const graphRuntime = graph as unknown as RuntimeGraph;
   const config = { configurable: { thread_id: run.threadId } };
   const resumed = "resume" in run;
@@ -104,7 +108,6 @@ export async function* streamGraph(
       const next = await graphIterator.next();
       if (next.done) break;
       const parsed = parseStreamChunk(next.value);
-      if (!parsed) continue;
 
       for (const event of mapper.map(parsed.mode, parsed.value)) {
         if (event.type === AgentEventType.InterruptRequired) {
@@ -172,12 +175,13 @@ export async function* streamGraph(
 }
 
 function assertRun(run: Run<unknown, Record<string, unknown>>): void {
-  if (!run || typeof run !== "object") throw new Error("Run must be an object.");
+  if (!run || typeof run !== "object")
+    throw new Error("Run must be an object.");
   if (typeof run.threadId !== "string" || run.threadId.trim().length === 0) {
     throw new Error("Run threadId must be a non-empty string.");
   }
   const isResume = "resume" in run;
-  if (isResume === ("input" in run)) {
+  if (isResume === "input" in run) {
     throw new Error("Run must contain exactly one of input or resume.");
   }
   if (run.signal !== undefined && !isAbortSignal(run.signal)) {

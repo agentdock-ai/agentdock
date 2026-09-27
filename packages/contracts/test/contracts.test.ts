@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_EVENT_PROTOCOL_VERSION,
   AgentEventType,
-  type AgentRunRequest,
-  type AgentRunResult,
   type AgentEvent,
-  type AgentSessionRecord,
   type ToolApprovalRequest,
   type ToolApprovalResponse,
   createAgentReducerState,
@@ -32,7 +29,7 @@ describe("AgentDock contracts", () => {
     expect(JSON.parse(JSON.stringify(event))).toEqual(event);
   });
 
-  it("keeps approval and session data independent of runtime classes", () => {
+  it("keeps approval data independent of runtime classes", () => {
     const approval: ToolApprovalRequest = {
       approvalId: "approval-1",
       toolCall: {
@@ -41,26 +38,10 @@ describe("AgentDock contracts", () => {
         input: { message: "hello" },
       },
     };
-    const session: AgentSessionRecord = {
-      sessionId: "session-1",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "hello" }],
-        },
-      ],
-    };
-
-    expect(JSON.stringify({ approval, session })).toBeTruthy();
+    expect(JSON.stringify(approval)).toBeTruthy();
   });
 
-  it("describes frontend run and approval requests", () => {
-    const run: AgentRunRequest = {
-      sessionId: "session-1",
-      prompt: "Send the report.",
-      context: { userId: "user-1" },
-      maxSteps: 4,
-    };
+  it("describes approval responses", () => {
     const approval: ToolApprovalResponse = {
       approvalId: "approval-1",
       approved: true,
@@ -70,10 +51,7 @@ describe("AgentDock contracts", () => {
         input: { reportId: "report-1" },
       },
     };
-    expect(JSON.parse(JSON.stringify({ run, approval }))).toEqual({
-      run,
-      approval,
-    });
+    expect(JSON.parse(JSON.stringify(approval))).toEqual(approval);
   });
 
   it("rebuilds a structured event stream and suppresses reconnect duplicates", () => {
@@ -304,42 +282,6 @@ describe("AgentDock contracts", () => {
     };
 
     expect(JSON.parse(JSON.stringify(cloneAgentEvent(event)))).toEqual(event);
-  });
-
-  it("round-trips a complete public run result", () => {
-    const result: AgentRunResult = {
-      runId: "run-result",
-      sessionId: "session-result",
-      status: "completed",
-      content: [{ type: "text", text: "Done." }],
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "reasoning", text: "Checked." },
-            { type: "text", text: "Done." },
-          ],
-        },
-      ],
-      toolCalls: [],
-      toolResults: [],
-      toolErrors: [],
-      approvalRequests: [],
-      stepsCompleted: 1,
-      finishReason: "stop",
-      usage: {
-        inputTokens: 10,
-        cachedInputTokens: 4,
-        outputTokens: 3,
-        reasoningTokens: 1,
-        totalTokens: 13,
-        costUsd: 0.002,
-        model: "model-1",
-        provider: "provider-1",
-      },
-    };
-
-    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 
   it("validates media sources and protocol versions", () => {

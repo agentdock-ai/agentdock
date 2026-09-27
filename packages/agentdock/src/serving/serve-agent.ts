@@ -29,12 +29,7 @@ export function serveAgent<Graph extends ServableCompiledGraph>(
 
   const stream = (
     run: Run<GraphInput<Graph>, GraphContext<Graph>>,
-  ): AsyncIterable<AgentEvent> =>
-    streamGraph(
-      graph,
-      run as Run<unknown, Record<string, unknown>>,
-      { recursionLimit },
-    );
+  ): AsyncIterable<AgentEvent> => streamGraph(graph, run, { recursionLimit });
 
   return {
     stream,

@@ -1,9 +1,9 @@
 <div align="center">
   <p>
-    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" />
+    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="AgentDock" width="300" />
   </p>
 
-  <p>Production-oriented TypeScript runtime for streamed, tool-using agents.</p>
+  <p>A small SSE serving adapter for compiled LangGraph agents.</p>
 
   <p>
     <a href="https://www.npmjs.com/package/@agentdock-ai/agentdock"><img alt="npm version" src="https://img.shields.io/npm/v/%40agentdock-ai%2Fagentdock?label=release&color=6959DF" /></a>
@@ -13,112 +13,104 @@
   </p>
 </div>
 
-Agentdock gives TypeScript applications a focused runtime for model calls, typed
-tools, approvals, sessions, persistence, streaming, and lifecycle control. LangChain
-and LangGraph run internally; application code uses the Agentdock API.
+AgentDock adapts a graph you already built with LangGraph to a stable stream of
+JSON events. Your application owns graph construction, models, tools, identity,
+authorization, request parsing, and checkpoint saver lifecycle.
 
-## ✨ What you get
-
-- **Agent runtime:** one `AgentDock` class for runs, streams, and resumes.
-- **Typed tools:** validation, authorization, progress, cancellation, and approvals.
-- **Durable sessions:** memory, SQLite, PostgreSQL, MongoDB, and Redis adapters.
-- **Normalized events:** one frontend-friendly contract for text, tools, usage, and interrupts.
-- **Safe lifecycle:** timeouts, cancellation, cleanup, and owned resource management.
-
-## 🚀 Install
+## Install
 
 ```bash
-yarn add @agentdock-ai/agentdock @langchain/openai zod
+npm install @agentdock-ai/agentdock @agentdock-ai/contracts @langchain/langgraph langchain zod
 ```
 
-## 💻 Quick start
+Install the LangChain provider integration and checkpoint saver your application
+uses.
+
+## Serve a compiled graph
+
+Compose `agentEventStateSchema` into the graph's state schema when the graph can
+interrupt and resume. That small checkpointed extension preserves event
+identity and sequence across separate requests and runtime instances.
 
 ```ts
-import { AgentDock, defineTool } from "@agentdock-ai/agentdock";
-import { ChatOpenAI } from "@langchain/openai";
+import { serveAgent, agentEventStateSchema } from "@agentdock-ai/agentdock";
+import { createAgent, tool } from "langchain";
+import { MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
 
-const weather = defineTool({
-  name: "get_weather",
-  description: "Get the weather for a city.",
-  input: z.object({ city: z.string() }),
-  run: async ({ city }) => ({ city, forecast: "Sunny" }),
+const checkpointer = new MemorySaver();
+const lookup = tool(async ({ city }) => ({ city, forecast: "Sunny" }), {
+  name: "lookup_weather",
+  description: "Look up the weather for a city.",
+  schema: z.object({ city: z.string() }),
 });
 
-const agent = new AgentDock({
-  model: new ChatOpenAI({ model: "gpt-4.1-mini" }),
+const graph = createAgent({
+  model, // Supply a LangChain chat model from your provider integration.
+  tools: [lookup],
+  stateSchema: agentEventStateSchema,
+  checkpointer,
+}).graph;
+
+const runtime = serveAgent(graph);
+```
+
+After authenticating and authorizing the request, give the runtime the
+application-derived thread ID and graph input:
+
+```ts
+await runtime.pipe(response, {
+  threadId: authenticatedThreadId,
+  input: { messages: [{ role: "user", content: "Weather in Lahore?" }] },
+  context: { userId: authenticatedUser.id },
+  signal: requestAbortSignal,
 });
-
-agent.registerTool(weather);
-
-try {
-  const result = await agent.run(
-    "What is the weather in Lahore?",
-    { userId: "user-123" },
-    { sessionId: "session-123" },
-  );
-
-  console.log(result.content);
-} finally {
-  await agent.close();
-}
 ```
 
-Use `agent.stream()` when the UI should receive text and tool activity as it arrives:
+`pipe()` writes a `text/event-stream` response, waits for Node backpressure,
+aborts graph work after a disconnect, and ends the response once. The app should
+complete parsing, authentication, authorization, and status selection before
+calling it.
+
+## Resume an interrupt
+
+Use the same authorized thread ID and pass LangGraph's resume value unchanged.
+The graph and checkpointer own the approval policy and resume payload shape.
 
 ```ts
-const { stream, result } = await agent.stream(
-  "Summarize my latest order.",
-  { userId: "user-123" },
-  { sessionId: "session-123" },
-);
-
-for await (const event of stream) {
-  if (event.type === "message.part.delta" && event.part.type === "text") {
-    process.stdout.write(event.part.text);
-  }
-}
-
-console.log(await result);
+await runtime.pipe(response, {
+  threadId: authenticatedThreadId,
+  resume: { decisions: [{ type: "approve" }] },
+  context: { userId: authenticatedUser.id },
+});
 ```
 
-## 🧠 Sessions and approvals
+`runtime.stream(run)` exposes the same contract events without a transport.
+`runtime.toResponse(run)` returns a Web `Response` backed by a cancelable
+`ReadableStream` for Web-standard servers.
 
-Pass a stable `sessionId` to continue a conversation. Use a LangGraph saver when
-sessions must survive restarts or be shared across instances:
+## Operational ownership
 
-```bash
-yarn add @langchain/langgraph-checkpoint-sqlite
-```
+- Your app assigns and authorizes every `threadId`; treat it as a security
+  boundary and serialize overlapping runs for a thread when your graph or saver
+  requires it.
+- Your app creates and closes the checkpointer. AgentDock does not open,
+  replace, or close saver resources.
+- Cancellation reaches LangGraph and cooperative tools through an
+  `AbortSignal`. A tool that ignores its signal may continue after a client has
+  disconnected.
+- Without `agentEventStateSchema`, a graph can serve a non-interrupted start,
+  but a resume is rejected because the runtime cannot restore the event stream
+  identity safely.
 
-```ts
-import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
+## Event contract
 
-const checkpointer = SqliteSaver.fromConnString("./checkpoints.sqlite");
-const agent = new AgentDock({ model, checkpointer });
-// The application owns and closes this saver.
-checkpointer.db.close();
-```
+The runtime emits the JSON-safe event types and reducer from
+[`@agentdock-ai/contracts`](https://www.npmjs.com/package/@agentdock-ai/contracts).
+The package includes only the `serveAgent` runtime and checkpoint-backed event
+state schema; agent loops, tool registries, providers, and session stores remain
+LangChain/LangGraph or application responsibilities.
 
-Set `requiresApproval: true` on a side-effecting tool. Agentdock pauses the run,
-persists the interrupt, and resumes it with `agent.resume()` after approval.
-
-## 📚 Useful APIs
-
-| API                   | Use it for                                          |
-| --------------------- | --------------------------------------------------- |
-| `run()`               | Execute a prompt and receive one result.            |
-| `stream()`            | Consume normalized events while a run is executing. |
-| `resume()`            | Continue a paused approval run.                     |
-| `getSession()`        | Read the current normalized message state.          |
-| `getSessionHistory()` | Inspect checkpoint-by-checkpoint history.           |
-| `deleteSession()`     | Remove a session’s checkpoint context.              |
-| `close()`             | Stop active work and release owned resources.       |
-
-## 🔗 Related packages
-
-- [`@agentdock-ai/contracts`](https://www.npmjs.com/package/@agentdock-ai/contracts) — framework-independent events and data types.
-
-## 📄 License
+## License
 
 MIT. See the [repository license](https://github.com/agentdock-ai/agentdock/blob/main/LICENSE).

@@ -3,20 +3,29 @@ import { composeAbortSignals } from "./abort-signal.js";
 import { encodeSseEvent, SSE_HEADERS } from "./sse.js";
 import type { Run } from "./types.js";
 
-export async function createSseResponse<TInput, TContext extends Record<string, unknown>>(
+export async function createSseResponse<
+  TInput,
+  TContext extends Record<string, unknown>,
+>(
   run: Run<TInput, TContext>,
   source: (run: Run<TInput, TContext>) => AsyncIterable<AgentEvent>,
 ): Promise<Response> {
   const controller = new AbortController();
   const composed = composeAbortSignals(run.signal, controller.signal);
-  const streamRun = { ...run, signal: composed.signal } as Run<TInput, TContext>;
+  // Preserve the start/resume discriminator while replacing only the signal.
+  const streamRun: Run<TInput, TContext> = {
+    ...run,
+    signal: composed.signal,
+  };
   const iterator = source(streamRun)[Symbol.asyncIterator]();
   let first: IteratorResult<AgentEvent>;
   try {
     // Validate the run and resume checkpoint before returning a committed 200.
     first = await iterator.next();
   } catch (error) {
+    controller.abort(error);
     composed.dispose();
+    if (iterator.return) await iterator.return().catch(() => undefined);
     throw error;
   }
 

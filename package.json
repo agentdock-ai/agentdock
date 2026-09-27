@@ -3,15 +3,15 @@
   "private": true,
   "packageManager": "yarn@1.22.22",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/*"
   ],
   "scripts": {
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "yarn build:contracts && yarn typecheck:contracts && yarn typecheck:agentdock",
+    "typecheck": "yarn build:contracts && yarn typecheck:contracts && yarn typecheck:agentdock && yarn workspace agentdock-react-agent-example typecheck",
     "test": "yarn workspace @agentdock-ai/contracts test && yarn workspace @agentdock-ai/agentdock test",
     "test:coverage": "yarn workspace @agentdock-ai/agentdock test:coverage",
-    "test:integration:services": "yarn build && yarn workspace @agentdock-ai/agentdock test:integration",
     "build": "yarn build:contracts && yarn build:agentdock",
     "ci": "yarn format:check && yarn typecheck && yarn build && yarn test && yarn test:coverage",
     "changeset": "changeset",
@@ -20,7 +20,8 @@
     "typecheck:contracts": "yarn workspace @agentdock-ai/contracts typecheck",
     "typecheck:agentdock": "yarn workspace @agentdock-ai/agentdock typecheck",
     "build:contracts": "yarn workspace @agentdock-ai/contracts build",
-    "build:agentdock": "yarn workspace @agentdock-ai/agentdock build"
+    "build:agentdock": "yarn workspace @agentdock-ai/agentdock build",
+    "example:serve": "yarn workspace agentdock-react-agent-example start"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",

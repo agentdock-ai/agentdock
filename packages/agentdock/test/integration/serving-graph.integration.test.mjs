@@ -36,7 +36,7 @@ test("event state schema composes with createAgent and a general StateGraph", as
   const base = new StateSchema({ value: z.string().default("") });
   const combined = new StateSchema({
     ...base.fields,
-    ...agentEventStateSchema.fields,
+    ...agentEventStateSchema.shape,
   });
   const graph = new StateGraph(combined)
     .addNode("step", () => ({ value: "done" }))
@@ -47,18 +47,23 @@ test("event state schema composes with createAgent and a general StateGraph", as
 });
 
 test("event identity and sequence survive interrupt/resume with a fresh runtime", async () => {
-  const { sent, graph, threadId } = await createApprovalAgent();
+  const { sent, contexts, graph, threadId } = await createApprovalAgent();
   const startRuntime = serveAgent(graph);
   const startEvents = await collect(
     startRuntime.stream({
       input: { messages: [{ role: "user", content: "send hello" }] },
       threadId,
+      context: { userId: "user-42" },
     }),
   );
   assert.equal(sent.length, 0);
   assert.equal(startEvents[0].type, AgentEventType.RunStarted);
   assert.equal(startEvents.at(-1).type, AgentEventType.InterruptRequired);
-  const paused = await graph.getState({ configurable: { thread_id: threadId } });
+  assert.equal(startEvents.at(-1).interrupt.kind, "tool-approval");
+  assert.equal(startEvents.at(-1).interrupt.actions[0].toolCallId, "call-send");
+  const paused = await graph.getState({
+    configurable: { thread_id: threadId },
+  });
   assert.deepEqual(paused.values.agentdockEventState, {
     runId: startEvents[0].runId,
     logicalSequence: startEvents.at(-1).logicalSequence,
@@ -70,9 +75,11 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
     resumeRuntime.stream({
       threadId,
       resume: { decisions: [{ type: "approve" }] },
+      context: { userId: "user-42" },
     }),
   );
   assert.deepEqual(sent, ["hello"]);
+  assert.deepEqual(contexts, ["user-42"]);
   assert.equal(resumeEvents[0].type, AgentEventType.RunStarted);
   assert.equal(resumeEvents[0].runId, startEvents[0].runId);
   assert.equal(resumeEvents[1].type, AgentEventType.InterruptResolved);
@@ -97,7 +104,7 @@ test("resume requires checkpointed event state and a pending interrupt", async (
   const graph = new StateGraph(
     new StateSchema({
       value: z.string().default(""),
-      ...agentEventStateSchema.fields,
+      ...agentEventStateSchema.shape,
     }),
   )
     .addNode("step", () => ({ value: "done" }))
@@ -117,9 +124,11 @@ test("resume requires checkpointed event state and a pending interrupt", async (
 
 async function createApprovalAgent() {
   const sent = [];
+  const contexts = [];
   const send = tool(
-    async ({ body }) => {
+    async ({ body }, runtime) => {
       sent.push(body);
+      contexts.push(runtime.context.userId);
       return "sent";
     },
     {
@@ -144,11 +153,12 @@ async function createApprovalAgent() {
       responses: ["", "done"],
     }),
     tools: [send],
+    contextSchema: z.object({ userId: z.string() }),
     checkpointer: createMemoryCheckpoint(),
     stateSchema: agentEventStateSchema,
     middleware: [humanInTheLoopMiddleware({ interruptOn: { send: true } })],
   });
-  return { sent, graph, threadId: "serving-approval-thread" };
+  return { sent, contexts, graph, threadId: "serving-approval-thread" };
 }
 
 async function collect(stream) {

@@ -1,4 +1,3 @@
-import { StateSchema } from "@langchain/langgraph";
 import { z } from "zod";
 
 const eventStateShape = z.object({
@@ -7,7 +6,7 @@ const eventStateShape = z.object({
   pendingInterruptId: z.string().optional(),
 });
 
-export const agentEventStateSchema = new StateSchema({
+export const agentEventStateSchema = z.object({
   agentdockEventState: eventStateShape.default({ logicalSequence: 0 }),
 });
 

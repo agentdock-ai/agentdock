@@ -5,7 +5,7 @@ export interface StreamChunk {
   value: unknown;
 }
 
-export function parseStreamChunk(value: unknown): StreamChunk | null {
+export function parseStreamChunk(value: unknown): StreamChunk {
   if (!Array.isArray(value) || value.length !== 2) {
     throw new Error("LangGraph emitted an unsupported stream chunk.");
   }

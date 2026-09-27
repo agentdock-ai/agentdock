@@ -1,5 +1,6 @@
 import {
   AGENT_EVENT_PROTOCOL_VERSION,
+  assertAgentEventInput,
   type AgentEvent,
   type AgentEventInput,
 } from "@agentdock-ai/contracts";
@@ -18,8 +19,11 @@ export class EventContext {
   }
 
   emit(input: AgentEventInput): AgentEvent {
+    assertAgentEventInput(input);
     this.logicalSequence += 1;
     this.phaseSequence += 1;
+    // The contract assertion checks the event payload before protocol metadata
+    // completes the corresponding AgentEvent variant.
     return {
       ...input,
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
