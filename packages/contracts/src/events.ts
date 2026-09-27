@@ -55,17 +55,29 @@ export interface AgentInterruptAction {
   id: string;
   name: string;
   input: JsonValue;
-  /** Present only when Core can prove the originating tool-call identity. */
+  /** Required on tool-approval actions; optional for custom interrupts. */
   toolCallId?: string;
 }
 
-export interface AgentInterrupt {
-  kind: "tool-approval" | "custom";
+export interface AgentToolApprovalInterruptAction extends AgentInterruptAction {
+  toolCallId: string;
+}
+
+interface AgentInterruptBase {
   interruptId: string;
   prompt: string;
-  actions: AgentInterruptAction[];
   payload?: JsonValue;
 }
+
+export type AgentInterrupt =
+  | (AgentInterruptBase & {
+      kind: "tool-approval";
+      actions: AgentToolApprovalInterruptAction[];
+    })
+  | (AgentInterruptBase & {
+      kind: "custom";
+      actions: AgentInterruptAction[];
+    });
 
 export const AGENT_EVENT_PROTOCOL_VERSION = 1 as const;
 
@@ -586,6 +598,9 @@ function assertInterrupt(
         action.toolCallId.length === 0
       )
         throw new Error(`${actionPath}.toolCallId must be a non-empty string.`);
+    }
+    if (value.kind === "tool-approval") {
+      assertString(action.toolCallId, `${actionPath}.toolCallId`);
     }
   });
   if (value.payload !== undefined)

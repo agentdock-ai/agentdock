@@ -5,20 +5,20 @@ import {
   isBaseMessage,
   isBaseMessageChunk,
   isToolMessage,
+  ToolMessage,
 } from "@langchain/core/messages";
 import {
   Command,
   emptyCheckpoint,
+  interrupt,
   isGraphBubbleUp,
   type BaseCheckpointSaver,
 } from "@langchain/langgraph";
 import {
   createAgent,
-  humanInTheLoopMiddleware,
+  createMiddleware,
   modelCallLimitMiddleware,
   type AnyAgentMiddleware,
-  type InterruptOnConfig,
-  type ToolCallRequest,
 } from "langchain";
 import type { ContextManagement } from "../../context-management.js";
 import { z } from "zod";
@@ -78,6 +78,7 @@ import {
   toToolCallRecord,
 } from "./message-adapter.js";
 import {
+  AGENTDOCK_APPROVAL_INTERRUPT_PROTOCOL,
   readApprovalInterruptFromCheckpoint,
   readApprovalInterruptFromPayload,
   type PendingApprovalInterrupt,
@@ -167,11 +168,6 @@ interface ExecutionState {
   usageMessageIds: Set<string>;
   usage?: AgentUsage;
 }
-
-type ApprovalInterrupts = Record<
-  string,
-  Pick<InterruptOnConfig, "allowedDecisions" | "when">
->;
 
 export class ToolCallingWorkflow implements AgentWorkflow {
   private readonly model: BaseChatModel;
@@ -460,9 +456,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
               { ...config, streamMode: ["messages", "updates"] },
             )
           : await agent.stream(
-              new Command({
-                resume: { decisions: input.approvals.map(toLangChainDecision) },
-              }),
+              new Command({ resume: toApprovalResumeValue(input.approvals) }),
               { ...config, streamMode: ["messages", "updates"] },
             );
 
@@ -527,11 +521,7 @@ export class ToolCallingWorkflow implements AgentWorkflow {
               id: approval.approvalId,
               name: approval.toolCall.name,
               input: approval.toolCall.input,
-              ...(approvalInterrupt.canonicalToolCallIds.has(
-                approval.toolCall.toolCallId,
-              )
-                ? { toolCallId: approval.toolCall.toolCallId }
-                : {}),
+              toolCallId: approval.toolCall.toolCallId,
             })),
           },
         });
@@ -905,14 +895,11 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     ctx: AgentContext,
   ) {
     const middleware: AnyAgentMiddleware[] = [];
-    const interruptOn = this.createApprovalInterrupts(
+    const approvalMiddleware = this.createApprovalMiddleware(
       options.authorizationTimeout,
       ctx,
     );
-
-    if (Object.keys(interruptOn).length > 0) {
-      middleware.push(humanInTheLoopMiddleware({ interruptOn }));
-    }
+    if (approvalMiddleware) middleware.push(approvalMiddleware);
 
     if (options.maxSteps !== undefined) {
       middleware.push(
@@ -931,37 +918,93 @@ export class ToolCallingWorkflow implements AgentWorkflow {
     return middleware;
   }
 
-  private createApprovalInterrupts(
+  private createApprovalMiddleware(
     authorizationTimeout: number | undefined,
     ctx: AgentContext,
-  ): ApprovalInterrupts {
-    const interruptOn: ApprovalInterrupts = {};
+  ): AnyAgentMiddleware | null {
+    const approvalTools = new Map(
+      this.registry
+        .list()
+        .filter((tool) => tool.requiresApproval === true)
+        .map((tool) => [tool.name, tool]),
+    );
+    if (approvalTools.size === 0) return null;
 
-    for (const tool of this.registry.list()) {
-      if (tool.requiresApproval !== true) continue;
+    return createMiddleware({
+      name: "AgentDockApprovalMiddleware",
+      afterModel: {
+        canJumpTo: ["model"],
+        hook: async (state) => {
+          const lastMessage = [...state.messages].reverse().find(isAIMessage);
+          if (!lastMessage || !lastMessage.tool_calls?.length) return;
 
-      interruptOn[tool.name] = {
-        allowedDecisions: ["approve", "reject"],
-        when: async (request: ToolCallRequest) => {
-          const toolCall = toToolCallRecord(request.toolCall);
-          try {
-            validateToolInput(tool.parameters, toolCall.input, tool.name);
-          } catch {
-            return false;
+          const approvalCalls = [];
+          for (const toolCall of lastMessage.tool_calls) {
+            const tool = approvalTools.get(toolCall.name);
+            if (!tool) continue;
+            const record = toToolCallRecord(toolCall);
+            try {
+              validateToolInput(tool.parameters, record.input, tool.name);
+            } catch {
+              continue;
+            }
+            const authorization = await authorizeToolCall(
+              tool,
+              record,
+              ctx,
+              undefined,
+              authorizationTimeout,
+            );
+            if (authorization.allowed)
+              approvalCalls.push({ toolCall, toolCallId: record.toolCallId });
           }
-          const authorization = await authorizeToolCall(
-            tool,
-            toolCall,
-            ctx,
-            undefined,
-            authorizationTimeout,
-          );
-          return authorization.allowed;
-        },
-      };
-    }
+          if (approvalCalls.length === 0) return;
 
-    return interruptOn;
+          const response: unknown = interrupt({
+            agentdockApprovalProtocol: AGENTDOCK_APPROVAL_INTERRUPT_PROTOCOL,
+            actionRequests: approvalCalls.map(({ toolCall, toolCallId }) => ({
+              id: toolCallId,
+              toolCallId,
+              name: toolCall.name,
+              args: toolCall.args,
+            })),
+          });
+          const decisions = readApprovalDecisions(
+            response,
+            approvalCalls.map(({ toolCallId }) => toolCallId),
+          );
+          const rejectedMessages = [];
+          const rejectedIds = new Set<string>();
+          for (const { toolCall, toolCallId } of approvalCalls) {
+            if (decisions[toolCallId]?.type !== "reject") continue;
+            rejectedIds.add(toolCallId);
+            const reason = decisions[toolCallId].message;
+            rejectedMessages.push(
+              new ToolMessage({
+                content:
+                  reason ??
+                  `User rejected the tool call for \`${toolCall.name}\` with id ${toolCallId}`,
+                name: toolCall.name,
+                tool_call_id: toolCallId,
+                status: "error",
+              }),
+            );
+          }
+
+          lastMessage.tool_calls = lastMessage.tool_calls.filter(
+            (toolCall) =>
+              toolCall.id === undefined || !rejectedIds.has(toolCall.id),
+          );
+          return {
+            messages: [lastMessage, ...rejectedMessages],
+            ...(rejectedMessages.length > 0 &&
+            lastMessage.tool_calls.length === 0
+              ? { jumpTo: "model" as const }
+              : {}),
+          };
+        },
+      },
+    });
   }
 
   private runConfig(
@@ -2030,13 +2073,78 @@ function mergeById<T extends { toolCallId: string }>(
   return [...records.values()];
 }
 
-function toLangChainDecision(
-  approval: ToolApprovalResponse,
-): { type: "approve" } | { type: "reject"; message?: string } {
-  return approval.approved
-    ? { type: "approve" }
-    : {
-        type: "reject",
-        ...(approval.reason ? { message: approval.reason } : {}),
-      };
+function toApprovalResumeValue(approvals: ToolApprovalResponse[]): {
+  agentdockApprovalProtocol: typeof AGENTDOCK_APPROVAL_INTERRUPT_PROTOCOL;
+  decisions: Record<
+    string,
+    { type: "approve" } | { type: "reject"; message?: string }
+  >;
+} {
+  const decisions: Record<
+    string,
+    { type: "approve" } | { type: "reject"; message?: string }
+  > = {};
+  for (const approval of approvals) {
+    decisions[approval.approvalId] = approval.approved
+      ? { type: "approve" }
+      : {
+          type: "reject",
+          ...(approval.reason ? { message: approval.reason } : {}),
+        };
+  }
+  return {
+    agentdockApprovalProtocol: AGENTDOCK_APPROVAL_INTERRUPT_PROTOCOL,
+    decisions,
+  };
+}
+
+function readApprovalDecisions(
+  value: unknown,
+  expectedIds: readonly string[],
+): Record<string, { type: "approve" } | { type: "reject"; message?: string }> {
+  if (
+    !isRecord(value) ||
+    value.agentdockApprovalProtocol !== AGENTDOCK_APPROVAL_INTERRUPT_PROTOCOL ||
+    !isRecord(value.decisions)
+  ) {
+    throw new Error(
+      "Approval resume payload does not match the AgentDock approval protocol.",
+    );
+  }
+  const expected = new Set(expectedIds);
+  const providedIds = Object.keys(value.decisions);
+  if (
+    providedIds.length !== expected.size ||
+    providedIds.some((id) => !expected.has(id))
+  ) {
+    throw new Error("Approval decisions do not match the pending toolCallIds.");
+  }
+
+  const decisions: Record<
+    string,
+    { type: "approve" } | { type: "reject"; message?: string }
+  > = {};
+  for (const id of expectedIds) {
+    const decision = value.decisions[id];
+    if (!isRecord(decision)) {
+      throw new Error(`Approval decision for toolCallId ${id} is invalid.`);
+    }
+    if (decision.type === "approve") {
+      decisions[id] = { type: "approve" };
+      continue;
+    }
+    if (
+      decision.type !== "reject" ||
+      (decision.message !== undefined && typeof decision.message !== "string")
+    ) {
+      throw new Error(`Approval decision for toolCallId ${id} is invalid.`);
+    }
+    decisions[id] = {
+      type: "reject",
+      ...(typeof decision.message === "string"
+        ? { message: decision.message }
+        : {}),
+    };
+  }
+  return decisions;
 }

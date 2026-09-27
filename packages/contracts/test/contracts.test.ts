@@ -442,7 +442,14 @@ describe("AgentDock contracts", () => {
           kind: "tool-approval",
           interruptId: "interrupt-1",
           prompt: "Approve?",
-          actions: [{ id: "call-1", name: "send", input: { text: "hello" } }],
+          actions: [
+            {
+              id: "call-1",
+              toolCallId: "call-1",
+              name: "send",
+              input: { text: "hello" },
+            },
+          ],
         },
       },
       {
@@ -717,7 +724,7 @@ describe("AgentDock contracts", () => {
     ).toThrow(/terminal/);
   });
 
-  it("preserves an optional approval action tool identity through event cloning", () => {
+  it("requires and preserves tool-call identity on tool-approval actions", () => {
     const event: AgentEvent = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: "approval-clone",
@@ -734,7 +741,7 @@ describe("AgentDock contracts", () => {
         prompt: "Approve these tools.",
         actions: [
           {
-            id: "approval-1",
+            id: "tool-call-1",
             toolCallId: "tool-call-1",
             name: "delete_file",
             input: { path: "report.csv" },
@@ -745,12 +752,12 @@ describe("AgentDock contracts", () => {
 
     const cloned = cloneAgentEvent(event);
     expect(cloned.interrupt.actions[0]).toMatchObject({
-      id: "approval-1",
+      id: "tool-call-1",
       toolCallId: "tool-call-1",
     });
   });
 
-  it("keeps legacy approval actions without toolCallId valid", () => {
+  it("keeps custom interrupt actions without toolCallId valid", () => {
     const event: AgentEvent = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: "approval-legacy",
@@ -770,6 +777,27 @@ describe("AgentDock contracts", () => {
     };
 
     expect(() => cloneAgentEvent(event)).not.toThrow();
+  });
+
+  it("rejects tool-approval actions without toolCallId", () => {
+    const event = {
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
+      eventId: "approval-missing-tool-call-id",
+      runId: "run-approval-missing-tool-call-id",
+      sessionId: "session-approval-missing-tool-call-id",
+      phaseId: "phase-approval-missing-tool-call-id",
+      logicalSequence: 1,
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: AgentEventType.InterruptRequired,
+      interrupt: {
+        kind: "tool-approval",
+        interruptId: "interrupt-missing-tool-call-id",
+        prompt: "Approve.",
+        actions: [{ id: "approval", name: "tool", input: {} }],
+      },
+    };
+    expect(() => cloneAgentEvent(event)).toThrow(/toolCallId/);
   });
 
   it("rejects invalid present approval action toolCallId values", () => {

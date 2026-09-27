@@ -775,6 +775,85 @@ test("approval resume events reduce as one logical run without replaying tool ca
   await agent.close();
 });
 
+test("resolves a same-name multi-approval batch by exact IDs, independent of decision order", async () => {
+  const registry = new ToolRegistry();
+  const executions = [];
+  registry.register({
+    name: "same_action",
+    description: "A protected action.",
+    parameters: {
+      type: "object",
+      properties: { value: { type: "number" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+    requiresApproval: true,
+    execute: async ({ toolCallId }) => {
+      executions.push(toolCallId);
+      return `executed:${toolCallId}`;
+    },
+  });
+  const agent = createAgent(
+    [
+      [
+        { name: "same_action", args: { value: 7 }, id: "call-second" },
+        { name: "same_action", args: { value: 7 }, id: "call-first" },
+      ],
+      [],
+    ],
+    registry,
+  );
+  const first = await agent.stream(
+    "Run both actions.",
+    {},
+    { sessionId: "session-multi-approval", runId: "run-multi-approval" },
+  );
+  const firstEvents = await collect(first.stream);
+  const waiting = await first.result;
+  const required = firstEvents.find(
+    (event) => event.type === AgentEventType.InterruptRequired,
+  );
+
+  assert.equal(waiting.status, "waiting_for_approval");
+  assert.deepEqual(
+    waiting.approvalRequests.map((request) => request.approvalId),
+    ["call-second", "call-first"],
+  );
+  assert.deepEqual(
+    required.interrupt.actions.map((action) => [action.id, action.toolCallId]),
+    [
+      ["call-second", "call-second"],
+      ["call-first", "call-first"],
+    ],
+  );
+
+  const resumed = await agent.resume(
+    {
+      runId: waiting.runId,
+      approvals: [
+        { approvalId: "call-first", approved: false, reason: "Denied first." },
+        { approvalId: "call-second", approved: true },
+      ],
+    },
+    {},
+    { sessionId: "session-multi-approval" },
+  );
+
+  assert.equal(resumed.status, "completed");
+  assert.deepEqual(executions, ["call-second"]);
+  assert.deepEqual(
+    resumed.toolResults.map((result) => [
+      result.toolCallId,
+      result.output,
+      result.isError,
+    ]),
+    [
+      ["call-first", "Denied first.", true],
+      ["call-second", "executed:call-second", undefined],
+    ],
+  );
+});
+
 test("AgentDock resumes three approval boundaries after recreating the runtime", async () => {
   const checkpointer = new MemorySaver();
   const registry = new ToolRegistry();
