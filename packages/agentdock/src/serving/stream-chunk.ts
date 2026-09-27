@@ -6,10 +6,12 @@ export interface StreamChunk {
 }
 
 export function parseStreamChunk(value: unknown): StreamChunk | null {
-  if (!Array.isArray(value) || value.length !== 2) return null;
+  if (!Array.isArray(value) || value.length !== 2) {
+    throw new Error("LangGraph emitted an unsupported stream chunk.");
+  }
   const [mode, chunk] = value;
   if (mode !== "messages" && mode !== "tools" && mode !== "updates") {
-    return null;
+    throw new Error("LangGraph emitted an unsupported stream mode.");
   }
   return { mode, value: chunk };
 }

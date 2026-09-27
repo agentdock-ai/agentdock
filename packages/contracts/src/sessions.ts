@@ -6,17 +6,15 @@ export interface AgentSessionRecord {
   messages: Message[];
 }
 
-export interface AgentSessionHistoryEntry {
-  checkpointId: string;
-  timestamp: string;
-  runId?: string;
-  messages: Message[];
-}
-
 export interface AgentSessionHistory {
   sessionId: string;
   current: AgentSessionRecord | null;
-  checkpoints: AgentSessionHistoryEntry[];
+  checkpoints: {
+    checkpointId: string;
+    timestamp: string;
+    runId?: string;
+    messages: Message[];
+  }[];
 }
 
 /** Options for reading the durable normalized run timeline of a session. */

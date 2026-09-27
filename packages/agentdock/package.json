@@ -18,14 +18,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./agent": {
-      "types": "./dist/agent/index.d.ts",
-      "import": "./dist/agent/index.js"
-    },
-    "./tools": {
-      "types": "./dist/tools/registry.d.ts",
-      "import": "./dist/tools/registry.js"
     }
   },
   "files": [
