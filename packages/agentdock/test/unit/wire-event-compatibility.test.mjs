@@ -137,6 +137,29 @@ test("custom interrupts map to the event contract and unsupported chunks fail", 
   assert.equal(failed.at(-1).code, "graph_error");
 });
 
+test("LangGraph update chunks advance the event phase", async () => {
+  const events = await collect(
+    serveAgent(
+      createGraph([
+        ["updates", { agent: { step: "model-started" } }],
+        ["messages", [{ id: "phase-message", content: "answer" }, {}]],
+      ]),
+    ).stream({ threadId: "phase-boundary", input: { messages: [] } }),
+  );
+
+  const started = events.find(
+    (event) => event.type === AgentEventType.RunStarted,
+  );
+  const messageStarted = events.find(
+    (event) => event.type === AgentEventType.MessageStarted,
+  );
+  assert.ok(started);
+  assert.ok(messageStarted);
+  assert.notEqual(messageStarted.phaseId, started.phaseId);
+  assert.equal(messageStarted.sequence, 1);
+  assert.equal(messageStarted.logicalSequence, started.logicalSequence + 1);
+});
+
 function createGraph(chunks) {
   let state = {};
   return {

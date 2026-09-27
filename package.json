@@ -28,7 +28,7 @@
     "prettier": "^3.5.3"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "MIT"
 }

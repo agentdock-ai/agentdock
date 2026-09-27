@@ -8,7 +8,7 @@ import {
 export class EventContext {
   private logicalSequence: number;
   private phaseSequence = 0;
-  readonly phaseId = crypto.randomUUID();
+  private currentPhaseId = crypto.randomUUID();
 
   constructor(
     readonly runId: string,
@@ -31,10 +31,16 @@ export class EventContext {
       runId: this.runId,
       sessionId: this.sessionId,
       logicalSequence: this.logicalSequence,
-      phaseId: this.phaseId,
+      phaseId: this.currentPhaseId,
       sequence: this.phaseSequence,
       timestamp: new Date().toISOString(),
     } as AgentEvent;
+  }
+
+  /** Starts a new LangGraph phase and resets its local event sequence. */
+  advancePhase(): void {
+    this.currentPhaseId = crypto.randomUUID();
+    this.phaseSequence = 0;
   }
 
   get lastLogicalSequence(): number {

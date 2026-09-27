@@ -108,6 +108,7 @@ export async function* streamGraph<
       const next = await graphIterator.next();
       if (next.done) break;
       const parsed = parseStreamChunk(next.value);
+      if (parsed.mode === "updates") eventContext.advancePhase();
 
       for (const event of mapper.map(parsed.mode, parsed.value)) {
         if (event.type === AgentEventType.InterruptRequired) {

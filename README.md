@@ -57,7 +57,7 @@ for interrupt/resume and Web `Response` usage.
 
 ## Development
 
-Use Node.js 20 or newer and Yarn:
+Use Node.js 22 or newer and Yarn:
 
 ```bash
 yarn install
