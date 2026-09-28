@@ -134,7 +134,12 @@ test("checkpoint event state is durable before the interrupt event is yielded", 
 
 test("independent starts on one thread receive new event run identities", async () => {
   const graph = createAgent({
-    model: createScriptedChatModel({ response: "ok" }),
+    model: createScriptedChatModel({
+      streamSequences: [
+        createScriptedMessageChunks(["ok"], { id: "assistant-first" }),
+        createScriptedMessageChunks(["ok"], { id: "assistant-second" }),
+      ],
+    }),
     tools: [],
     checkpointer: new MemorySaver(),
     stateSchema: agentEventStateSchema,
