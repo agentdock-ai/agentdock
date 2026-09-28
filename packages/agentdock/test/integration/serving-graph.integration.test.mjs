@@ -160,6 +160,41 @@ test("independent starts on one thread receive new event run identities", async 
   assert.equal(second.at(-1).type, AgentEventType.RunCompleted);
 });
 
+test("one runtime keeps concurrent run state isolated", async () => {
+  const graph = createAgent({
+    model: createScriptedChatModel({
+      streamSequences: [
+        createScriptedMessageChunks(["first"], { id: "assistant-concurrent-1" }),
+        createScriptedMessageChunks(["second"], { id: "assistant-concurrent-2" }),
+      ],
+    }),
+    tools: [],
+    checkpointer: new MemorySaver(),
+    stateSchema: agentEventStateSchema,
+  }).graph;
+  const runtime = serveAgent(graph);
+  const [first, second] = await Promise.all([
+    collect(
+      runtime.stream({
+        threadId: "concurrent-thread-1",
+        input: { messages: [{ role: "user", content: "first" }] },
+      }),
+    ),
+    collect(
+      runtime.stream({
+        threadId: "concurrent-thread-2",
+        input: { messages: [{ role: "user", content: "second" }] },
+      }),
+    ),
+  ]);
+
+  assert.notEqual(first[0].runId, second[0].runId);
+  assert.equal(first.at(-1).type, AgentEventType.RunCompleted);
+  assert.equal(second.at(-1).type, AgentEventType.RunCompleted);
+  assert.equal(first[0].logicalSequence, 1);
+  assert.equal(second[0].logicalSequence, 1);
+});
+
 test("resume requires checkpointed event state and a pending interrupt", async () => {
   const graph = new StateGraph(
     new StateSchema({

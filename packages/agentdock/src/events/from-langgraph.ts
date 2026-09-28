@@ -14,6 +14,7 @@ import {
   type ToolResultRecord,
 } from "@agentdock-ai/contracts";
 import type { EventContext } from "./event-context.js";
+import { isRecord } from "../utils/is-record.js";
 
 interface OpenMessage {
   messageId: string;
@@ -428,6 +429,3 @@ function toUsage(value: unknown): AgentUsage | undefined {
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

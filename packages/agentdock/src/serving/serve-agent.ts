@@ -1,7 +1,7 @@
 import type { AgentEvent } from "@agentdock-ai/contracts";
-import { streamGraph } from "./stream.js";
-import { pipeEvents } from "./pipe.js";
-import { createSseResponse } from "./to-response.js";
+import { RunStream } from "./run-stream.js";
+import { pipeEvents } from "../transports/node/pipe.js";
+import { createSseResponse } from "../transports/web/to-response.js";
 import type {
   AgentRuntime,
   GraphContext,
@@ -27,9 +27,10 @@ export function serveAgent<Graph extends ServableCompiledGraph>(
     throw new Error("recursionLimit must be a positive safe integer.");
   }
 
+  const runStream = new RunStream(graph, { recursionLimit });
   const stream = (
     run: Run<GraphInput<Graph>, GraphContext<Graph>>,
-  ): AsyncIterable<AgentEvent> => streamGraph(graph, run, { recursionLimit });
+  ): AsyncIterable<AgentEvent> => runStream.stream(run);
 
   return {
     stream,

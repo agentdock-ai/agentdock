@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { composeAbortSignals } from "../../src/serving/abort-signal.js";
+import {
+  composeAbortSignals,
+  createAbortScope,
+} from "../../src/signals/compose-abort-signals.js";
 
 test("composed signals preserve the first abort reason and detach all listeners", () => {
   const first = new TrackedAbortSignal();
@@ -45,6 +48,21 @@ test("disposing before abort is idempotent and removes listeners", () => {
   assert.equal(source.removeCount, 1);
   source.abort(new Error("after dispose"));
   assert.equal(composed.signal.aborted, false);
+});
+
+test("an owned abort scope propagates its reason and detaches parent listeners", () => {
+  const parent = new TrackedAbortSignal();
+  const scope = createAbortScope(parent);
+  const reason = new Error("consumer stopped");
+
+  scope.abort(reason);
+
+  assert.equal(scope.signal.aborted, true);
+  assert.equal(scope.signal.reason, reason);
+  assert.equal(parent.aborted, false);
+  assert.equal(parent.removeCount, 1);
+  scope.dispose();
+  assert.equal(parent.removeCount, 1);
 });
 
 test("empty signal composition remains usable", () => {

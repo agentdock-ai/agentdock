@@ -4,7 +4,7 @@ import {
   AGENT_EVENT_STATE_KEY,
   agentEventStateSchema,
   readAgentEventState,
-} from "../../src/serving/event-state.js";
+} from "../../src/langgraph/event-state.js";
 
 test("event state schema supplies an empty sequence by default", () => {
   assert.deepEqual(agentEventStateSchema.parse({}), {

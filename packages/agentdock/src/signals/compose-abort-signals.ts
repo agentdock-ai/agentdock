@@ -3,6 +3,23 @@ export interface ComposedAbortSignal {
   dispose(): void;
 }
 
+export interface AbortScope extends ComposedAbortSignal {
+  abort(reason?: unknown): void;
+}
+
+/** Adds an owner-controlled abort signal to the supplied parent signals. */
+export function createAbortScope(
+  ...parentSignals: Array<AbortSignal | undefined>
+): AbortScope {
+  const owner = new AbortController();
+  const composed = composeAbortSignals(...parentSignals, owner.signal);
+  return {
+    signal: composed.signal,
+    abort: (reason) => owner.abort(reason),
+    dispose: composed.dispose,
+  };
+}
+
 /** Combines optional signals and removes its listeners when disposed. */
 export function composeAbortSignals(
   ...signals: Array<AbortSignal | undefined>

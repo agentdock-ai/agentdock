@@ -1,6 +1,6 @@
 export { serveAgent } from "./serving/serve-agent.js";
 export type { ServeAgentOptions } from "./serving/serve-agent.js";
-export { agentEventStateSchema } from "./serving/event-state.js";
+export { agentEventStateSchema } from "./langgraph/event-state.js";
 export type {
   AgentRuntime,
   GraphContext,
@@ -11,4 +11,4 @@ export type {
   Run,
   StartRun,
 } from "./serving/types.js";
-export type { AgentEventState } from "./serving/event-state.js";
+export type { AgentEventState } from "./langgraph/event-state.js";

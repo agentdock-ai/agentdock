@@ -3,9 +3,9 @@ import {
   AgentEventType,
   type AgentEvent,
 } from "@agentdock-ai/contracts";
-import { composeAbortSignals } from "./abort-signal.js";
-import { encodeSseEvent, SSE_HEADERS } from "./sse.js";
-import type { NodeSseResponse, Run } from "./types.js";
+import { createAbortScope } from "../../signals/compose-abort-signals.js";
+import { encodeSseEvent, SSE_HEADERS } from "../sse.js";
+import type { NodeSseResponse, Run } from "../../serving/types.js";
 
 type WaitResult = "drain" | "close" | "abort";
 
@@ -17,12 +17,11 @@ export async function pipeEvents<
   run: Run<TInput, TContext>,
   source: (run: Run<TInput, TContext>) => AsyncIterable<AgentEvent>,
 ): Promise<void> {
-  const clientController = new AbortController();
-  const composed = composeAbortSignals(run.signal, clientController.signal);
+  const abortScope = createAbortScope(run.signal);
   // Preserve the start/resume discriminator while replacing only the signal.
   const streamRun: Run<TInput, TContext> = {
     ...run,
-    signal: composed.signal,
+    signal: abortScope.signal,
   };
   const iterator = source(streamRun)[Symbol.asyncIterator]();
   let headersSent = false;
@@ -34,7 +33,7 @@ export async function pipeEvents<
   const onClose = () => {
     if (!response.writableEnded) {
       disconnected = true;
-      clientController.abort(new Error("Client disconnected."));
+      abortScope.abort(new Error("Client disconnected."));
     }
   };
   response.on("close", onClose);
@@ -47,7 +46,7 @@ export async function pipeEvents<
     lastEvent = event;
     if (isTerminalEvent(event)) terminalSent = true;
     if (writable) return true;
-    const outcome = await waitForDrain(response, composed.signal);
+    const outcome = await waitForDrain(response, abortScope.signal);
     return outcome === "drain" && !disconnected;
   };
 
@@ -78,8 +77,11 @@ export async function pipeEvents<
       await writeEvent(failure);
     }
   } finally {
+    if (!terminalSent || disconnected) {
+      abortScope.abort(new Error("Response stream closed."));
+    }
     response.off("close", onClose);
-    composed.dispose();
+    abortScope.dispose();
     if (
       !ended &&
       headersSent &&
@@ -88,9 +90,6 @@ export async function pipeEvents<
     ) {
       ended = true;
       response.end();
-    }
-    if (!terminalSent || disconnected) {
-      clientController.abort(new Error("Response stream closed."));
     }
     if (iterator.return) await iterator.return().catch(() => undefined);
   }

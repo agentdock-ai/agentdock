@@ -1,7 +1,7 @@
 import type { AgentEvent } from "@agentdock-ai/contracts";
-import { composeAbortSignals } from "./abort-signal.js";
-import { encodeSseEvent, SSE_HEADERS } from "./sse.js";
-import type { Run } from "./types.js";
+import { createAbortScope } from "../../signals/compose-abort-signals.js";
+import { encodeSseEvent, SSE_HEADERS } from "../sse.js";
+import type { Run } from "../../serving/types.js";
 
 export async function createSseResponse<
   TInput,
@@ -10,12 +10,11 @@ export async function createSseResponse<
   run: Run<TInput, TContext>,
   source: (run: Run<TInput, TContext>) => AsyncIterable<AgentEvent>,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const composed = composeAbortSignals(run.signal, controller.signal);
+  const abortScope = createAbortScope(run.signal);
   // Preserve the start/resume discriminator while replacing only the signal.
   const streamRun: Run<TInput, TContext> = {
     ...run,
-    signal: composed.signal,
+    signal: abortScope.signal,
   };
   const iterator = source(streamRun)[Symbol.asyncIterator]();
   let first: IteratorResult<AgentEvent>;
@@ -23,8 +22,8 @@ export async function createSseResponse<
     // Validate the run and resume checkpoint before returning a committed 200.
     first = await iterator.next();
   } catch (error) {
-    controller.abort(error);
-    composed.dispose();
+    abortScope.abort(error);
+    abortScope.dispose();
     if (iterator.return) await iterator.return().catch(() => undefined);
     throw error;
   }
@@ -40,22 +39,22 @@ export async function createSseResponse<
         firstPending = false;
         if (next.done) {
           closed = true;
-          composed.dispose();
+          abortScope.dispose();
           streamController.close();
           return;
         }
         streamController.enqueue(encoder.encode(encodeSseEvent(next.value)));
       } catch (error) {
         closed = true;
-        composed.dispose();
+        abortScope.dispose();
         streamController.error(error);
       }
     },
     async cancel(reason) {
       if (closed) return;
       closed = true;
-      controller.abort(reason);
-      composed.dispose();
+      abortScope.abort(reason);
+      abortScope.dispose();
       if (iterator.return) await iterator.return().catch(() => undefined);
     },
   });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { AgentEventType } from "@agentdock-ai/contracts";
-import { EventContext } from "../../src/serving/event-context.js";
+import { EventContext } from "../../src/events/event-context.js";
 
 test("each graph update starts a phase with a fresh local sequence", () => {
   const context = new EventContext("phase-run", "phase-session", 4);

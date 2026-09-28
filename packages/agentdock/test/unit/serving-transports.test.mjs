@@ -8,8 +8,8 @@ import {
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
 import { agentEventStateSchema, serveAgent } from "../../src/index.js";
-import { EventContext } from "../../src/serving/event-context.js";
-import { createSseResponse } from "../../src/serving/to-response.js";
+import { EventContext } from "../../src/events/event-context.js";
+import { createSseResponse } from "../../src/transports/web/to-response.js";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";

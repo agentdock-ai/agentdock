@@ -6,8 +6,8 @@ import {
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
 import { serveAgent } from "../../src/index.js";
-import { EventContext } from "../../src/serving/event-context.js";
-import { WireEventMapper } from "../../src/serving/to-wire-event.js";
+import { EventContext } from "../../src/events/event-context.js";
+import { WireEventMapper } from "../../src/events/from-langgraph.js";
 
 test("supported message and tool chunks reduce as canonical AgentEvents", async () => {
   const chunks = [

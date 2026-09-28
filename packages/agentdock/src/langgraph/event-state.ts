@@ -1,3 +1,4 @@
+import { isRecord } from "../utils/is-record.js";
 import { z } from "zod";
 
 const eventStateShape = z.object({
@@ -20,6 +21,3 @@ export function readAgentEventState(value: unknown): AgentEventState | null {
   return parsed.success ? parsed.data : null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
