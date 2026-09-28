@@ -20,7 +20,7 @@ import { parseStreamChunk } from "../langgraph/parse-stream-chunk.js";
 import { isRecord } from "../utils/is-record.js";
 import type { Run, ServableCompiledGraph } from "./types.js";
 
-export interface StreamOptions {
+export interface RunStreamOptions {
   recursionLimit: number;
 }
 
@@ -60,7 +60,6 @@ type PendingEventState = AgentEventState & {
 
 interface RunSession {
   config: RuntimeGraphConfig;
-  resumed: boolean;
   savedState: PendingEventState | null;
   runId: string;
   eventContext: EventContext;
@@ -74,7 +73,7 @@ export class RunStream {
 
   constructor(
     graph: ServableCompiledGraph,
-    private readonly options: StreamOptions,
+    private readonly options: RunStreamOptions,
   ) {
     // CompiledGraph loses useful input typing at LangGraph's broad stream boundary.
     this.graph = graph as unknown as RuntimeGraph;
@@ -151,7 +150,7 @@ export class RunStream {
         finishReason: "stop",
         content: [],
       });
-      if (session.resumed) {
+      if (session.savedState) {
         await this.persistEventState(session, {
           runId: session.runId,
           logicalSequence: completed.logicalSequence,
@@ -179,9 +178,8 @@ export class RunStream {
     run: Run<TInput, TContext>,
   ): Promise<RunSession> {
     this.assertRun(run);
-    const resumed = "resume" in run;
     const config = this.graphConfig(run);
-    const savedState = await this.loadResumeState(config, resumed);
+    const savedState = await this.loadResumeState(run, config);
     const runId = savedState?.runId ?? crypto.randomUUID();
     const eventContext = new EventContext(
       runId,
@@ -192,7 +190,6 @@ export class RunStream {
 
     return {
       config,
-      resumed,
       savedState,
       runId,
       eventContext,
@@ -212,11 +209,14 @@ export class RunStream {
     };
   }
 
-  private async loadResumeState(
+  private async loadResumeState<
+    TInput,
+    TContext extends Record<string, unknown>,
+  >(
+    run: Run<TInput, TContext>,
     config: RuntimeGraphConfig,
-    resumed: boolean,
   ): Promise<PendingEventState | null> {
-    if (!resumed) return null;
+    if (!("resume" in run)) return null;
 
     const snapshot = await this.graph.getState(config);
     const state = readAgentEventState(snapshot.values);

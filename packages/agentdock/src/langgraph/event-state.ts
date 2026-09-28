@@ -20,4 +20,3 @@ export function readAgentEventState(value: unknown): AgentEventState | null {
   const parsed = eventStateShape.safeParse(value[AGENT_EVENT_STATE_KEY]);
   return parsed.success ? parsed.data : null;
 }
-

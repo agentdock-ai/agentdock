@@ -428,4 +428,3 @@ function toUsage(value: unknown): AgentUsage | undefined {
     usage.reasoningTokens = value.reasoning_tokens;
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
-

@@ -164,8 +164,12 @@ test("one runtime keeps concurrent run state isolated", async () => {
   const graph = createAgent({
     model: createScriptedChatModel({
       streamSequences: [
-        createScriptedMessageChunks(["first"], { id: "assistant-concurrent-1" }),
-        createScriptedMessageChunks(["second"], { id: "assistant-concurrent-2" }),
+        createScriptedMessageChunks(["first"], {
+          id: "assistant-concurrent-1",
+        }),
+        createScriptedMessageChunks(["second"], {
+          id: "assistant-concurrent-2",
+        }),
       ],
     }),
     tools: [],
