@@ -1,4 +1,11 @@
 import type { AgentEvent } from "@agentdock-ai/contracts";
+import type { LangGraphRunnableConfig } from "@langchain/langgraph";
+
+/** LangGraph run options; serving-owned context, signal, mode, and recursion are excluded. */
+export type GraphRunConfig = Omit<
+  LangGraphRunnableConfig,
+  "context" | "signal" | "streamMode" | "recursionLimit"
+>;
 
 export type StartRun<TInput, TContext extends Record<string, unknown>> = {
   /** Input accepted by the compiled graph. */
@@ -8,6 +15,8 @@ export type StartRun<TInput, TContext extends Record<string, unknown>> = {
   threadId: string;
   /** Per-invocation graph context; never persisted by AgentDock. */
   context?: TContext;
+  /** LangGraph callbacks, tags, metadata, store, and additional configurable values. */
+  config?: GraphRunConfig;
   /** Aborts cooperative graph and tool work when signaled. */
   signal?: AbortSignal;
 };
@@ -19,6 +28,8 @@ export type ResumeRun<TContext extends Record<string, unknown>> = {
   /** Opaque value forwarded unchanged to LangGraph's `Command({ resume })`. */
   resume: unknown;
   context?: TContext;
+  /** LangGraph callbacks, tags, metadata, store, and additional configurable values. */
+  config?: GraphRunConfig;
   signal?: AbortSignal;
 };
 

@@ -232,12 +232,6 @@ export function createAgentReducerState(): AgentReducerState {
   };
 }
 
-export function cloneAgentEventInput(value: unknown): AgentEventInput {
-  const input = cloneJsonObject(value, "Agent event input");
-  assertAgentEventInput(input);
-  return input as AgentEventInput;
-}
-
 export function cloneContentParts(
   value: unknown,
   label = "Content",

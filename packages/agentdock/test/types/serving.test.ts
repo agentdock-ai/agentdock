@@ -32,6 +32,11 @@ const resume = runtime.stream({
 const response = runtime.toResponse({
   threadId: "type-test-thread",
   input: { value: "hello" },
+  config: {
+    configurable: { tenantId: "tenant-a" },
+    tags: ["http-request"],
+    metadata: { requestId: "req-1" },
+  },
 });
 
 void start;

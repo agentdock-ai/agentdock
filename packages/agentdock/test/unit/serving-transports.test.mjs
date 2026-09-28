@@ -4,11 +4,10 @@ import { createServer } from "node:http";
 import { test } from "vitest";
 import {
   AgentEventType,
-  agentEventStateSchema,
   createAgentReducerState,
   reduceAgentEvent,
-  serveAgent,
-} from "../../src/index.js";
+} from "@agentdock-ai/contracts";
+import { agentEventStateSchema, serveAgent } from "../../src/index.js";
 import { EventContext } from "../../src/serving/event-context.js";
 import { createSseResponse } from "../../src/serving/to-response.js";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
@@ -61,6 +60,42 @@ test("Node pipe writes SSE headers and waits for drain before its next event", a
       AgentEventType.RunCompleted,
     ],
   );
+});
+
+test("stream forwards LangGraph config and keeps the server thread ID authoritative", async () => {
+  const graph = createGraph();
+  const callbacks = [{ handleLLMStart() {} }];
+  const store = { marker: "application-store" };
+  const config = {
+    configurable: { tenantId: "tenant-1", thread_id: "client-controlled" },
+    callbacks,
+    tags: ["request-tag"],
+    metadata: { requestId: "request-1" },
+    maxConcurrency: 3,
+    store,
+  };
+
+  await collect(
+    serveAgent(graph).stream({
+      input: { messages: [] },
+      threadId: "server-thread-1",
+      config,
+    }),
+  );
+
+  const options = graph.streamOptions[0];
+  assert.equal(options.callbacks, callbacks);
+  assert.deepEqual(options.tags, ["request-tag"]);
+  assert.deepEqual(options.metadata, { requestId: "request-1" });
+  assert.equal(options.maxConcurrency, 3);
+  assert.equal(options.store, store);
+  assert.deepEqual(options.configurable, {
+    tenantId: "tenant-1",
+    thread_id: "server-thread-1",
+  });
+  assert.deepEqual(options.streamMode, ["messages", "tools", "updates"]);
+  assert.equal(options.recursionLimit, 25);
+  assert.ok(options.signal instanceof AbortSignal);
 });
 
 test("a client close while waiting for drain aborts and cleans up", async () => {
@@ -189,6 +224,28 @@ test("a pre-aborted caller signal becomes a cancelled terminal event", async () 
     [AgentEventType.RunStarted, AgentEventType.RunCancelled],
   );
   assert.equal(graph.signals[0].aborted, true);
+});
+
+test("a graph that stops cleanly after cancellation emits run.cancelled", async () => {
+  const graph = createGraph({ waitForAbort: true });
+  const controller = new AbortController();
+  const events = [];
+  const collecting = (async () => {
+    for await (const event of serveAgent(graph).stream({
+      input: { messages: [{ role: "user", content: "hi" }] },
+      threadId: "graceful-cancel",
+      signal: controller.signal,
+    })) {
+      events.push(event);
+    }
+  })();
+
+  await waitFor(() => graph.waiting);
+  controller.abort(new Error("request cancelled"));
+  await collecting;
+
+  assert.equal(events.at(-1).type, AgentEventType.RunCancelled);
+  assert.equal(graph.cleanupCount, 1);
 });
 
 test("consumer early return aborts the graph and returns its iterator", async () => {
@@ -450,9 +507,12 @@ function createGraph({
 } = {}) {
   const graph = {
     signals: [],
+    streamOptions: [],
     cleanupCount: 0,
+    waiting: false,
     async stream(_input, options) {
       graph.signals.push(options.signal);
+      graph.streamOptions.push(options);
       if (error) throw error;
       if (honorAbort && options.signal.aborted) throw options.signal.reason;
       return {
@@ -465,6 +525,7 @@ function createGraph({
                 return { done: false, value: MESSAGE_CHUNK };
               }
               if (waitForAbort) {
+                graph.waiting = true;
                 return new Promise((resolve) => {
                   options.signal.addEventListener(
                     "abort",

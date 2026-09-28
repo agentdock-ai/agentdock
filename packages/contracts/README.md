@@ -11,14 +11,16 @@
   </p>
 </div>
 
-Use this package to share AgentDock's JSON-compatible events and reducer across
-the backend, UI, and transports without depending on LangChain or LangGraph.
+Use this package to share AgentDock's JSON-compatible event protocol and reducer
+across the backend, UI, and transports without depending on LangChain or
+LangGraph. Application session history and approval submission models stay in
+the application that owns them.
 
 ## Included
 
 - Stream event types for assistant messages, tool activity, interrupts, usage,
   and terminal run state.
-- Message, content, tool-call, and approval data types.
+- Event payload, content, and tool-call data used on the wire.
 - `reduceAgentEvent()` and `reduceAgentEvents()` for rebuilding a UI snapshot.
 - Strict JSON cloning and event validation helpers.
 

@@ -3,8 +3,6 @@ import {
   AGENT_EVENT_PROTOCOL_VERSION,
   AgentEventType,
   type AgentEvent,
-  type ToolApprovalRequest,
-  type ToolApprovalResponse,
   createAgentReducerState,
   reduceAgentEvent,
   cloneJsonValue,
@@ -27,31 +25,6 @@ describe("AgentDock contracts", () => {
     };
 
     expect(JSON.parse(JSON.stringify(event))).toEqual(event);
-  });
-
-  it("keeps approval data independent of runtime classes", () => {
-    const approval: ToolApprovalRequest = {
-      approvalId: "approval-1",
-      toolCall: {
-        toolCallId: "call-1",
-        name: "send_message",
-        input: { message: "hello" },
-      },
-    };
-    expect(JSON.stringify(approval)).toBeTruthy();
-  });
-
-  it("describes approval responses", () => {
-    const approval: ToolApprovalResponse = {
-      approvalId: "approval-1",
-      approved: true,
-      toolCall: {
-        toolCallId: "call-1",
-        name: "send_report",
-        input: { reportId: "report-1" },
-      },
-    };
-    expect(JSON.parse(JSON.stringify(approval))).toEqual(approval);
   });
 
   it("rebuilds a structured event stream and suppresses reconnect duplicates", () => {

@@ -63,9 +63,20 @@ await runtime.pipe(response, {
   threadId: authenticatedThreadId,
   input: { messages: [{ role: "user", content: "Weather in Lahore?" }] },
   context: { userId: authenticatedUser.id },
+  config: {
+    tags: ["customer-request"],
+    metadata: { requestId },
+    configurable: { tenantId: authenticatedUser.tenantId },
+  },
   signal: requestAbortSignal,
 });
 ```
+
+`config` forwards LangGraph run options such as callbacks, tags, metadata,
+store, and extra `configurable` values. AgentDock overwrites
+`configurable.thread_id` with the application-authorized `threadId`; stream
+modes, context, signal, and recursion limit are also controlled by the serving
+runtime.
 
 `pipe()` writes a `text/event-stream` response, waits for Node backpressure,
 aborts graph work after a disconnect, and ends the response once. The app should

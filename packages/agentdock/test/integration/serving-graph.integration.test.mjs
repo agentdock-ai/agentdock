@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
   AgentEventType,
-  agentEventStateSchema,
   createAgentReducerState,
   reduceAgentEvent,
-  serveAgent,
-} from "../../src/index.js";
+} from "@agentdock-ai/contracts";
+import { agentEventStateSchema, serveAgent } from "../../src/index.js";
 import {
   Command,
   END,
@@ -98,6 +97,62 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
   );
   assert.equal(finalState.status, "completed");
   assert.equal(finalState.interrupt, null);
+});
+
+test("checkpoint event state is durable before the interrupt event is yielded", async () => {
+  const { sent, graph, threadId } = await createApprovalAgent();
+  const iterator = serveAgent(graph)
+    .stream({
+      input: { messages: [{ role: "user", content: "send hello" }] },
+      threadId,
+      context: { userId: "user-42" },
+    })
+    [Symbol.asyncIterator]();
+
+  let interrupt;
+  while (true) {
+    const next = await iterator.next();
+    if (next.done) break;
+    if (next.value.type === AgentEventType.InterruptRequired) {
+      interrupt = next.value;
+      break;
+    }
+  }
+  assert.ok(interrupt);
+
+  const checkpoint = await graph.getState({
+    configurable: { thread_id: threadId },
+  });
+  assert.deepEqual(checkpoint.values.agentdockEventState, {
+    runId: interrupt.runId,
+    logicalSequence: interrupt.logicalSequence,
+    pendingInterruptId: interrupt.interrupt.interruptId,
+  });
+  assert.equal(sent.length, 0);
+  await iterator.return();
+});
+
+test("independent starts on one thread receive new event run identities", async () => {
+  const graph = createAgent({
+    model: createScriptedChatModel({ response: "ok" }),
+    tools: [],
+    checkpointer: new MemorySaver(),
+    stateSchema: agentEventStateSchema,
+  }).graph;
+  const runtime = serveAgent(graph);
+  const input = { messages: [{ role: "user", content: "hello" }] };
+  const first = await collect(
+    runtime.stream({ threadId: "same-thread", input }),
+  );
+  const second = await collect(
+    runtime.stream({ threadId: "same-thread", input }),
+  );
+
+  assert.notEqual(first[0].runId, second[0].runId);
+  assert.equal(first[0].logicalSequence, 1);
+  assert.equal(second[0].logicalSequence, 1);
+  assert.equal(first.at(-1).type, AgentEventType.RunCompleted);
+  assert.equal(second.at(-1).type, AgentEventType.RunCompleted);
 });
 
 test("resume requires checkpointed event state and a pending interrupt", async () => {

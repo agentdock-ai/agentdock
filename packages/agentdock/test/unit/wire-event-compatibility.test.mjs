@@ -4,8 +4,8 @@ import {
   AgentEventType,
   createAgentReducerState,
   reduceAgentEvent,
-  serveAgent,
-} from "../../src/index.js";
+} from "@agentdock-ai/contracts";
+import { serveAgent } from "../../src/index.js";
 import { EventContext } from "../../src/serving/event-context.js";
 import { WireEventMapper } from "../../src/serving/to-wire-event.js";
 
@@ -97,6 +97,119 @@ test("supported message and tool chunks reduce as canonical AgentEvents", async 
     ]),
   );
   assert.equal(JSON.stringify(events).includes("private details"), false);
+});
+
+test("tool calls keep correlation IDs across concurrent progress and completion", () => {
+  const context = new EventContext("parallel-tools", "parallel-tools", 0);
+  const mapper = new WireEventMapper(context);
+  const events = [
+    context.emit({ type: AgentEventType.RunStarted }),
+    ...mapper.map("tools", {
+      event: "on_tool_start",
+      toolCallId: "call-a",
+      name: "read",
+      input: { path: "a" },
+    }),
+    ...mapper.map("tools", {
+      event: "on_tool_start",
+      toolCallId: "call-b",
+      name: "read",
+      input: { path: "b" },
+    }),
+    ...mapper.map("tools", {
+      event: "on_tool_event",
+      toolCallId: "call-b",
+      name: "read",
+      data: { percent: 50 },
+    }),
+    ...mapper.map("tools", {
+      event: "on_tool_end",
+      toolCallId: "call-b",
+      name: "read",
+      output: "result-b",
+    }),
+    ...mapper.map("tools", {
+      event: "on_tool_end",
+      toolCallId: "call-a",
+      name: "read",
+      output: "result-a",
+    }),
+    context.emit({
+      type: AgentEventType.RunCompleted,
+      finishReason: "stop",
+      content: [],
+    }),
+  ];
+
+  const state = events.reduce(reduceAgentEvent, createAgentReducerState());
+  assert.equal(state.status, "completed");
+  assert.equal(state.toolCalls[0].toolCallId, "call-a");
+  assert.equal(state.toolCalls[1].toolCallId, "call-b");
+  assert.equal(state.toolProgress[0].toolCallId, "call-b");
+});
+
+test("approval interrupts match a streamed partial tool call when IDs are omitted", () => {
+  const context = new EventContext("partial-approval", "partial-approval", 0);
+  const mapper = new WireEventMapper(context);
+  const start = context.emit({ type: AgentEventType.RunStarted });
+  mapper.map("messages", [
+    {
+      id: "assistant-call",
+      content: "",
+      tool_call_chunks: [
+        {
+          id: "call-review",
+          name: "send_email",
+          args: '{"to":"a@example.test",',
+          index: 0,
+        },
+        { args: '"subject":"Hello"}', index: 0 },
+      ],
+    },
+    { langgraph_node: "agent" },
+  ]);
+
+  const [event] = mapper.map("updates", {
+    __interrupt__: [
+      {
+        id: "interrupt-review",
+        value: {
+          actionRequests: [
+            {
+              name: "send_email",
+              args: { to: "a@example.test", subject: "Hello" },
+            },
+          ],
+          reviewConfigs: [],
+        },
+      },
+    ],
+  });
+
+  const state = [start, event].reduce(
+    reduceAgentEvent,
+    createAgentReducerState(),
+  );
+  assert.equal(event.type, AgentEventType.InterruptRequired);
+  assert.equal(event.interrupt.kind, "tool-approval");
+  assert.equal(event.interrupt.actions[0].toolCallId, "call-review");
+  assert.equal(state.status, "waiting");
+});
+
+test("unmatched tool lifecycle events fail instead of inventing a call", () => {
+  const mapper = new WireEventMapper(
+    new EventContext("unmatched-tool", "unmatched-tool", 0),
+  );
+  assert.throws(
+    () =>
+      mapper.map("tools", {
+        event: "on_tool_end",
+        toolCallId: "unknown-call",
+        name: "read",
+        output: "result",
+      }),
+    /unknown call/,
+  );
 });
 
 test("custom interrupts map to the event contract and unsupported chunks fail", async () => {

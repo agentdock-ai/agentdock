@@ -4,7 +4,7 @@ import {
   type AgentEvent,
   type JsonValue,
 } from "@agentdock-ai/contracts";
-import { Command } from "@langchain/langgraph";
+import { Command, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import { composeAbortSignals } from "./abort-signal.js";
 import { EventContext } from "./event-context.js";
 import {
@@ -23,21 +23,30 @@ export interface StreamOptions {
 interface RuntimeGraph {
   stream(
     input: unknown,
-    options: {
-      configurable: { thread_id: string };
+    options: Omit<
+      LangGraphRunnableConfig,
+      "configurable" | "context" | "signal"
+    > & {
+      configurable: NonNullable<LangGraphRunnableConfig["configurable"]> & {
+        thread_id: string;
+      };
       context?: Record<string, unknown>;
       signal: AbortSignal;
       streamMode: readonly ["messages", "tools", "updates"];
       recursionLimit: number;
     },
   ): Promise<AsyncIterable<unknown>>;
-  getState(config: { configurable: { thread_id: string } }): Promise<{
-    values: unknown;
-  }>;
+  getState(config: RuntimeGraphConfig): Promise<{ values: unknown }>;
   updateState(
-    config: { configurable: { thread_id: string } },
+    config: RuntimeGraphConfig,
     update: Record<string, unknown>,
   ): Promise<unknown>;
+}
+
+interface RuntimeGraphConfig {
+  configurable: NonNullable<LangGraphRunnableConfig["configurable"]> & {
+    thread_id: string;
+  };
 }
 
 /** Drives one compiled graph invocation and projects its stream to AgentEvents. */
@@ -52,7 +61,11 @@ export async function* streamGraph<
   assertRun(run);
   // CompiledGraph methods lose useful input typing at LangGraph's broad stream boundary.
   const graphRuntime = graph as unknown as RuntimeGraph;
-  const config = { configurable: { thread_id: run.threadId } };
+  const configurable = {
+    ...run.config?.configurable,
+    thread_id: run.threadId,
+  };
+  const config = { configurable };
   const resumed = "resume" in run;
   let savedState: AgentEventState | null = null;
 
@@ -96,8 +109,9 @@ export async function* streamGraph<
           logicalSequence: eventContext.lastLogicalSequence,
         });
     const stream = await graphRuntime.stream(graphInput, {
-      ...config,
-      ...(run.context === undefined ? {} : { context: run.context }),
+      ...run.config,
+      configurable,
+      context: run.context,
       signal: composed.signal,
       streamMode: ["messages", "tools", "updates"],
       recursionLimit: options.recursionLimit,
@@ -121,6 +135,24 @@ export async function* streamGraph<
         }
         yield event;
       }
+    }
+
+    if (composed.signal.aborted) {
+      const cancelled = eventContext.emit({
+        type: AgentEventType.RunCancelled,
+        reason: "Run cancelled.",
+      });
+      try {
+        await persistEventState(graphRuntime, config, {
+          runId,
+          logicalSequence: cancelled.logicalSequence,
+        });
+      } catch {
+        // Preserve the terminal transport event; checkpoint failure is not exposed.
+      }
+      terminalEventEmitted = true;
+      yield cancelled;
+      return;
     }
 
     if (pausedForInterrupt) {

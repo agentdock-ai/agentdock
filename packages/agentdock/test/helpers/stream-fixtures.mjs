@@ -92,17 +92,6 @@ export function createCooperativeTimeoutTool({ onStart, onAbort } = {}) {
   };
 }
 
-export function createUncooperativeTool({ onStarted } = {}) {
-  return async () => {
-    onStarted?.();
-    return new Promise(() => {});
-  };
-}
-
-export function createNeverSettlingAuthorization() {
-  return async () => new Promise(() => {});
-}
-
 export function createMemoryCheckpoint() {
   return new MemorySaver();
 }

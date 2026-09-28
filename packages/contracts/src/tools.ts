@@ -1,11 +1,4 @@
-import type { JsonObject, JsonSchema, JsonValue } from "./json.js";
-
-export interface ToolSchema {
-  name: string;
-  description: string;
-  parameters: JsonSchema;
-  requiresApproval: boolean;
-}
+import type { JsonObject, JsonValue } from "./json.js";
 
 export interface ToolCallRecord {
   toolCallId: string;

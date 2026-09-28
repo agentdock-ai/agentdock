@@ -5,9 +5,6 @@ export type JsonValue =
 
 export type JsonObject = { [key: string]: JsonValue };
 
-/** JSON Schema data supplied to a frontend or transport consumer. */
-export type JsonSchema = boolean | { [key: string]: JsonValue };
-
 export class JsonValidationError extends Error {
   constructor(message: string) {
     super(message);
