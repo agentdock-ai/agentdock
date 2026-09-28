@@ -34,6 +34,12 @@ export async function createSseResponse<
   const body = new ReadableStream<Uint8Array>({
     async pull(streamController) {
       if (closed) return;
+      if (first.done) {
+        closed = true;
+        abortScope.dispose();
+        streamController.close();
+        return;
+      }
       try {
         const next = firstPending ? first : await iterator.next();
         firstPending = false;
@@ -46,7 +52,9 @@ export async function createSseResponse<
         streamController.enqueue(encoder.encode(encodeSseEvent(next.value)));
       } catch (error) {
         closed = true;
+        abortScope.abort(error);
         abortScope.dispose();
+        if (iterator.return) await iterator.return().catch(() => undefined);
         streamController.error(error);
       }
     },
