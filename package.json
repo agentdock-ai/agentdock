@@ -11,6 +11,7 @@
     "format:check": "prettier --check .",
     "typecheck": "yarn build:contracts && yarn typecheck:contracts && yarn typecheck:agentdock && yarn workspace agentdock-react-agent-example typecheck",
     "test": "yarn workspace @agentdock-ai/contracts test && yarn workspace @agentdock-ai/agentdock test",
+    "test:e2e": "yarn workspace @agentdock-ai/agentdock test:e2e",
     "test:coverage": "yarn workspace @agentdock-ai/agentdock test:coverage",
     "build": "yarn build:contracts && yarn build:agentdock",
     "ci": "yarn format:check && yarn typecheck && yarn build && yarn test && yarn test:coverage",
