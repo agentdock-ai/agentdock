@@ -72,7 +72,7 @@ createServer(async (request, response) => {
   }
 }).listen(Number(process.env.PORT ?? 3000), () => {
   console.info(
-    `AgentDock demo listening on http://localhost:${process.env.PORT ?? 3000}`,
+    `Agentdock demo listening on http://localhost:${process.env.PORT ?? 3000}`,
   );
 });
 

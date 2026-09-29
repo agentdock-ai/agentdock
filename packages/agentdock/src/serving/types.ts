@@ -13,7 +13,7 @@ export type StartRun<TInput, TContext extends Record<string, unknown>> = {
   resume?: never;
   /** Stable, application-authorized LangGraph thread identity. */
   threadId: string;
-  /** Per-invocation graph context; never persisted by AgentDock. */
+  /** Per-invocation graph context; never persisted by Agentdock. */
   context?: TContext;
   /** LangGraph callbacks, tags, metadata, store, and additional configurable values. */
   config?: GraphRunConfig;

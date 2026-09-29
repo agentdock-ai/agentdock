@@ -1,6 +1,6 @@
 <div align="center">
   <p>
-    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="AgentDock" width="300" />
+    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" />
   </p>
 
   <p>Framework-independent JSON event and message contracts.</p>
@@ -11,7 +11,7 @@
   </p>
 </div>
 
-Use this package to share AgentDock's JSON-compatible event protocol and reducer
+Use this package to share Agentdock's JSON-compatible event protocol and reducer
 across the backend, UI, and transports without depending on LangChain or
 LangGraph. Application session history and approval submission models stay in
 the application that owns them.

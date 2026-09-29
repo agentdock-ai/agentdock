@@ -75,7 +75,7 @@
 - Keep database drivers and provider integrations out of the core serving package.
 - Applications choose LangChain/LangGraph integrations directly and own their setup and resource lifecycle.
 - The serving package accepts a compiled graph and forwards its configured checkpointer behavior; it does not wrap or manage savers.
-- Do not add a provider registry or recreate framework integration APIs in AgentDock.
+- Do not add a provider registry or recreate framework integration APIs in Agentdock.
 
 ## Shared contracts
 

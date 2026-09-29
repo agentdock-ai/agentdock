@@ -1,7 +1,7 @@
 {
   "name": "@agentdock-ai/contracts",
   "version": "0.2.0",
-  "description": "Framework-independent AgentDock data contracts",
+  "description": "Framework-independent Agentdock data contracts",
   "type": "module",
   "repository": {
     "type": "git",

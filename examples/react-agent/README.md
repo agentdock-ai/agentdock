@@ -1,7 +1,7 @@
 # ReAct server example
 
-This is an application example, not an AgentDock recipe or shipped package. The
-agent loop comes from LangChain `createAgent`; AgentDock only adapts its compiled
+This is an application example, not an Agentdock recipe or shipped package. The
+agent loop comes from LangChain `createAgent`; Agentdock only adapts its compiled
 graph to the event stream.
 
 Install these packages in the host application:

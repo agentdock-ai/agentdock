@@ -10,7 +10,7 @@ import {
   cloneContentParts,
 } from "../src/index.js";
 
-describe("AgentDock contracts", () => {
+describe("Agentdock contracts", () => {
   it("defines a JSON-serializable event contract", () => {
     const event: AgentEvent = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,

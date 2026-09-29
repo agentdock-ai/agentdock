@@ -289,7 +289,7 @@ export class RunStream {
       restored.logicalSequence !== state.logicalSequence ||
       restored.pendingInterruptId !== state.pendingInterruptId
     ) {
-      throw new Error("The graph did not persist AgentDock event state.");
+      throw new Error("The graph did not persist Agentdock event state.");
     }
   }
 

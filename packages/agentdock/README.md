@@ -1,6 +1,6 @@
 <div align="center">
   <p>
-    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="AgentDock" width="300" />
+    <img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" />
   </p>
 
   <p>A small SSE serving adapter for compiled LangGraph agents.</p>
@@ -13,7 +13,7 @@
   </p>
 </div>
 
-AgentDock adapts a graph you already built with LangGraph to a stable stream of
+Agentdock adapts a graph you already built with LangGraph to a stable stream of
 JSON events. Your application owns graph construction, models, tools, identity,
 authorization, request parsing, and checkpoint saver lifecycle.
 
@@ -73,7 +73,7 @@ await runtime.pipe(response, {
 ```
 
 `config` forwards LangGraph run options such as callbacks, tags, metadata,
-store, and extra `configurable` values. AgentDock overwrites
+store, and extra `configurable` values. Agentdock overwrites
 `configurable.thread_id` with the application-authorized `threadId`; stream
 modes, context, signal, and recursion limit are also controlled by the serving
 runtime.
@@ -105,7 +105,7 @@ await runtime.pipe(response, {
 - Your app assigns and authorizes every `threadId`; treat it as a security
   boundary and serialize overlapping runs for a thread when your graph or saver
   requires it.
-- Your app creates and closes the checkpointer. AgentDock does not open,
+- Your app creates and closes the checkpointer. Agentdock does not open,
   replace, or close saver resources.
 - Cancellation reaches LangGraph and cooperative tools through an
   `AbortSignal`. A tool that ignores its signal may continue after a client has
