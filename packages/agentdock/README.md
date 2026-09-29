@@ -113,9 +113,10 @@ await runtime.pipe(response, {
 `runtime.toResponse(run)` returns a Web `Response` backed by a cancelable
 `ReadableStream` for Web-standard servers.
 
-For built-in HTTP routes, install `@agentdock-ai/agentdock-http` and construct
-`AgentdockServer` with this `Agentdock` instance plus an application-owned
-`authorize` callback.
+Your framework owns routes, request validation, and authorization. Route
+controllers call `runtime.pipe(response, run)` for Node-style responses,
+`runtime.toResponse(run)` for Web-standard handlers, or `runtime.stream(run)`
+when they need to consume events directly.
 
 ## Operational ownership
 

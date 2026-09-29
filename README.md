@@ -10,8 +10,7 @@
 
 The `Agentdock` class adapts a compiled LangGraph graph to the Agentdock event
 contract and handles SSE backpressure, client disconnects, and response cleanup.
-The optional `@agentdock-ai/agentdock-http` package adds HTTP routes and a Node
-bridge.
+Your application owns routes and calls Agentdock from its route controllers.
 
 LangGraph and LangChain own agent execution, tools, models, checkpoints,
 interrupts, and resume. Your application owns request parsing, authentication,
@@ -22,7 +21,6 @@ authorization, trusted thread IDs, side effects, and checkpointer lifecycle.
 ```bash
 npm install @agentdock-ai/agentdock @agentdock-ai/contracts \
   @langchain/langgraph langchain @langchain/openrouter zod
-npm install @agentdock-ai/agentdock-http
 ```
 
 Install the LangChain provider and LangGraph checkpointer that your application
@@ -72,10 +70,11 @@ client. A ready result requires a complete, validated pending interrupt.
 Hydration restores control state; load conversation history separately.
 Generated fallback message and tool-call IDs are UUID-based opaque identifiers.
 
-## Connect your HTTP route
+## Call Agentdock from your route controller
 
-Parse and validate the request, authenticate the caller, and derive an
-authorized thread ID in your application before calling `pipe()`:
+Your Node.js, Next.js, NestJS, or other framework owns URL routing, request
+validation, authentication, and authorization. After that, pass the trusted run
+to Agentdock:
 
 ```ts
 await runtime.pipe(response, {
@@ -96,28 +95,10 @@ await runtime.pipe(response, {
 });
 ```
 
-`pipe()` is compatible with Node HTTP and Express-style responses. Use
-`runtime.stream(run)` for a transport-free event stream or
-`runtime.toResponse(run)` for Web-standard servers. The app must authorize
-thread access; never trust a client-provided thread ID without checking it.
-
-For conventional routes, install `@agentdock-ai/agentdock-http` and mount its
-Web handler after supplying application authorization:
-
-```ts
-import { AgentdockServer } from "@agentdock-ai/agentdock-http";
-
-const server = new AgentdockServer({
-  agent: runtime,
-  authorize: async (_request, threadId) =>
-    (await canAccessThread(authenticatedUser, threadId))
-      ? { context: { userId: authenticatedUser.id } }
-      : null,
-});
-
-export const POST = server.toHttp();
-export const GET = server.toHttp();
-```
+For Node and Express-style response objects, call `runtime.pipe(response, run)`.
+For Web-standard route handlers, return `runtime.toResponse(run)`. Use
+`runtime.stream(run)` when your controller needs to consume events directly.
+Agentdock does not define URL paths or HTTP request/response envelopes.
 
 ## Production notes
 
@@ -131,8 +112,7 @@ export const GET = server.toHttp();
   `updates` streams. Arbitrary graph output remains application-specific.
 
 See [`examples/react-agent`](./examples/react-agent/README.md) for a complete
-Node server with tools and an approval interrupt, and
-[`AGENTDOCK_SCOPE.md`](./AGENTDOCK_SCOPE.md) for the product boundaries.
+Node server with tools and an approval interrupt.
 
 ## Development
 
