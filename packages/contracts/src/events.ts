@@ -184,6 +184,7 @@ export interface AgentInterruptResolution {
 export interface AgentReducerState {
   protocolVersion: typeof AGENT_EVENT_PROTOCOL_VERSION | null;
   runId: string | null;
+  threadId: string | null;
   status: "idle" | "running" | "waiting" | "completed" | "failed" | "cancelled";
   messages: AgentReducerMessage[];
   toolCalls: ToolCallRecord[];
@@ -208,6 +209,7 @@ export function createAgentReducerState(): AgentReducerState {
   return {
     protocolVersion: null,
     runId: null,
+    threadId: null,
     status: "idle",
     messages: [],
     toolCalls: [],

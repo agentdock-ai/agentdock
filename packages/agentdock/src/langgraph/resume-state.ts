@@ -11,7 +11,13 @@ export type CreateResumeStateResult =
   | { status: "invalid_checkpoint" };
 
 /** Builds reducer control state for a new client from a graph checkpoint. */
-export function createResumeState(values: unknown): CreateResumeStateResult {
+export function createResumeState(
+  values: unknown,
+  threadId: string,
+): CreateResumeStateResult {
+  if (!threadId.trim()) {
+    throw new Error("threadId must be a non-empty string.");
+  }
   const result = parseAgentEventState(values);
   if (result.status !== "valid") return { status: "invalid_checkpoint" };
   if (!result.state.pendingInterrupt) return { status: "no_pending_interrupt" };
@@ -25,6 +31,7 @@ export function createResumeState(values: unknown): CreateResumeStateResult {
       ...createAgentReducerState(),
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId,
+      threadId,
       status: "waiting",
       interrupt: pendingInterrupt,
       lastLogicalSequence: logicalSequence,

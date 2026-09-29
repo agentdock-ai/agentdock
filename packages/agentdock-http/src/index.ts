@@ -1,5 +1,2 @@
-export { AgentdockServer } from "./agentdock-server.js";
-export type {
-  AgentdockServerOptions,
-  Authorization,
-} from "./agentdock-server.js";
+export { AgentdockServer } from "./server/agentdock-server.js";
+export type { AgentdockServerOptions, Authorization } from "./server/types.js";

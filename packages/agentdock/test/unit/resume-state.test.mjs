@@ -11,19 +11,23 @@ const interrupt = {
   actions: [{ id: "continue", name: "continue", input: {} }],
 };
 
-test("creates a waiting reducer seed that accepts a resume stream", () => {
-  const result = createResumeState({
-    agentEventState: {
-      runId: "run-1",
-      logicalSequence: 7,
-      pendingInterrupt: interrupt,
+test("creates a thread-bound waiting reducer seed for a resume stream", () => {
+  const result = createResumeState(
+    {
+      agentEventState: {
+        runId: "run-1",
+        logicalSequence: 7,
+        pendingInterrupt: interrupt,
+      },
     },
-  });
+    "thread-1",
+  );
 
   assert.equal(result.status, "ready");
   if (result.status !== "ready") return;
   assert.equal(result.state.status, "waiting");
   assert.equal(result.state.runId, "run-1");
+  assert.equal(result.state.threadId, "thread-1");
   assert.equal(result.state.lastLogicalSequence, 7);
   assert.deepEqual(result.state.messages, []);
   assert.deepEqual(result.state.interrupt, interrupt);
@@ -48,24 +52,31 @@ test("creates a waiting reducer seed that accepts a resume stream", () => {
 });
 
 test("reports no pending interrupt and invalid checkpoints explicitly", () => {
-  assert.deepEqual(createResumeState({}), {
+  assert.deepEqual(createResumeState({}, "thread-1"), {
     status: "invalid_checkpoint",
   });
   assert.deepEqual(
-    createResumeState({ agentEventState: { logicalSequence: 0 } }),
+    createResumeState({ agentEventState: { logicalSequence: 0 } }, "thread-1"),
     { status: "no_pending_interrupt" },
   );
   assert.deepEqual(
-    createResumeState({
-      agentEventState: {
-        runId: "run-1",
-        logicalSequence: 7,
-        pendingInterrupt: { ...interrupt, interruptId: "" },
+    createResumeState(
+      {
+        agentEventState: {
+          runId: "run-1",
+          logicalSequence: 7,
+          pendingInterrupt: { ...interrupt, interruptId: "" },
+        },
       },
-    }),
+      "thread-1",
+    ),
     { status: "invalid_checkpoint" },
   );
-  assert.deepEqual(createResumeState({ agentEventState: null }), {
+  assert.deepEqual(createResumeState({ agentEventState: null }, "thread-1"), {
     status: "invalid_checkpoint",
   });
+  assert.throws(
+    () => createResumeState({}, " "),
+    /threadId must be a non-empty string/,
+  );
 });

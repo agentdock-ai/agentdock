@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sendNodeError } from "./send-error.js";
 
 type WebHandler = (request: Request) => Promise<Response>;
 
@@ -56,18 +57,7 @@ export async function handleNodeRequest(
       outgoing,
     );
   } catch {
-    if (outgoing.headersSent || outgoing.destroyed) {
-      outgoing.destroy();
-    } else {
-      outgoing.writeHead(500, {
-        "content-type": "application/json; charset=utf-8",
-      });
-      outgoing.end(
-        JSON.stringify({
-          error: { code: "internal_error", message: "Request failed." },
-        }),
-      );
-    }
+    sendNodeError(outgoing);
   } finally {
     outgoing.off("close", onClose);
   }

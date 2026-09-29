@@ -68,7 +68,7 @@ export class Agentdock<
   async getResumeState(threadId: string): Promise<AgentReducerState | null> {
     const snapshot = await getThreadSnapshot(this.graph, threadId);
     if (!snapshot) return null;
-    const result = createResumeState(snapshot.values);
+    const result = createResumeState(snapshot.values, threadId);
     return result.status === "ready" ? result.state : null;
   }
 }
