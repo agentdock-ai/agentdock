@@ -1,5 +1,11 @@
 <div align="center">
   <p><img src="./logo.png" alt="Agentdock" width="320" /></p>
+  <p>
+    <a href="https://www.npmjs.com/package/@agentdock-ai/agentdock"><img alt="npm version" src="https://img.shields.io/npm/v/%40agentdock-ai%2Fagentdock?label=npm" /></a>
+    <a href="https://github.com/agentdock-ai/agentdock/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/agentdock-ai/agentdock/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
+    <img alt="Node.js 22+" src="https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white" />
+    <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-111827" /></a>
+  </p>
 </div>
 
 Agentdock handles HTTP/SSE framing, backpressure, client disconnects, and
