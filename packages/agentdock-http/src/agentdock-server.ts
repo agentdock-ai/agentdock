@@ -1,6 +1,5 @@
 import { Agentdock } from "@agentdock-ai/agentdock";
 import type {
-  AgentdockOptions,
   GraphContext,
   GraphInput,
   GraphRunConfig,
@@ -16,9 +15,7 @@ export interface Authorization<Context extends Record<string, unknown>> {
 }
 
 export interface AgentdockServerOptions<Graph extends ServableCompiledGraph> {
-  agent?: Agentdock<Graph>;
-  graph?: Graph;
-  agentOptions?: AgentdockOptions;
+  agent: Agentdock<Graph>;
   basePath?: string;
   authorize: (
     request: Request,
@@ -43,19 +40,7 @@ export class AgentdockServer<Graph extends ServableCompiledGraph> {
   private readonly threads: AgentdockServerOptions<Graph>["threads"];
 
   constructor(options: AgentdockServerOptions<Graph>) {
-    if (options.agent && options.graph) {
-      throw new Error("Pass either agent or graph, not both.");
-    }
-    if (!options.agent && !options.graph) {
-      throw new Error("AgentdockServer requires an agent or graph.");
-    }
-    if (options.agent) {
-      this.agent = options.agent;
-    } else if (options.graph) {
-      this.agent = new Agentdock(options.graph, options.agentOptions);
-    } else {
-      throw new Error("AgentdockServer requires an agent or graph.");
-    }
+    this.agent = options.agent;
     this.basePath = normalizeBasePath(options.basePath ?? "/agent");
     this.authorize = options.authorize;
     this.threads = options.threads;
@@ -77,17 +62,6 @@ export class AgentdockServer<Graph extends ServableCompiledGraph> {
           sendNodeError(response);
         });
     };
-  }
-
-  getMessages(
-    threadId: string,
-    options: { channel?: string } = {},
-  ): Promise<unknown[] | null> {
-    return this.agent.getMessages(threadId, options);
-  }
-
-  getResumeState(threadId: string) {
-    return this.agent.getResumeState(threadId);
   }
 
   private async handle(request: Request): Promise<Response> {

@@ -56,8 +56,7 @@ interface RuntimeGraphConfig {
 
 type PendingEventState = AgentEventState & {
   runId: string;
-  pendingInterruptId: string;
-  pendingInterrupt?: AgentInterrupt;
+  pendingInterrupt: AgentInterrupt;
 };
 
 interface RunSession {
@@ -122,7 +121,6 @@ export class RunStream {
             await this.persistEventState(session, {
               runId: session.runId,
               logicalSequence: event.logicalSequence,
-              pendingInterruptId: event.interrupt.interruptId,
               pendingInterrupt: event.interrupt,
             });
           }
@@ -186,7 +184,6 @@ export class RunStream {
     const runId = savedState?.runId ?? crypto.randomUUID();
     const eventContext = new EventContext(
       runId,
-      run.threadId,
       savedState?.logicalSequence ?? 0,
     );
     const abortScope = createAbortScope(run.signal);
@@ -225,18 +222,17 @@ export class RunStream {
     const result = parseAgentEventState(snapshot.values);
     if (
       result.status !== "valid" ||
-      result.interruptStatus === "none" ||
       !result.state.runId ||
-      !result.state.pendingInterruptId
+      !result.state.pendingInterrupt
     ) {
       throw new Error(
-        "Cannot resume this thread: the graph must include agentEventStateSchema and have a pending interrupt.",
+        "Cannot resume this thread: the graph must use withAgentEventState and have a valid pending interrupt.",
       );
     }
     return {
       ...result.state,
       runId: result.state.runId,
-      pendingInterruptId: result.state.pendingInterruptId,
+      pendingInterrupt: result.state.pendingInterrupt,
     };
   }
 
@@ -251,7 +247,7 @@ export class RunStream {
       events.push(
         session.eventContext.emit({
           type: AgentEventType.InterruptResolved,
-          interruptId: session.savedState.pendingInterruptId,
+          interruptId: session.savedState.pendingInterrupt.interruptId,
           decisions: this.resumeDecisions(run.resume),
         }),
       );
@@ -276,7 +272,7 @@ export class RunStream {
   ): Record<string, unknown> {
     if (!isRecord(input)) {
       throw new Error(
-        "This graph needs an object input and agentEventStateSchema to emit resumable AgentEvents.",
+        "This graph needs an object input and withAgentEventState to emit resumable AgentEvents.",
       );
     }
     return { ...input, [AGENT_EVENT_STATE_KEY]: state };
@@ -297,7 +293,6 @@ export class RunStream {
       !restored ||
       restored.runId !== state.runId ||
       restored.logicalSequence !== state.logicalSequence ||
-      restored.pendingInterruptId !== state.pendingInterruptId ||
       stableJson(restored.pendingInterrupt) !==
         stableJson(state.pendingInterrupt)
     ) {

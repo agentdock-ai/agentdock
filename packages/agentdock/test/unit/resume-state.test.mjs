@@ -12,28 +12,23 @@ const interrupt = {
 };
 
 test("creates a waiting reducer seed that accepts a resume stream", () => {
-  const result = createResumeState(
-    {
-      agentdockEventState: {
-        runId: "run-1",
-        logicalSequence: 7,
-        pendingInterruptId: "interrupt-1",
-        pendingInterrupt: interrupt,
-      },
+  const result = createResumeState({
+    agentEventState: {
+      runId: "run-1",
+      logicalSequence: 7,
+      pendingInterrupt: interrupt,
     },
-    "thread-1",
-  );
+  });
 
   assert.equal(result.status, "ready");
   if (result.status !== "ready") return;
   assert.equal(result.state.status, "waiting");
   assert.equal(result.state.runId, "run-1");
-  assert.equal(result.state.sessionId, "thread-1");
   assert.equal(result.state.lastLogicalSequence, 7);
   assert.deepEqual(result.state.messages, []);
   assert.deepEqual(result.state.interrupt, interrupt);
 
-  const context = new EventContext("run-1", "thread-1", 7);
+  const context = new EventContext("run-1", 7);
   const events = [
     context.emit({ type: AgentEventType.RunStarted }),
     context.emit({
@@ -52,60 +47,25 @@ test("creates a waiting reducer seed that accepts a resume stream", () => {
   assert.equal(finalState.interrupt, null);
 });
 
-test("reports checkpoint conditions without hiding legacy or invalid state", () => {
-  assert.deepEqual(createResumeState({}, "thread-1"), {
+test("reports no pending interrupt and invalid checkpoints explicitly", () => {
+  assert.deepEqual(createResumeState({}), {
     status: "invalid_checkpoint",
   });
   assert.deepEqual(
-    createResumeState(
-      { agentdockEventState: { logicalSequence: 0 } },
-      "thread-1",
-    ),
+    createResumeState({ agentEventState: { logicalSequence: 0 } }),
     { status: "no_pending_interrupt" },
   );
   assert.deepEqual(
-    createResumeState(
-      {
-        agentdockEventState: {
-          runId: "legacy-run",
-          logicalSequence: 2,
-          pendingInterruptId: "legacy-interrupt",
-        },
+    createResumeState({
+      agentEventState: {
+        runId: "run-1",
+        logicalSequence: 7,
+        pendingInterrupt: { ...interrupt, interruptId: "" },
       },
-      "thread-1",
-    ),
-    { status: "legacy_checkpoint", interruptId: "legacy-interrupt" },
-  );
-  assert.deepEqual(
-    createResumeState(
-      {
-        agentdockEventState: {
-          runId: "run-1",
-          logicalSequence: 7,
-          pendingInterruptId: "interrupt-1",
-          pendingInterrupt: { ...interrupt, interruptId: "mismatched-id" },
-        },
-      },
-      "thread-1",
-    ),
+    }),
     { status: "invalid_checkpoint" },
   );
-  assert.deepEqual(
-    createResumeState(
-      {
-        agentdockEventState: {
-          runId: "run-1",
-          logicalSequence: 7,
-          pendingInterruptId: "interrupt-1",
-          pendingInterrupt: { ...interrupt, payload: { invalid: undefined } },
-        },
-      },
-      "thread-1",
-    ),
-    { status: "invalid_checkpoint" },
-  );
-  assert.deepEqual(
-    createResumeState({ agentdockEventState: { logicalSequence: 0 } }, ""),
-    { status: "invalid_checkpoint" },
-  );
+  assert.deepEqual(createResumeState({ agentEventState: null }), {
+    status: "invalid_checkpoint",
+  });
 });

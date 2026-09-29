@@ -28,12 +28,12 @@ uses.
 
 ## Serve a compiled graph
 
-Compose `agentEventStateSchema` into the graph's state schema when the graph can
-interrupt and resume. That small checkpointed extension preserves event
-identity and sequence across separate requests and runtime instances.
+Use `withAgentEventState(fields)` in the graph's state schema when the graph can
+interrupt and resume. Its `agentEventState` field preserves event identity,
+sequence, and the full pending interrupt across requests and runtime instances.
 
 ```ts
-import { Agentdock, agentEventStateSchema } from "@agentdock-ai/agentdock";
+import { Agentdock, withAgentEventState } from "@agentdock-ai/agentdock";
 import { createAgent, tool } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
@@ -48,7 +48,7 @@ const lookup = tool(async ({ city }) => ({ city, forecast: "Sunny" }), {
 const graph = createAgent({
   model, // Supply a LangChain chat model from your provider integration.
   tools: [lookup],
-  stateSchema: agentEventStateSchema,
+  stateSchema: withAgentEventState({}),
   checkpointer,
 }).graph;
 
@@ -56,17 +56,14 @@ const runtime = new Agentdock(graph);
 ```
 
 Use `withAgentEventState(fields)` to compose the required event checkpoint
-field with application state. It reserves `agentdockEventState` for Agentdock
+field with application state. It reserves `agentEventState` for Agentdock
 and preserves the field validators and defaults supplied by the application.
 `getMessages(threadId)` reads a checkpoint's message channel.
 
-For cold-client hydration, `createResumeState(checkpoint.values, threadId)`
-returns an explicit result: `ready` with a reducer seed, `no_pending_interrupt`,
-`legacy_checkpoint` with an interrupt ID, or `invalid_checkpoint`. A ready seed
-contains run identity, sequence, status, and the complete pending interrupt;
-conversation history remains the application's responsibility. A legacy
-checkpoint containing only an interrupt ID remains resumable by a client that
-already retained its reducer state, but cannot seed a new client.
+For cold-client hydration, `runtime.getResumeState(threadId)` returns a reducer
+seed only when the checkpoint contains a complete, validated pending interrupt.
+The seed restores run identity, sequence, and interrupt status; load conversation
+history separately.
 
 Fallback message and tool-call IDs are UUID-based and opaque. Keep the IDs
 received in events for correlation; do not rely on their generated format.
@@ -130,7 +127,7 @@ For built-in HTTP routes, install `@agentdock-ai/agentdock-http` and construct
 - Cancellation reaches LangGraph and cooperative tools through an
   `AbortSignal`. A tool that ignores its signal may continue after a client has
   disconnected.
-- Without `agentEventStateSchema`, a graph can serve a non-interrupted start,
+- Without `withAgentEventState(fields)`, a graph can serve a non-interrupted start,
   but a resume is rejected because the runtime cannot restore the event stream
   identity safely.
 

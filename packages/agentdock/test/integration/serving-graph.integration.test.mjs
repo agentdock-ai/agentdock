@@ -5,11 +5,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import {
-  agentEventStateSchema,
-  Agentdock,
-  withAgentEventState,
-} from "../../src/index.js";
+import { Agentdock, withAgentEventState } from "../../src/index.js";
 import {
   Command,
   END,
@@ -27,12 +23,12 @@ import {
   createToolCallArgumentChunks,
 } from "../helpers/stream-fixtures.mjs";
 
-test("event state schema composes with createAgent and a general StateGraph", async () => {
+test("composed event state works with createAgent and a general StateGraph", async () => {
   const agent = createAgent({
     model: createScriptedChatModel({ response: "ok" }),
     tools: [],
     checkpointer: createMemoryCheckpoint(),
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
   });
   assert.equal(typeof agent.stream, "function");
 
@@ -65,10 +61,9 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
   const paused = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(paused.values.agentdockEventState, {
+  assert.deepEqual(paused.values.agentEventState, {
     runId: startEvents[0].runId,
     logicalSequence: startEvents.at(-1).logicalSequence,
-    pendingInterruptId: startEvents.at(-1).interrupt.interruptId,
     pendingInterrupt: startEvents.at(-1).interrupt,
   });
 
@@ -96,7 +91,7 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
   const completedCheckpoint = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(completedCheckpoint.values.agentdockEventState, {
+  assert.deepEqual(completedCheckpoint.values.agentEventState, {
     runId: startEvents[0].runId,
     logicalSequence: resumeEvents.at(-1).logicalSequence,
   });
@@ -133,10 +128,9 @@ test("checkpoint event state is durable before the interrupt event is yielded", 
   const checkpoint = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(checkpoint.values.agentdockEventState, {
+  assert.deepEqual(checkpoint.values.agentEventState, {
     runId: interrupt.runId,
     logicalSequence: interrupt.logicalSequence,
-    pendingInterruptId: interrupt.interrupt.interruptId,
     pendingInterrupt: interrupt.interrupt,
   });
   assert.equal(sent.length, 0);
@@ -179,7 +173,7 @@ test("independent starts on one thread receive new event run identities", async 
     }),
     tools: [],
     checkpointer: new MemorySaver(),
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
   }).graph;
   const runtime = new Agentdock(graph);
   const input = { messages: [{ role: "user", content: "hello" }] };
@@ -211,7 +205,7 @@ test("one runtime keeps concurrent run state isolated", async () => {
     }),
     tools: [],
     checkpointer: new MemorySaver(),
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
   }).graph;
   const runtime = new Agentdock(graph);
   const [first, second] = await Promise.all([
@@ -240,7 +234,7 @@ test("resume requires checkpointed event state and a pending interrupt", async (
   const graph = new StateGraph(
     new StateSchema({
       value: z.string().default(""),
-      ...agentEventStateSchema.shape,
+      ...withAgentEventState({}).shape,
     }),
   )
     .addNode("step", () => ({ value: "done" }))
@@ -254,7 +248,7 @@ test("resume requires checkpointed event state and a pending interrupt", async (
       collect(
         runtime.stream({ threadId: "missing-interrupt", resume: { ok: true } }),
       ),
-    /must include agentEventStateSchema and have a pending interrupt/,
+    /valid pending interrupt/,
   );
 });
 
@@ -291,7 +285,7 @@ async function createApprovalAgent() {
     tools: [send],
     contextSchema: z.object({ userId: z.string() }),
     checkpointer: createMemoryCheckpoint(),
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
     middleware: [humanInTheLoopMiddleware({ interruptOn: { send: true } })],
   });
   return { sent, contexts, graph, threadId: "serving-approval-thread" };

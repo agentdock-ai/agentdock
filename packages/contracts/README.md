@@ -54,9 +54,8 @@ function applyEvent(
 }
 ```
 
-The event `sessionId` field is retained for compatibility with existing UI
-consumers. A serving backend should put its authorized thread identity there and
-keep authentication and authorization in the application.
+The event protocol carries run identity and sequence metadata. Authentication,
+authorization, and thread identity remain the serving application's responsibility.
 
 This package contains data contracts and JSON-safe helpers; model, graph,
 checkpoint, and HTTP implementations belong to the application and its chosen

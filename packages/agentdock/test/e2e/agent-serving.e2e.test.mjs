@@ -6,7 +6,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { agentEventStateSchema, Agentdock } from "../../src/index.js";
+import { withAgentEventState, Agentdock } from "../../src/index.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
 import { z } from "zod";
@@ -28,7 +28,7 @@ test("serves a completed createAgent workflow over an authenticated SSE route", 
       ],
     }),
     tools: [],
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
   }).graph;
   const runtime = new Agentdock(graph);
@@ -68,7 +68,6 @@ test("serves a completed createAgent workflow over an authenticated SSE route", 
       ),
     );
     assert.equal(events.at(-1).type, AgentEventType.RunCompleted);
-    assert.ok(events.every((event) => event.sessionId === "user-17"));
     assert.equal(
       events.reduce(reduceAgentEvent, createAgentReducerState()).status,
       "completed",
@@ -120,9 +119,6 @@ test("resumes an approval across separate SSE requests on the same user thread",
     assert.equal(resumeEvents[0].runId, startEvents[0].runId);
     assert.equal(resumeEvents[1].type, AgentEventType.InterruptResolved);
     assert.deepEqual(sideEffects, ["hello"]);
-    assert.ok(
-      resumeEvents.every((event) => event.sessionId === "user-approval-29"),
-    );
     assert.equal(
       combinedEvents.reduce(reduceAgentEvent, createAgentReducerState()).status,
       "completed",
@@ -160,7 +156,7 @@ function createApprovalGraph() {
       responses: ["", "Done."],
     }),
     tools: [send],
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
     middleware: [humanInTheLoopMiddleware({ interruptOn: { send: true } })],
   }).graph;

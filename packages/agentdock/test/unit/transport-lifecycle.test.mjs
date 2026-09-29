@@ -149,7 +149,7 @@ function createRun(threadId) {
 }
 
 function makeEvent(type) {
-  const context = new EventContext("transport-run", "transport-session", 0);
+  const context = new EventContext("transport-run", 0);
   if (type === AgentEventType.RunCompleted) {
     return context.emit({
       type,

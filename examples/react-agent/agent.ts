@@ -1,7 +1,7 @@
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { MemorySaver } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware } from "langchain";
-import { agentEventStateSchema, Agentdock } from "@agentdock-ai/agentdock";
+import { withAgentEventState, Agentdock } from "@agentdock-ai/agentdock";
 import { contextSchema, getWeather, sendEmail } from "./tools.js";
 
 const model = new ChatOpenRouter({
@@ -13,7 +13,7 @@ export const graph = createAgent({
   model,
   tools: [getWeather, sendEmail],
   contextSchema,
-  stateSchema: agentEventStateSchema,
+  stateSchema: withAgentEventState({}),
   checkpointer: new MemorySaver(),
   systemPrompt:
     "You are a helpful assistant. Use get_weather for weather questions. " +

@@ -5,7 +5,7 @@ import { encodeSseEvent, SSE_HEADERS } from "../../src/transports/sse.js";
 import { AgentEventType } from "@agentdock-ai/contracts";
 
 test("encodes an AgentEvent as one exact SSE data frame", () => {
-  const event = new EventContext("run-1", "thread-1", 0).emit({
+  const event = new EventContext("run-1", 0).emit({
     type: AgentEventType.RunStarted,
   });
 

@@ -79,13 +79,12 @@ export type AgentInterrupt =
       actions: AgentInterruptAction[];
     });
 
-export const AGENT_EVENT_PROTOCOL_VERSION = 1 as const;
+export const AGENT_EVENT_PROTOCOL_VERSION = 2 as const;
 
 export interface AgentEventBase {
   protocolVersion: typeof AGENT_EVENT_PROTOCOL_VERSION;
   eventId: string;
   runId: string;
-  sessionId: string;
   logicalSequence: number;
   phaseId: string;
   sequence: number;
@@ -185,7 +184,6 @@ export interface AgentInterruptResolution {
 export interface AgentReducerState {
   protocolVersion: typeof AGENT_EVENT_PROTOCOL_VERSION | null;
   runId: string | null;
-  sessionId: string | null;
   status: "idle" | "running" | "waiting" | "completed" | "failed" | "cancelled";
   messages: AgentReducerMessage[];
   toolCalls: ToolCallRecord[];
@@ -210,7 +208,6 @@ export function createAgentReducerState(): AgentReducerState {
   return {
     protocolVersion: null,
     runId: null,
-    sessionId: null,
     status: "idle",
     messages: [],
     toolCalls: [],
@@ -250,7 +247,6 @@ export function cloneAgentEvent(value: unknown): AgentEvent {
   }
   assertString(event.eventId, "Agent event.eventId");
   assertString(event.runId, "Agent event.runId");
-  assertString(event.sessionId, "Agent event.sessionId");
   assertString(event.phaseId, "Agent event.phaseId");
   assertString(event.timestamp, "Agent event.timestamp");
   assertSequence(event.logicalSequence, "Agent event.logicalSequence");
@@ -259,7 +255,6 @@ export function cloneAgentEvent(value: unknown): AgentEvent {
     protocolVersion: _protocolVersion,
     eventId: _eventId,
     runId: _runId,
-    sessionId: _sessionId,
     logicalSequence: _logicalSequence,
     phaseId: _phaseId,
     sequence: _sequence,
@@ -369,8 +364,6 @@ export function reduceAgentEvent(
     throw new Error(
       "Agent event protocol version does not match reducer state.",
     );
-  if (state.sessionId !== null && state.sessionId !== event.sessionId)
-    throw new Error("Agent event session ID does not match reducer state.");
   if (event.logicalSequence <= state.lastLogicalSequence)
     throw new Error(
       "Agent event logical sequence must increase monotonically.",
@@ -385,7 +378,6 @@ export function reduceAgentEvent(
     ...state,
     protocolVersion: event.protocolVersion,
     runId: event.runId,
-    sessionId: event.sessionId,
     lastSequence: event.sequence,
     lastLogicalSequence: event.logicalSequence,
     lastPhaseId: event.phaseId,
@@ -582,6 +574,8 @@ function assertInterrupt(
   if (value.kind !== "tool-approval" && value.kind !== "custom")
     throw new Error(`${path}.kind is unsupported.`);
   assertString(value.interruptId, `${path}.interruptId`);
+  if (value.interruptId.length === 0)
+    throw new Error(`${path}.interruptId must be a non-empty string.`);
   assertString(value.prompt, `${path}.prompt`);
   if (!Array.isArray(value.actions))
     throw new Error(`${path}.actions must be an array.`);

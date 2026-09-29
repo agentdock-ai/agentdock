@@ -3,8 +3,8 @@ import {
   cloneJsonValue,
   type AgentInterrupt,
 } from "@agentdock-ai/contracts";
-import { isRecord } from "../utils/is-record.js";
 import { z } from "zod";
+import { isRecord } from "../utils/is-record.js";
 
 function isAgentInterrupt(value: unknown): value is AgentInterrupt {
   try {
@@ -17,27 +17,20 @@ function isAgentInterrupt(value: unknown): value is AgentInterrupt {
 
 const pendingInterruptSchema = z.custom<AgentInterrupt>(isAgentInterrupt);
 
-const eventStateShape = z.object({
-  runId: z.string().min(1).optional(),
-  logicalSequence: z.number().int().nonnegative().default(0),
-  pendingInterruptId: z.string().min(1).optional(),
-  pendingInterrupt: pendingInterruptSchema.optional(),
-});
-
-export const agentEventStateSchema = z.object({
-  agentdockEventState: eventStateShape.default({ logicalSequence: 0 }),
-});
+const eventStateShape = z
+  .object({
+    runId: z.string().min(1).optional(),
+    logicalSequence: z.number().int().nonnegative().default(0),
+    pendingInterrupt: pendingInterruptSchema.optional(),
+  })
+  .strict();
 
 export type AgentEventState = z.infer<typeof eventStateShape>;
 
-export const AGENT_EVENT_STATE_KEY = "agentdockEventState";
+export const AGENT_EVENT_STATE_KEY = "agentEventState";
 
 export type AgentEventStateReadResult =
-  | {
-      status: "valid";
-      state: AgentEventState;
-      interruptStatus: "none" | "legacy" | "complete";
-    }
+  | { status: "valid"; state: AgentEventState }
   | { status: "missing" }
   | { status: "invalid" };
 
@@ -64,60 +57,29 @@ export function parsePendingInterrupt(value: unknown): AgentInterrupt | null {
 }
 
 export function parseAgentEventState(
-  value: unknown,
+  values: unknown,
 ): AgentEventStateReadResult {
-  if (!isRecord(value) || !(AGENT_EVENT_STATE_KEY in value)) {
+  if (
+    !isRecord(values) ||
+    !Object.prototype.hasOwnProperty.call(values, AGENT_EVENT_STATE_KEY)
+  ) {
     return { status: "missing" };
   }
 
-  const rawState = value[AGENT_EVENT_STATE_KEY];
+  const rawState = values[AGENT_EVENT_STATE_KEY];
   if (!isRecord(rawState)) return { status: "invalid" };
   const parsed = eventStateShape.safeParse(rawState);
   if (!parsed.success) return { status: "invalid" };
 
   const state = parsed.data;
-  const hasPendingInterrupt = Object.prototype.hasOwnProperty.call(
-    rawState,
-    "pendingInterrupt",
-  );
-  const hasPendingInterruptId = state.pendingInterruptId !== undefined;
-
-  if (!hasPendingInterrupt && !hasPendingInterruptId) {
-    return {
-      status: "valid",
-      state,
-      interruptStatus: "none",
-    };
+  if (state.pendingInterrupt === undefined) {
+    return { status: "valid", state };
   }
-
-  if (!state.runId || !hasPendingInterruptId || state.logicalSequence < 1) {
+  if (!state.runId || state.logicalSequence < 1) {
     return { status: "invalid" };
   }
 
-  if (!hasPendingInterrupt) {
-    return {
-      status: "valid",
-      state,
-      interruptStatus: "legacy",
-    };
-  }
-
-  const pendingInterrupt = parsePendingInterrupt(rawState.pendingInterrupt);
-  if (
-    !pendingInterrupt ||
-    pendingInterrupt.interruptId !== state.pendingInterruptId
-  ) {
-    return { status: "invalid" };
-  }
-
-  return {
-    status: "valid",
-    state: { ...state, pendingInterrupt },
-    interruptStatus: "complete",
-  };
-}
-
-export function readAgentEventState(value: unknown): AgentEventState | null {
-  const result = parseAgentEventState(value);
-  return result.status === "valid" ? result.state : null;
+  const pendingInterrupt = parsePendingInterrupt(state.pendingInterrupt);
+  if (!pendingInterrupt) return { status: "invalid" };
+  return { status: "valid", state: { ...state, pendingInterrupt } };
 }

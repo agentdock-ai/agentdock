@@ -28,10 +28,9 @@ test("persists checkpoint event state before yielding an interrupt", async () =>
   })) {
     if (event.type === AgentEventType.InterruptRequired) {
       assert.equal(persistedBeforeInterrupt, true);
-      assert.deepEqual(graph.values.agentdockEventState, {
+      assert.deepEqual(graph.values.agentEventState, {
         runId: event.runId,
         logicalSequence: event.logicalSequence,
-        pendingInterruptId: "approval-1",
         pendingInterrupt: event.interrupt,
       });
     }
@@ -48,7 +47,7 @@ test("rejects resume without saved event state before starting the graph", async
 
   await assert.rejects(
     iterator.next(),
-    /must include agentEventStateSchema and have a pending interrupt/,
+    /must use withAgentEventState and have a valid pending interrupt/,
   );
   assert.equal(graph.streamCalls.length, 0);
 });
@@ -56,15 +55,14 @@ test("rejects resume without saved event state before starting the graph", async
 test("rejects a corrupt saved interrupt before starting the graph", async () => {
   const graph = createGraph({
     values: {
-      agentdockEventState: {
+      agentEventState: {
         runId: "saved-run",
         logicalSequence: 4,
-        pendingInterruptId: "approval-1",
         pendingInterrupt: {
           kind: "custom",
-          interruptId: "different-id",
+          interruptId: "approval-1",
           prompt: "Continue?",
-          actions: [],
+          actions: undefined,
         },
       },
     },
@@ -89,11 +87,11 @@ test("read-back verification rejects a checkpoint that drops interrupt data", as
     ],
   });
   graph.updateState = async (_config, update) => {
-    const persistedState = structuredClone(update.agentdockEventState);
+    const persistedState = structuredClone(update.agentEventState);
     if (persistedState.pendingInterrupt) {
       persistedState.pendingInterrupt.prompt = "Wrong prompt";
     }
-    graph.values = { ...graph.values, agentdockEventState: persistedState };
+    graph.values = { ...graph.values, agentEventState: persistedState };
   };
 
   const events = await collect(
@@ -113,10 +111,15 @@ test("read-back verification rejects a checkpoint that drops interrupt data", as
 test("resume restores run identity and advances the saved logical sequence", async () => {
   const graph = createGraph({
     values: {
-      agentdockEventState: {
+      agentEventState: {
         runId: "saved-run",
         logicalSequence: 8,
-        pendingInterruptId: "approval-2",
+        pendingInterrupt: {
+          kind: "custom",
+          interruptId: "approval-2",
+          prompt: "Approve?",
+          actions: [],
+        },
       },
     },
   });
@@ -136,7 +139,7 @@ test("resume restores run identity and advances the saved logical sequence", asy
     ],
   );
   assert.ok(events.every((event) => event.runId === "saved-run"));
-  assert.deepEqual(graph.values.agentdockEventState, {
+  assert.deepEqual(graph.values.agentEventState, {
     runId: "saved-run",
     logicalSequence: 11,
   });

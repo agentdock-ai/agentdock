@@ -7,7 +7,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { agentEventStateSchema, Agentdock } from "../../src/index.js";
+import { withAgentEventState, Agentdock } from "../../src/index.js";
 import { EventContext } from "../../src/events/event-context.js";
 import { createSseResponse } from "../../src/transports/web/to-response.js";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
@@ -328,7 +328,7 @@ test("Web stream errors propagate to the reader", async () => {
   const failureGate = new Promise((resolve) => {
     failNext = resolve;
   });
-  const context = new EventContext("web-error", "web-error", 0);
+  const context = new EventContext("web-error", 0);
   const run = {
     threadId: "web-error",
     input: {},
@@ -586,7 +586,7 @@ function createApprovalGraph() {
       responses: ["", "done"],
     }),
     tools: [send],
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
     middleware: [humanInTheLoopMiddleware({ interruptOn: { send: true } })],
   }).graph;
@@ -621,7 +621,7 @@ function createCooperativeAgent() {
       responses: [""],
     }),
     tools: [wait],
-    stateSchema: agentEventStateSchema,
+    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
   }).graph;
 
@@ -647,7 +647,7 @@ function readEvents(frames) {
 
 function normalizeTransportEvents(events) {
   return events.map(
-    ({ eventId, phaseId, runId, sessionId, timestamp, ...event }) => event,
+    ({ eventId, phaseId, runId, timestamp, ...event }) => event,
   );
 }
 

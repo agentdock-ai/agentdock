@@ -34,7 +34,7 @@ uses. Agentdock does not configure or manage either one.
 import { MemorySaver } from "@langchain/langgraph";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { createAgent } from "langchain";
-import { agentEventStateSchema, Agentdock } from "@agentdock-ai/agentdock";
+import { withAgentEventState, Agentdock } from "@agentdock-ai/agentdock";
 
 const graph = createAgent({
   model: new ChatOpenRouter({
@@ -42,7 +42,7 @@ const graph = createAgent({
     apiKey: process.env.OPENROUTER_API_KEY,
   }),
   tools: [], // Use LangChain tool() to add application tools.
-  stateSchema: agentEventStateSchema,
+  stateSchema: withAgentEventState({}),
   checkpointer: new MemorySaver(),
   systemPrompt: "You are a helpful assistant.",
 });
@@ -50,12 +50,12 @@ const graph = createAgent({
 const runtime = new Agentdock(graph);
 ```
 
-`agentEventStateSchema` is needed when you want Agentdock's compatibility event
-stream to preserve its run identity and sequence across an interrupt/resume
-request. It is Agentdock event metadata; LangGraph's own checkpoint/resume
-mechanism is provided by the checkpointer and `thread_id`.
+`withAgentEventState(fields)` adds the required `agentEventState` checkpoint
+field to your graph schema. It preserves Agentdock's run identity, sequence,
+and full pending interrupt across requests; LangGraph's checkpointer and
+`thread_id` still control graph execution and resumption.
 
-Use `withAgentEventState(fields)` when the graph also has application state, and use
+Use `withAgentEventState(fields)` to include application state, and use
 `getResumeState(threadId)` to seed a fresh client from a checkpoint:
 
 ```ts
@@ -67,14 +67,10 @@ const agent = new Agentdock(graph);
 const resumeState = await agent.getResumeState(authorizedThreadId);
 ```
 
-For explicit hydration outcomes, pass the checkpoint's `values` to
-`createResumeState(values, authorizedThreadId)`. It returns `ready` with reducer
-control state, `no_pending_interrupt`, `legacy_checkpoint` with an interrupt
-ID, or `invalid_checkpoint`. Only a complete, validated pending interrupt can
-seed a fresh client. An older checkpoint that stores only the interrupt ID can
-still be resumed by a warm client that retained its reducer state. Hydration
-restores control state; load conversation history separately. Generated
-fallback message and tool-call IDs are UUID-based opaque identifiers.
+`getResumeState(threadId)` returns `null` when a checkpoint cannot seed a fresh
+client. A ready result requires a complete, validated pending interrupt.
+Hydration restores control state; load conversation history separately.
+Generated fallback message and tool-call IDs are UUID-based opaque identifiers.
 
 ## Connect your HTTP route
 

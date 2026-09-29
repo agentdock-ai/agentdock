@@ -1,23 +1,12 @@
-import { END, START, StateGraph, StateSchema } from "@langchain/langgraph";
+import { END, START, StateGraph } from "@langchain/langgraph";
 import { z } from "zod";
-import {
-  agentEventStateSchema,
-  Agentdock,
-  createResumeState,
-  withAgentEventState,
-} from "../../src/index.js";
+import { withAgentEventState, Agentdock } from "../../src/index.js";
 
-const schema = new StateSchema({
-  value: z.string().default(""),
-  ...agentEventStateSchema.shape,
-});
-const composedSchema = withAgentEventState({ value: z.string().default("") });
+const schema = withAgentEventState({ value: z.string().default("") });
+const composedSchema = schema;
 const graph = new StateGraph({
   state: schema,
-  input: new StateSchema({
-    value: z.string().default(""),
-    ...agentEventStateSchema.shape,
-  }),
+  input: schema,
   context: z.object({ tenantId: z.string() }),
 })
   .addNode("finish", () => ({ value: "done" }))
@@ -44,22 +33,7 @@ const response = runtime.toResponse({
     metadata: { requestId: "req-1" },
   },
 });
-const resumeResult = createResumeState(
-  {
-    agentdockEventState: {
-      runId: "run-1",
-      logicalSequence: 3,
-      pendingInterruptId: "interrupt-1",
-      pendingInterrupt: {
-        kind: "custom",
-        interruptId: "interrupt-1",
-        prompt: "Continue?",
-        actions: [],
-      },
-    },
-  },
-  "type-test-thread",
-);
+const resumeResult = runtime.getResumeState("type-test-thread");
 
 void start;
 void resume;
@@ -68,7 +42,7 @@ void composedSchema;
 void resumeResult;
 
 // @ts-expect-error Agentdock owns this field in composed state schemas.
-withAgentEventState({ agentdockEventState: z.string() });
+withAgentEventState({ agentEventState: z.string() });
 
 // @ts-expect-error Start input retains the graph's state type.
 runtime.stream({ threadId: "type-test-thread", input: { value: 42 } });

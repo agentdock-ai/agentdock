@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "vitest";
 import { AgentdockServer } from "../src/index.js";
+import { Agentdock } from "@agentdock-ai/agentdock";
 
 const interrupt = {
   kind: "custom",
@@ -14,7 +15,7 @@ test("authorizes thread routes and rejects bodies with server-owned fields", asy
   const graph = createGraph();
   const authorized = [];
   const server = new AgentdockServer({
-    graph,
+    agent: new Agentdock(graph),
     basePath: "/v1/agent",
     authorize: async (request, threadId) => {
       authorized.push([request.method, threadId]);
@@ -48,17 +49,16 @@ test("routes reads, optional thread listing, and not-found cases", async () => {
   const graph = createGraph({
     values: {
       messages: [{ role: "assistant", content: "saved" }],
-      agentdockEventState: {
+      agentEventState: {
         runId: "saved-run",
         logicalSequence: 4,
-        pendingInterruptId: interrupt.interruptId,
         pendingInterrupt: interrupt,
       },
     },
   });
   const requests = [];
   const server = new AgentdockServer({
-    graph,
+    agent: new Agentdock(graph),
     authorize: async (_request, threadId) => {
       requests.push(threadId);
       return { context: {} };
@@ -85,7 +85,7 @@ test("routes reads, optional thread listing, and not-found cases", async () => {
   );
   const resumeBody = await resumeState.json();
   assert.equal(resumeBody.state.status, "waiting");
-  assert.equal(resumeBody.state.sessionId, "thread-a");
+  assert.equal(resumeBody.state.runId, "saved-run");
 
   const listed = await handle(request("GET", "/agent/threads?user=user-1"));
   assert.deepEqual(await listed.json(), {
@@ -99,7 +99,7 @@ test("routes reads, optional thread listing, and not-found cases", async () => {
   assert.equal(missing.status, 404);
 
   const unconfigured = new AgentdockServer({
-    graph,
+    agent: new Agentdock(graph),
     authorize: async () => ({ context: {} }),
   });
   const notImplemented = await unconfigured.toHttp()(
@@ -112,16 +112,15 @@ test("serves SSE run and resume requests across separate HTTP calls", async () =
   const graph = createGraph({
     values: {
       messages: [],
-      agentdockEventState: {
+      agentEventState: {
         runId: "saved-run",
         logicalSequence: 4,
-        pendingInterruptId: interrupt.interruptId,
         pendingInterrupt: interrupt,
       },
     },
   });
   const server = new AgentdockServer({
-    graph,
+    agent: new Agentdock(graph),
     authorize: async () => ({ context: { userId: "user-1" } }),
   });
   const handle = server.toHttp();
@@ -149,7 +148,7 @@ test("serves SSE run and resume requests across separate HTTP calls", async () =
 
 test("bridges node:http requests to Web routes", async ({ skip }) => {
   const app = new AgentdockServer({
-    graph: createGraph(),
+    agent: new Agentdock(createGraph()),
     authorize: async () => ({ context: {} }),
   });
   const httpServer = createServer(app.toNode());
@@ -184,7 +183,7 @@ test("bridges node:http requests to Web routes", async ({ skip }) => {
 test("a Node client disconnect aborts the graph run", async ({ skip }) => {
   const graph = createGraph({ waitForAbort: true });
   const app = new AgentdockServer({
-    graph,
+    agent: new Agentdock(graph),
     authorize: async () => ({ context: {} }),
   });
   const httpServer = createServer(app.toNode());

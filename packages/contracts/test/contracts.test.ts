@@ -45,7 +45,6 @@ describe("Agentdock contracts", () => {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: "event-1",
       runId: "run-1",
-      sessionId: "session-1",
       phaseId: "phase-1",
       logicalSequence: 1,
       sequence: 1,
@@ -60,7 +59,6 @@ describe("Agentdock contracts", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId: "run-2",
-      sessionId: "session-2",
       phaseId: "phase-1",
       timestamp: new Date(0).toISOString(),
     };
@@ -115,7 +113,6 @@ describe("Agentdock contracts", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId: "run-order",
-      sessionId: "session-order",
       phaseId: "phase-1",
       timestamp: new Date(0).toISOString(),
     };
@@ -136,7 +133,6 @@ describe("Agentdock contracts", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId: "run-phases",
-      sessionId: "session-phases",
       timestamp: new Date(0).toISOString(),
     };
     const first: AgentEvent = {
@@ -226,7 +222,6 @@ describe("Agentdock contracts", () => {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: "parts-1",
       runId: "run-parts",
-      sessionId: "session-parts",
       phaseId: "phase-parts",
       logicalSequence: 1,
       sequence: 1,
@@ -303,7 +298,6 @@ describe("Agentdock contracts", () => {
       cloneAgentEvent({
         eventId: "missing-version",
         runId: "run",
-        sessionId: "session",
         phaseId: "phase",
         logicalSequence: 1,
         sequence: 1,
@@ -316,7 +310,6 @@ describe("Agentdock contracts", () => {
         protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
         eventId: "negative-usage",
         runId: "run",
-        sessionId: "session",
         phaseId: "phase",
         logicalSequence: 1,
         sequence: 1,
@@ -331,7 +324,6 @@ describe("Agentdock contracts", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId: "run-state",
-      sessionId: "session-state",
       phaseId: "phase-1",
       timestamp: new Date(0).toISOString(),
     };
@@ -434,7 +426,6 @@ describe("Agentdock contracts", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId: "run-terminal-cases",
-      sessionId: "session-terminal-cases",
       phaseId: "phase-terminal-cases",
       timestamp: new Date(0).toISOString(),
     } as const;
@@ -559,7 +550,6 @@ describe("Agentdock contracts", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId: "run-rules",
-      sessionId: "session-rules",
       timestamp: new Date(0).toISOString(),
     };
     const started: AgentEvent = {
@@ -661,7 +651,6 @@ describe("Agentdock contracts", () => {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: "approval-clone",
       runId: "run-approval-clone",
-      sessionId: "session-approval-clone",
       phaseId: "phase-approval-clone",
       logicalSequence: 1,
       sequence: 1,
@@ -689,22 +678,21 @@ describe("Agentdock contracts", () => {
     });
   });
 
-  it("keeps custom interrupt actions without toolCallId valid", () => {
+  it("accepts custom interrupt actions without toolCallId", () => {
     const event: AgentEvent = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
-      eventId: "approval-legacy",
-      runId: "run-approval-legacy",
-      sessionId: "session-approval-legacy",
-      phaseId: "phase-approval-legacy",
+      eventId: "approval-custom-action",
+      runId: "run-approval-custom-action",
+      phaseId: "phase-approval-custom-action",
       logicalSequence: 1,
       sequence: 1,
       timestamp: new Date(0).toISOString(),
       type: AgentEventType.InterruptRequired,
       interrupt: {
         kind: "custom",
-        interruptId: "interrupt-legacy",
+        interruptId: "interrupt-custom-action",
         prompt: "Continue.",
-        actions: [{ id: "legacy-action", name: "continue", input: {} }],
+        actions: [{ id: "custom-action", name: "continue", input: {} }],
       },
     };
 
@@ -716,7 +704,6 @@ describe("Agentdock contracts", () => {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: "approval-missing-tool-call-id",
       runId: "run-approval-missing-tool-call-id",
-      sessionId: "session-approval-missing-tool-call-id",
       phaseId: "phase-approval-missing-tool-call-id",
       logicalSequence: 1,
       sequence: 1,
@@ -738,7 +725,6 @@ describe("Agentdock contracts", () => {
         protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
         eventId: `approval-invalid-${String(toolCallId)}`,
         runId: "run-approval-invalid",
-        sessionId: "session-approval-invalid",
         phaseId: "phase-approval-invalid",
         logicalSequence: 1,
         sequence: 1,
@@ -762,7 +748,6 @@ describe("Agentdock contracts", () => {
     const base = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       runId: "run-approval-fingerprint",
-      sessionId: "session-approval-fingerprint",
       phaseId: "phase-approval-fingerprint",
       timestamp: new Date(0).toISOString(),
     };

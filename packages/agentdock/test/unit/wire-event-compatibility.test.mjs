@@ -63,7 +63,7 @@ test("supported message and tool chunks reduce as canonical AgentEvents", async 
     ],
     ["messages", [{ id: "final-message", content: "done" }, {}]],
   ];
-  const context = new EventContext("wire-run", "wire-compatibility", 0);
+  const context = new EventContext("wire-run", 0);
   const mapper = new WireEventMapper(context);
   const events = [
     context.emit({ type: AgentEventType.RunStarted }),
@@ -100,7 +100,7 @@ test("supported message and tool chunks reduce as canonical AgentEvents", async 
 });
 
 test("tool calls keep correlation IDs across concurrent progress and completion", () => {
-  const context = new EventContext("parallel-tools", "parallel-tools", 0);
+  const context = new EventContext("parallel-tools", 0);
   const mapper = new WireEventMapper(context);
   const events = [
     context.emit({ type: AgentEventType.RunStarted }),
@@ -150,7 +150,7 @@ test("tool calls keep correlation IDs across concurrent progress and completion"
 
 test("fallback message and tool IDs remain unique across resumed mappers", () => {
   const runId = "resumed-run";
-  const firstContext = new EventContext(runId, "thread-1", 0);
+  const firstContext = new EventContext(runId, 0);
   const firstMapper = new WireEventMapper(firstContext);
   const firstMessage = firstMapper
     .map("messages", [{ content: "first" }, {}])
@@ -161,7 +161,7 @@ test("fallback message and tool IDs remain unique across resumed mappers", () =>
     input: {},
   })[0].toolCall.toolCallId;
 
-  const resumedContext = new EventContext(runId, "thread-1", 7);
+  const resumedContext = new EventContext(runId, 7);
   const resumedMapper = new WireEventMapper(resumedContext);
   const resumedMessage = resumedMapper
     .map("messages", [{ content: "second" }, {}])
@@ -190,7 +190,7 @@ test("fallback message and tool IDs remain unique across resumed mappers", () =>
 
 test("LangGraph-provided message and tool-call IDs remain unchanged", () => {
   const mapper = new WireEventMapper(
-    new EventContext("provided-ids", "provided-ids", 0),
+    new EventContext("provided-ids", 0),
   );
   const messageEvents = mapper.map("messages", [
     { id: "langgraph-message-1", content: "answer" },
@@ -213,7 +213,7 @@ test("LangGraph-provided message and tool-call IDs remain unchanged", () => {
 
 test("fallback tool IDs stay correlated through terminal tool events", () => {
   const mapper = new WireEventMapper(
-    new EventContext("fallback-tool", "fallback-tool", 0),
+    new EventContext("fallback-tool", 0),
   );
   const [started] = mapper.map("tools", {
     event: "on_tool_start",
@@ -232,7 +232,7 @@ test("fallback tool IDs stay correlated through terminal tool events", () => {
 });
 
 test("approval interrupts match a streamed partial tool call when IDs are omitted", () => {
-  const context = new EventContext("partial-approval", "partial-approval", 0);
+  const context = new EventContext("partial-approval", 0);
   const mapper = new WireEventMapper(context);
   const start = context.emit({ type: AgentEventType.RunStarted });
   mapper.map("messages", [
@@ -281,7 +281,7 @@ test("approval interrupts match a streamed partial tool call when IDs are omitte
 
 test("unmatched tool lifecycle events fail instead of inventing a call", () => {
   const mapper = new WireEventMapper(
-    new EventContext("unmatched-tool", "unmatched-tool", 0),
+    new EventContext("unmatched-tool", 0),
   );
   assert.throws(
     () =>

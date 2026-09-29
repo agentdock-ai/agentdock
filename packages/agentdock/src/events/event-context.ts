@@ -12,7 +12,6 @@ export class EventContext {
 
   constructor(
     readonly runId: string,
-    readonly sessionId: string,
     logicalSequence: number,
   ) {
     this.logicalSequence = logicalSequence;
@@ -29,7 +28,6 @@ export class EventContext {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: `${this.runId}:${this.logicalSequence}`,
       runId: this.runId,
-      sessionId: this.sessionId,
       logicalSequence: this.logicalSequence,
       phaseId: this.currentPhaseId,
       sequence: this.phaseSequence,

@@ -127,7 +127,6 @@ function transportFailureEvent(previous: AgentEvent): AgentEvent {
     protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
     eventId: `${previous.runId}:${previous.logicalSequence + 1}`,
     runId: previous.runId,
-    sessionId: previous.sessionId,
     logicalSequence: previous.logicalSequence + 1,
     phaseId: previous.phaseId,
     sequence: previous.sequence + 1,

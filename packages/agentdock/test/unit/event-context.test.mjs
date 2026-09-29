@@ -4,7 +4,7 @@ import { AgentEventType } from "@agentdock-ai/contracts";
 import { EventContext } from "../../src/events/event-context.js";
 
 test("each graph update starts a phase with a fresh local sequence", () => {
-  const context = new EventContext("phase-run", "phase-session", 4);
+  const context = new EventContext("phase-run", 4);
   const first = context.emit({ type: AgentEventType.RunStarted });
 
   context.advancePhase();
