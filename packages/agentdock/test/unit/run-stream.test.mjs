@@ -32,6 +32,7 @@ test("persists checkpoint event state before yielding an interrupt", async () =>
         runId: event.runId,
         logicalSequence: event.logicalSequence,
         pendingInterruptId: "approval-1",
+        pendingInterrupt: event.interrupt,
       });
     }
   }
@@ -50,6 +51,63 @@ test("rejects resume without saved event state before starting the graph", async
     /must include agentEventStateSchema and have a pending interrupt/,
   );
   assert.equal(graph.streamCalls.length, 0);
+});
+
+test("rejects a corrupt saved interrupt before starting the graph", async () => {
+  const graph = createGraph({
+    values: {
+      agentdockEventState: {
+        runId: "saved-run",
+        logicalSequence: 4,
+        pendingInterruptId: "approval-1",
+        pendingInterrupt: {
+          kind: "custom",
+          interruptId: "different-id",
+          prompt: "Continue?",
+          actions: [],
+        },
+      },
+    },
+  });
+  const iterator = new RunStream(graph, { recursionLimit: RECURSION_LIMIT })
+    .stream({ threadId: "corrupt-checkpoint", resume: { decisions: [] } })
+    [Symbol.asyncIterator]();
+
+  await assert.rejects(iterator.next(), /pending interrupt/);
+  assert.equal(graph.streamCalls.length, 0);
+});
+
+test("read-back verification rejects a checkpoint that drops interrupt data", async () => {
+  const graph = createGraph({
+    chunks: [
+      [
+        "updates",
+        {
+          __interrupt__: [{ id: "approval-1", value: { prompt: "Approve?" } }],
+        },
+      ],
+    ],
+  });
+  graph.updateState = async (_config, update) => {
+    const persistedState = structuredClone(update.agentdockEventState);
+    if (persistedState.pendingInterrupt) {
+      persistedState.pendingInterrupt.prompt = "Wrong prompt";
+    }
+    graph.values = { ...graph.values, agentdockEventState: persistedState };
+  };
+
+  const events = await collect(
+    new RunStream(graph, { recursionLimit: RECURSION_LIMIT }).stream({
+      input: {},
+      threadId: "bad-read-back",
+    }),
+  );
+
+  assert.equal(events.at(-1).type, AgentEventType.RunFailed);
+  assert.equal(
+    events.some((event) => event.type === AgentEventType.InterruptRequired),
+    false,
+  );
 });
 
 test("resume restores run identity and advances the saved logical sequence", async () => {

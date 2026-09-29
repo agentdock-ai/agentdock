@@ -1,7 +1,7 @@
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { MemorySaver } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware } from "langchain";
-import { agentEventStateSchema, serveAgent } from "@agentdock-ai/agentdock";
+import { agentEventStateSchema, Agentdock } from "@agentdock-ai/agentdock";
 import { contextSchema, getWeather, sendEmail } from "./tools.js";
 
 const model = new ChatOpenRouter({
@@ -21,4 +21,4 @@ export const graph = createAgent({
   middleware: [humanInTheLoopMiddleware({ interruptOn: { send_email: true } })],
 });
 
-export const runtime = serveAgent(graph);
+export const runtime = new Agentdock(graph);

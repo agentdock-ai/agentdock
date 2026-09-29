@@ -33,8 +33,6 @@ export class WireEventMapper {
   private readonly activeTools = new Map<string, ActiveTool>();
   private readonly unnamedTools = new Map<string, string[]>();
   private readonly partialToolCalls = new Map<string, PartialToolCall>();
-  private messageCounter = 0;
-  private toolCounter = 0;
 
   constructor(private readonly context: EventContext) {}
 
@@ -75,7 +73,7 @@ export class WireEventMapper {
     const messageId =
       typeof rawMessage.id === "string" && rawMessage.id.length > 0
         ? rawMessage.id
-        : `${this.context.runId}:message:${++this.messageCounter}`;
+        : `${this.context.runId}:message:${crypto.randomUUID()}`;
     this.collectToolCallChunks(messageId, rawMessage);
     const events: AgentEvent[] = [];
     const content = toContentParts(rawMessage.content);
@@ -143,7 +141,7 @@ export class WireEventMapper {
 
     if (rawChunk.event === "on_tool_start") {
       const toolCallId =
-        suppliedId ?? `${this.context.runId}:tool:${++this.toolCounter}`;
+        suppliedId ?? `${this.context.runId}:tool:${crypto.randomUUID()}`;
       const toolCall: ToolCallRecord = {
         toolCallId,
         name: toolName,

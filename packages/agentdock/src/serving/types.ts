@@ -81,6 +81,9 @@ export type GraphContext<Graph> =
 
 export interface ServableCompiledGraph {
   stream(input: never, options?: never): unknown;
-  getState(config: never): unknown;
-  updateState(config: never, update: never): unknown;
+  getState(config: LangGraphRunnableConfig): Promise<{ values: unknown }>;
+  updateState(
+    config: LangGraphRunnableConfig,
+    update: Record<string, unknown>,
+  ): unknown;
 }

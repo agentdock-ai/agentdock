@@ -7,7 +7,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { agentEventStateSchema, serveAgent } from "../../src/index.js";
+import { agentEventStateSchema, Agentdock } from "../../src/index.js";
 import { EventContext } from "../../src/events/event-context.js";
 import { createSseResponse } from "../../src/transports/web/to-response.js";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
@@ -27,7 +27,7 @@ const MESSAGE_CHUNK = [
 
 test("Node pipe writes SSE headers and waits for drain before its next event", async () => {
   const graph = createGraph({ chunks: [MESSAGE_CHUNK] });
-  const runtime = serveAgent(graph);
+  const runtime = new Agentdock(graph);
   const response = new FakeResponse({ backpressureOnWrite: 1 });
   let nextSettled = false;
   const piping = runtime
@@ -76,7 +76,7 @@ test("stream forwards LangGraph config and keeps the server thread ID authoritat
   };
 
   await collect(
-    serveAgent(graph).stream({
+    new Agentdock(graph).stream({
       input: { messages: [] },
       threadId: "server-thread-1",
       config,
@@ -100,7 +100,7 @@ test("stream forwards LangGraph config and keeps the server thread ID authoritat
 
 test("a client close while waiting for drain aborts and cleans up", async () => {
   const response = new FakeResponse({ backpressureOnWrite: 1 });
-  const piping = serveAgent(createGraph({ chunks: [MESSAGE_CHUNK] })).pipe(
+  const piping = new Agentdock(createGraph({ chunks: [MESSAGE_CHUNK] })).pipe(
     response,
     {
       input: { messages: [{ role: "user", content: "hi" }] },
@@ -120,7 +120,7 @@ test("a client close while waiting for drain aborts and cleans up", async () => 
 test("pipe interoperates with a real node:http ServerResponse", async ({
   skip,
 }) => {
-  const runtime = serveAgent(createGraph({ chunks: [MESSAGE_CHUNK] }));
+  const runtime = new Agentdock(createGraph({ chunks: [MESSAGE_CHUNK] }));
   const server = createServer((request, response) => {
     void runtime.pipe(response, {
       input: { messages: [{ role: "user", content: "hi" }] },
@@ -169,7 +169,7 @@ test("pipe interoperates with a real node:http ServerResponse", async ({
 
 test("a disconnected Node response aborts the graph and cleans up its iterator", async () => {
   const graph = createGraph({ waitForAbort: true });
-  const runtime = serveAgent(graph);
+  const runtime = new Agentdock(graph);
   const response = new FakeResponse();
   const piping = runtime.pipe(response, {
     input: { messages: [{ role: "user", content: "hi" }] },
@@ -189,7 +189,7 @@ test("a disconnected Node response aborts the graph and cleans up its iterator",
 test("Node disconnect aborts a cooperative LangChain tool", async () => {
   const cooperative = createCooperativeAgent();
   const response = new FakeResponse();
-  const piping = serveAgent(cooperative.graph).pipe(response, {
+  const piping = new Agentdock(cooperative.graph).pipe(response, {
     threadId: "node-cooperative-tool",
     input: { messages: [{ role: "user", content: "wait" }] },
   });
@@ -213,7 +213,7 @@ test("a pre-aborted caller signal becomes a cancelled terminal event", async () 
   controller.abort(new Error("already cancelled"));
   const graph = createGraph({ honorAbort: true });
   const events = await collect(
-    serveAgent(graph).stream({
+    new Agentdock(graph).stream({
       input: { messages: [{ role: "user", content: "hi" }] },
       threadId: "pre-aborted",
       signal: controller.signal,
@@ -231,7 +231,7 @@ test("a graph that stops cleanly after cancellation emits run.cancelled", async 
   const controller = new AbortController();
   const events = [];
   const collecting = (async () => {
-    for await (const event of serveAgent(graph).stream({
+    for await (const event of new Agentdock(graph).stream({
       input: { messages: [{ role: "user", content: "hi" }] },
       threadId: "graceful-cancel",
       signal: controller.signal,
@@ -250,7 +250,7 @@ test("a graph that stops cleanly after cancellation emits run.cancelled", async 
 
 test("consumer early return aborts the graph and returns its iterator", async () => {
   const graph = createGraph({ waitForAbort: true });
-  const iterator = serveAgent(graph)
+  const iterator = new Agentdock(graph)
     .stream({
       input: { messages: [{ role: "user", content: "hi" }] },
       threadId: "early-return",
@@ -267,7 +267,7 @@ test("consumer early return aborts the graph and returns its iterator", async ()
 });
 
 test("graph failures are framed once as a safe terminal event and end once", async () => {
-  const runtime = serveAgent(
+  const runtime = new Agentdock(
     createGraph({ error: new Error("database secret") }),
   );
   const response = new FakeResponse();
@@ -286,7 +286,7 @@ test("graph failures are framed once as a safe terminal event and end once", asy
 });
 
 test("a transport write failure sends one safe terminal event", async () => {
-  const runtime = serveAgent(createGraph({ chunks: [MESSAGE_CHUNK] }));
+  const runtime = new Agentdock(createGraph({ chunks: [MESSAGE_CHUNK] }));
   const response = new FakeResponse();
   const write = response.write.bind(response);
   let writes = 0;
@@ -312,7 +312,7 @@ test("a transport write failure sends one safe terminal event", async () => {
 });
 
 test("invalid runs fail before committing a Node or Web response", async () => {
-  const runtime = serveAgent(createGraph({ chunks: [MESSAGE_CHUNK] }));
+  const runtime = new Agentdock(createGraph({ chunks: [MESSAGE_CHUNK] }));
   const response = new FakeResponse();
   const invalidRun = { threadId: "" };
 
@@ -351,13 +351,13 @@ test("Web stream errors propagate to the reader", async () => {
   await assert.rejects(reader.read(), /private iterator detail/);
 });
 
-test("serveAgent rejects an invalid recursion limit", () => {
-  assert.throws(() => serveAgent(createGraph(), { recursionLimit: 0 }));
+test("Agentdock rejects an invalid recursion limit", () => {
+  assert.throws(() => new Agentdock(createGraph(), { recursionLimit: 0 }));
 });
 
 test("Web Response uses the same event sequence and cancels graph work with its reader", async () => {
   const webGraph = createGraph({ chunks: [MESSAGE_CHUNK] });
-  const webResponse = await serveAgent(webGraph).toResponse({
+  const webResponse = await new Agentdock(webGraph).toResponse({
     input: { messages: [{ role: "user", content: "hi" }] },
     threadId: "web-events",
   });
@@ -365,7 +365,7 @@ test("Web Response uses the same event sequence and cancels graph work with its 
   const webEvents = readEvents([webBody]);
 
   const nodeResponse = new FakeResponse();
-  await serveAgent(createGraph({ chunks: [MESSAGE_CHUNK] })).pipe(
+  await new Agentdock(createGraph({ chunks: [MESSAGE_CHUNK] })).pipe(
     nodeResponse,
     {
       input: { messages: [{ role: "user", content: "hi" }] },
@@ -378,7 +378,7 @@ test("Web Response uses the same event sequence and cancels graph work with its 
   );
 
   const graph = createGraph({ waitForAbort: true });
-  const response = await serveAgent(graph).toResponse({
+  const response = await new Agentdock(graph).toResponse({
     input: { messages: [{ role: "user", content: "hi" }] },
     threadId: "web-cancel",
   });
@@ -393,7 +393,7 @@ test("Web Response uses the same event sequence and cancels graph work with its 
 
 test("Web reader cancellation aborts a cooperative LangChain tool", async () => {
   const cooperative = createCooperativeAgent();
-  const response = await serveAgent(cooperative.graph).toResponse({
+  const response = await new Agentdock(cooperative.graph).toResponse({
     threadId: "web-cooperative-tool",
     input: { messages: [{ role: "user", content: "wait" }] },
   });
@@ -413,7 +413,7 @@ test("Web reader cancellation aborts a cooperative LangChain tool", async () => 
 test("Web Response carries reducer-valid identity through a separate resume request", async () => {
   const { graph, executions } = createApprovalGraph();
   const threadId = "web-approval-resume";
-  const first = await serveAgent(graph).toResponse({
+  const first = await new Agentdock(graph).toResponse({
     threadId,
     input: { messages: [{ role: "user", content: "send" }] },
   });
@@ -421,7 +421,7 @@ test("Web Response carries reducer-valid identity through a separate resume requ
   assert.equal(startEvents.at(-1).type, AgentEventType.InterruptRequired);
   assert.equal(executions.length, 0);
 
-  const next = await serveAgent(graph).toResponse({
+  const next = await new Agentdock(graph).toResponse({
     threadId,
     resume: { decisions: [{ type: "approve" }] },
   });
@@ -440,7 +440,7 @@ test("Node pipe resumes a checkpointed approval on the same thread and run", asy
   const { graph, executions } = createApprovalGraph();
   const threadId = "node-approval-resume";
   const startResponse = new FakeResponse();
-  await serveAgent(graph).pipe(startResponse, {
+  await new Agentdock(graph).pipe(startResponse, {
     threadId,
     input: { messages: [{ role: "user", content: "send" }] },
   });
@@ -448,7 +448,7 @@ test("Node pipe resumes a checkpointed approval on the same thread and run", asy
   assert.equal(startEvents.at(-1).type, AgentEventType.InterruptRequired);
 
   const resumeResponse = new FakeResponse();
-  await serveAgent(graph).pipe(resumeResponse, {
+  await new Agentdock(graph).pipe(resumeResponse, {
     threadId,
     resume: { decisions: [{ type: "approve" }] },
   });

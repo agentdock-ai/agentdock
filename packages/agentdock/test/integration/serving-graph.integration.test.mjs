@@ -5,7 +5,11 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { agentEventStateSchema, serveAgent } from "../../src/index.js";
+import {
+  agentEventStateSchema,
+  Agentdock,
+  withAgentEventState,
+} from "../../src/index.js";
 import {
   Command,
   END,
@@ -32,11 +36,9 @@ test("event state schema composes with createAgent and a general StateGraph", as
   });
   assert.equal(typeof agent.stream, "function");
 
-  const base = new StateSchema({ value: z.string().default("") });
-  const combined = new StateSchema({
-    ...base.fields,
-    ...agentEventStateSchema.shape,
-  });
+  const combined = new StateSchema(
+    withAgentEventState({ value: z.string().default("") }).shape,
+  );
   const graph = new StateGraph(combined)
     .addNode("step", () => ({ value: "done" }))
     .addEdge(START, "step")
@@ -47,7 +49,7 @@ test("event state schema composes with createAgent and a general StateGraph", as
 
 test("event identity and sequence survive interrupt/resume with a fresh runtime", async () => {
   const { sent, contexts, graph, threadId } = await createApprovalAgent();
-  const startRuntime = serveAgent(graph);
+  const startRuntime = new Agentdock(graph);
   const startEvents = await collect(
     startRuntime.stream({
       input: { messages: [{ role: "user", content: "send hello" }] },
@@ -67,9 +69,10 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
     runId: startEvents[0].runId,
     logicalSequence: startEvents.at(-1).logicalSequence,
     pendingInterruptId: startEvents.at(-1).interrupt.interruptId,
+    pendingInterrupt: startEvents.at(-1).interrupt,
   });
 
-  const resumeRuntime = serveAgent(graph);
+  const resumeRuntime = new Agentdock(graph);
   const resumeEvents = await collect(
     resumeRuntime.stream({
       threadId,
@@ -90,6 +93,13 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
     AgentEventType.RunCompleted,
     JSON.stringify(resumeEvents),
   );
+  const completedCheckpoint = await graph.getState({
+    configurable: { thread_id: threadId },
+  });
+  assert.deepEqual(completedCheckpoint.values.agentdockEventState, {
+    runId: startEvents[0].runId,
+    logicalSequence: resumeEvents.at(-1).logicalSequence,
+  });
 
   const finalState = [...startEvents, ...resumeEvents].reduce(
     reduceAgentEvent,
@@ -101,7 +111,7 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
 
 test("checkpoint event state is durable before the interrupt event is yielded", async () => {
   const { sent, graph, threadId } = await createApprovalAgent();
-  const iterator = serveAgent(graph)
+  const iterator = new Agentdock(graph)
     .stream({
       input: { messages: [{ role: "user", content: "send hello" }] },
       threadId,
@@ -127,9 +137,36 @@ test("checkpoint event state is durable before the interrupt event is yielded", 
     runId: interrupt.runId,
     logicalSequence: interrupt.logicalSequence,
     pendingInterruptId: interrupt.interrupt.interruptId,
+    pendingInterrupt: interrupt.interrupt,
   });
   assert.equal(sent.length, 0);
   await iterator.return();
+});
+
+test("cold client hydrates from checkpoint and reduces resume events", async () => {
+  const { graph, threadId } = await createApprovalAgent();
+  const startEvents = await collect(
+    new Agentdock(graph).stream({
+      input: { messages: [{ role: "user", content: "send hello" }] },
+      threadId,
+      context: { userId: "user-42" },
+    }),
+  );
+  const seed = await new Agentdock(graph).getResumeState(threadId);
+  assert.ok(seed);
+  assert.equal(seed.status, "waiting");
+  assert.deepEqual(seed.interrupt, startEvents.at(-1).interrupt);
+
+  const resumeEvents = await collect(
+    new Agentdock(graph).stream({
+      threadId,
+      resume: { decisions: [{ type: "approve" }] },
+      context: { userId: "user-42" },
+    }),
+  );
+  const finalState = resumeEvents.reduce(reduceAgentEvent, seed);
+  assert.equal(finalState.status, "completed");
+  assert.equal(finalState.interrupt, null);
 });
 
 test("independent starts on one thread receive new event run identities", async () => {
@@ -144,7 +181,7 @@ test("independent starts on one thread receive new event run identities", async 
     checkpointer: new MemorySaver(),
     stateSchema: agentEventStateSchema,
   }).graph;
-  const runtime = serveAgent(graph);
+  const runtime = new Agentdock(graph);
   const input = { messages: [{ role: "user", content: "hello" }] };
   const first = await collect(
     runtime.stream({ threadId: "same-thread", input }),
@@ -176,7 +213,7 @@ test("one runtime keeps concurrent run state isolated", async () => {
     checkpointer: new MemorySaver(),
     stateSchema: agentEventStateSchema,
   }).graph;
-  const runtime = serveAgent(graph);
+  const runtime = new Agentdock(graph);
   const [first, second] = await Promise.all([
     collect(
       runtime.stream({
@@ -210,7 +247,7 @@ test("resume requires checkpointed event state and a pending interrupt", async (
     .addEdge(START, "step")
     .addEdge("step", END)
     .compile({ checkpointer: new MemorySaver() });
-  const runtime = serveAgent(graph);
+  const runtime = new Agentdock(graph);
 
   await assert.rejects(
     async () =>

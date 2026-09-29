@@ -2,6 +2,7 @@ import {
   AgentEventType,
   cloneJsonValue,
   type AgentEvent,
+  type AgentInterrupt,
   type JsonValue,
 } from "@agentdock-ai/contracts";
 import { Command, type LangGraphRunnableConfig } from "@langchain/langgraph";
@@ -13,7 +14,7 @@ import { EventContext } from "../events/event-context.js";
 import { WireEventMapper } from "../events/from-langgraph.js";
 import {
   AGENT_EVENT_STATE_KEY,
-  readAgentEventState,
+  parseAgentEventState,
   type AgentEventState,
 } from "../langgraph/event-state.js";
 import { parseStreamChunk } from "../langgraph/parse-stream-chunk.js";
@@ -56,6 +57,7 @@ interface RuntimeGraphConfig {
 type PendingEventState = AgentEventState & {
   runId: string;
   pendingInterruptId: string;
+  pendingInterrupt?: AgentInterrupt;
 };
 
 interface RunSession {
@@ -121,6 +123,7 @@ export class RunStream {
               runId: session.runId,
               logicalSequence: event.logicalSequence,
               pendingInterruptId: event.interrupt.interruptId,
+              pendingInterrupt: event.interrupt,
             });
           }
           yield event;
@@ -219,16 +222,21 @@ export class RunStream {
     if (!("resume" in run)) return null;
 
     const snapshot = await this.graph.getState(config);
-    const state = readAgentEventState(snapshot.values);
-    if (!state?.runId || !state.pendingInterruptId) {
+    const result = parseAgentEventState(snapshot.values);
+    if (
+      result.status !== "valid" ||
+      result.interruptStatus === "none" ||
+      !result.state.runId ||
+      !result.state.pendingInterruptId
+    ) {
       throw new Error(
         "Cannot resume this thread: the graph must include agentEventStateSchema and have a pending interrupt.",
       );
     }
     return {
-      ...state,
-      runId: state.runId,
-      pendingInterruptId: state.pendingInterruptId,
+      ...result.state,
+      runId: result.state.runId,
+      pendingInterruptId: result.state.pendingInterruptId,
     };
   }
 
@@ -282,12 +290,16 @@ export class RunStream {
       [AGENT_EVENT_STATE_KEY]: state,
     });
     const snapshot = await this.graph.getState(session.config);
-    const restored = readAgentEventState(snapshot.values);
+    const result = parseAgentEventState(snapshot.values);
+    const restored = result.status === "valid" ? result.state : null;
     if (
+      result.status !== "valid" ||
       !restored ||
       restored.runId !== state.runId ||
       restored.logicalSequence !== state.logicalSequence ||
-      restored.pendingInterruptId !== state.pendingInterruptId
+      restored.pendingInterruptId !== state.pendingInterruptId ||
+      stableJson(restored.pendingInterrupt) !==
+        stableJson(state.pendingInterrupt)
     ) {
       throw new Error("The graph did not persist Agentdock event state.");
     }
@@ -356,4 +368,15 @@ export class RunStream {
       typeof value.removeEventListener === "function"
     );
   }
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
 }

@@ -8,9 +8,10 @@
   </p>
 </div>
 
-Agentdock handles HTTP/SSE framing, backpressure, client disconnects, and
-response cleanup, while LangGraph stays in charge of running the agent. It maps
-supported LangGraph stream output to the Agentdock event contract.
+The `Agentdock` class adapts a compiled LangGraph graph to the Agentdock event
+contract and handles SSE backpressure, client disconnects, and response cleanup.
+The optional `@agentdock-ai/agentdock-http` package adds HTTP routes and a Node
+bridge.
 
 LangGraph and LangChain own agent execution, tools, models, checkpoints,
 interrupts, and resume. Your application owns request parsing, authentication,
@@ -21,6 +22,7 @@ authorization, trusted thread IDs, side effects, and checkpointer lifecycle.
 ```bash
 npm install @agentdock-ai/agentdock @agentdock-ai/contracts \
   @langchain/langgraph langchain @langchain/openrouter zod
+npm install @agentdock-ai/agentdock-http
 ```
 
 Install the LangChain provider and LangGraph checkpointer that your application
@@ -32,7 +34,7 @@ uses. Agentdock does not configure or manage either one.
 import { MemorySaver } from "@langchain/langgraph";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { createAgent } from "langchain";
-import { agentEventStateSchema, serveAgent } from "@agentdock-ai/agentdock";
+import { agentEventStateSchema, Agentdock } from "@agentdock-ai/agentdock";
 
 const graph = createAgent({
   model: new ChatOpenRouter({
@@ -45,13 +47,34 @@ const graph = createAgent({
   systemPrompt: "You are a helpful assistant.",
 });
 
-const runtime = serveAgent(graph);
+const runtime = new Agentdock(graph);
 ```
 
 `agentEventStateSchema` is needed when you want Agentdock's compatibility event
 stream to preserve its run identity and sequence across an interrupt/resume
 request. It is Agentdock event metadata; LangGraph's own checkpoint/resume
 mechanism is provided by the checkpointer and `thread_id`.
+
+Use `withAgentEventState(fields)` when the graph also has application state, and use
+`getResumeState(threadId)` to seed a fresh client from a checkpoint:
+
+```ts
+import { Agentdock, withAgentEventState } from "@agentdock-ai/agentdock";
+import { z } from "zod";
+
+const stateSchema = withAgentEventState({ note: z.string().default("") });
+const agent = new Agentdock(graph);
+const resumeState = await agent.getResumeState(authorizedThreadId);
+```
+
+For explicit hydration outcomes, pass the checkpoint's `values` to
+`createResumeState(values, authorizedThreadId)`. It returns `ready` with reducer
+control state, `no_pending_interrupt`, `legacy_checkpoint` with an interrupt
+ID, or `invalid_checkpoint`. Only a complete, validated pending interrupt can
+seed a fresh client. An older checkpoint that stores only the interrupt ID can
+still be resumed by a warm client that retained its reducer state. Hydration
+restores control state; load conversation history separately. Generated
+fallback message and tool-call IDs are UUID-based opaque identifiers.
 
 ## Connect your HTTP route
 
@@ -81,6 +104,24 @@ await runtime.pipe(response, {
 `runtime.stream(run)` for a transport-free event stream or
 `runtime.toResponse(run)` for Web-standard servers. The app must authorize
 thread access; never trust a client-provided thread ID without checking it.
+
+For conventional routes, install `@agentdock-ai/agentdock-http` and mount its
+Web handler after supplying application authorization:
+
+```ts
+import { AgentdockServer } from "@agentdock-ai/agentdock-http";
+
+const server = new AgentdockServer({
+  agent: runtime,
+  authorize: async (_request, threadId) =>
+    (await canAccessThread(authenticatedUser, threadId))
+      ? { context: { userId: authenticatedUser.id } }
+      : null,
+});
+
+export const POST = server.toHttp();
+export const GET = server.toHttp();
+```
 
 ## Production notes
 

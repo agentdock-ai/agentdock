@@ -6,7 +6,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { agentEventStateSchema, serveAgent } from "../../src/index.js";
+import { agentEventStateSchema, Agentdock } from "../../src/index.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
 import { z } from "zod";
@@ -31,7 +31,7 @@ test("serves a completed createAgent workflow over an authenticated SSE route", 
     stateSchema: agentEventStateSchema,
     checkpointer: new MemorySaver(),
   }).graph;
-  const runtime = serveAgent(graph);
+  const runtime = new Agentdock(graph);
   const server = createServer((request, response) => {
     void serveRequest(request, response, async (body, userId) => {
       await runtime.pipe(response, {
@@ -84,7 +84,7 @@ test("resumes an approval across separate SSE requests on the same user thread",
   const { graph, sideEffects } = createApprovalGraph();
   const server = createServer((request, response) => {
     void serveRequest(request, response, async (body, userId) => {
-      const runtime = serveAgent(graph);
+      const runtime = new Agentdock(graph);
       const run =
         body.resume === undefined
           ? {

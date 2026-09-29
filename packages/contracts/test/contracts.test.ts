@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_EVENT_PROTOCOL_VERSION,
   AgentEventType,
+  assertAgentInterrupt,
   type AgentEvent,
   createAgentReducerState,
   reduceAgentEvent,
@@ -11,6 +12,34 @@ import {
 } from "../src/index.js";
 
 describe("Agentdock contracts", () => {
+  it("validates the shared interrupt contract and its JSON payloads", () => {
+    const interrupt = {
+      kind: "tool-approval",
+      interruptId: "interrupt-1",
+      prompt: "Approve?",
+      payload: { source: "checkpoint" },
+      actions: [
+        {
+          id: "action-1",
+          name: "send_message",
+          toolCallId: "call-1",
+          input: { text: "hello" },
+        },
+      ],
+    };
+
+    expect(() => assertAgentInterrupt(interrupt)).not.toThrow();
+    expect(() =>
+      assertAgentInterrupt({
+        ...interrupt,
+        actions: [{ ...interrupt.actions[0], toolCallId: "" }],
+      }),
+    ).toThrow(/toolCallId must be a non-empty string/);
+    expect(() =>
+      assertAgentInterrupt({ ...interrupt, payload: { invalid: undefined } }),
+    ).toThrow(/JSON-serializable/);
+  });
+
   it("defines a JSON-serializable event contract", () => {
     const event: AgentEvent = {
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,

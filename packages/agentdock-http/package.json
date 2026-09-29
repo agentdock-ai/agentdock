@@ -1,0 +1,44 @@
+{
+  "name": "@agentdock-ai/agentdock-http",
+  "version": "0.2.0",
+  "description": "HTTP routes and Node adapters for Agentdock",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentdock-ai/agentdock.git",
+    "directory": "packages/agentdock-http"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "yarn clean && tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run test",
+    "prepack": "yarn build"
+  },
+  "dependencies": {
+    "@agentdock-ai/agentdock": "^0.2.0",
+    "@agentdock-ai/contracts": "^0.2.0",
+    "@types/node": "^26.1.2"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

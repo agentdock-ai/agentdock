@@ -306,7 +306,7 @@ export function assertAgentEventInput(
       assertToolError(value.error, "Agent event.error");
       return;
     case AgentEventType.InterruptRequired:
-      assertInterrupt(value.interrupt, "Agent event.interrupt");
+      assertAgentInterrupt(value.interrupt);
       return;
     case AgentEventType.InterruptResolved:
       assertString(value.interruptId, "Agent event.interruptId");
@@ -566,6 +566,12 @@ function assertToolError(
   const error = value as ToolErrorRecord;
   assertString(error.error, `${path}.error`);
   if (error.code !== undefined) assertString(error.code, `${path}.code`);
+}
+
+export function assertAgentInterrupt(
+  value: unknown,
+): asserts value is AgentInterrupt {
+  assertInterrupt(value, "Agent interrupt");
 }
 
 function assertInterrupt(

@@ -33,7 +33,7 @@ interrupt and resume. That small checkpointed extension preserves event
 identity and sequence across separate requests and runtime instances.
 
 ```ts
-import { serveAgent, agentEventStateSchema } from "@agentdock-ai/agentdock";
+import { Agentdock, agentEventStateSchema } from "@agentdock-ai/agentdock";
 import { createAgent, tool } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
@@ -52,8 +52,24 @@ const graph = createAgent({
   checkpointer,
 }).graph;
 
-const runtime = serveAgent(graph);
+const runtime = new Agentdock(graph);
 ```
+
+Use `withAgentEventState(fields)` to compose the required event checkpoint
+field with application state. It reserves `agentdockEventState` for Agentdock
+and preserves the field validators and defaults supplied by the application.
+`getMessages(threadId)` reads a checkpoint's message channel.
+
+For cold-client hydration, `createResumeState(checkpoint.values, threadId)`
+returns an explicit result: `ready` with a reducer seed, `no_pending_interrupt`,
+`legacy_checkpoint` with an interrupt ID, or `invalid_checkpoint`. A ready seed
+contains run identity, sequence, status, and the complete pending interrupt;
+conversation history remains the application's responsibility. A legacy
+checkpoint containing only an interrupt ID remains resumable by a client that
+already retained its reducer state, but cannot seed a new client.
+
+Fallback message and tool-call IDs are UUID-based and opaque. Keep the IDs
+received in events for correlation; do not rely on their generated format.
 
 After authenticating and authorizing the request, give the runtime the
 application-derived thread ID and graph input:
@@ -100,6 +116,10 @@ await runtime.pipe(response, {
 `runtime.toResponse(run)` returns a Web `Response` backed by a cancelable
 `ReadableStream` for Web-standard servers.
 
+For built-in HTTP routes, install `@agentdock-ai/agentdock-http` and construct
+`AgentdockServer` with this `Agentdock` instance plus an application-owned
+`authorize` callback.
+
 ## Operational ownership
 
 - Your app assigns and authorizes every `threadId`; treat it as a security
@@ -118,7 +138,7 @@ await runtime.pipe(response, {
 
 The runtime emits the JSON-safe event types and reducer from
 [`@agentdock-ai/contracts`](https://www.npmjs.com/package/@agentdock-ai/contracts).
-The package includes only the `serveAgent` runtime and checkpoint-backed event
+The package includes the `Agentdock` class and checkpoint-backed event
 state schema; agent loops, tool registries, providers, and session stores remain
 LangChain/LangGraph or application responsibilities.
 

@@ -5,7 +5,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { serveAgent } from "../../src/index.js";
+import { Agentdock } from "../../src/index.js";
 import { EventContext } from "../../src/events/event-context.js";
 import { WireEventMapper } from "../../src/events/from-langgraph.js";
 
@@ -148,6 +148,89 @@ test("tool calls keep correlation IDs across concurrent progress and completion"
   assert.equal(state.toolProgress[0].toolCallId, "call-b");
 });
 
+test("fallback message and tool IDs remain unique across resumed mappers", () => {
+  const runId = "resumed-run";
+  const firstContext = new EventContext(runId, "thread-1", 0);
+  const firstMapper = new WireEventMapper(firstContext);
+  const firstMessage = firstMapper
+    .map("messages", [{ content: "first" }, {}])
+    .find((event) => event.type === AgentEventType.MessageStarted).messageId;
+  const firstTool = firstMapper.map("tools", {
+    event: "on_tool_start",
+    name: "read",
+    input: {},
+  })[0].toolCall.toolCallId;
+
+  const resumedContext = new EventContext(runId, "thread-1", 7);
+  const resumedMapper = new WireEventMapper(resumedContext);
+  const resumedMessage = resumedMapper
+    .map("messages", [{ content: "second" }, {}])
+    .find((event) => event.type === AgentEventType.MessageStarted).messageId;
+  const resumedTool = resumedMapper.map("tools", {
+    event: "on_tool_start",
+    name: "read",
+    input: {},
+  })[0].toolCall.toolCallId;
+
+  assert.match(firstMessage, /^resumed-run:message:/);
+  assert.match(resumedMessage, /^resumed-run:message:/);
+  assert.match(
+    firstMessage,
+    /^resumed-run:message:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+  assert.notEqual(firstMessage, resumedMessage);
+  assert.match(firstTool, /^resumed-run:tool:/);
+  assert.match(resumedTool, /^resumed-run:tool:/);
+  assert.match(
+    firstTool,
+    /^resumed-run:tool:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+  assert.notEqual(firstTool, resumedTool);
+});
+
+test("LangGraph-provided message and tool-call IDs remain unchanged", () => {
+  const mapper = new WireEventMapper(
+    new EventContext("provided-ids", "provided-ids", 0),
+  );
+  const messageEvents = mapper.map("messages", [
+    { id: "langgraph-message-1", content: "answer" },
+    {},
+  ]);
+  const toolEvents = mapper.map("tools", {
+    event: "on_tool_start",
+    toolCallId: "langgraph-tool-1",
+    name: "read",
+    input: {},
+  });
+
+  assert.equal(
+    messageEvents.find((event) => event.type === AgentEventType.MessageStarted)
+      .messageId,
+    "langgraph-message-1",
+  );
+  assert.equal(toolEvents[0].toolCall.toolCallId, "langgraph-tool-1");
+});
+
+test("fallback tool IDs stay correlated through terminal tool events", () => {
+  const mapper = new WireEventMapper(
+    new EventContext("fallback-tool", "fallback-tool", 0),
+  );
+  const [started] = mapper.map("tools", {
+    event: "on_tool_start",
+    name: "read",
+    input: { path: "a" },
+  });
+  const [completed] = mapper.map("tools", {
+    event: "on_tool_end",
+    name: "read",
+    output: "contents",
+  });
+
+  assert.equal(started.type, AgentEventType.ToolCalled);
+  assert.equal(completed.type, AgentEventType.ToolCompleted);
+  assert.equal(started.toolCall.toolCallId, completed.result.toolCallId);
+});
+
 test("approval interrupts match a streamed partial tool call when IDs are omitted", () => {
   const context = new EventContext("partial-approval", "partial-approval", 0);
   const mapper = new WireEventMapper(context);
@@ -214,7 +297,7 @@ test("unmatched tool lifecycle events fail instead of inventing a call", () => {
 
 test("custom interrupts map to the event contract and unsupported chunks fail", async () => {
   const events = await collect(
-    serveAgent(
+    new Agentdock(
       createGraph([
         [
           "updates",
@@ -241,7 +324,7 @@ test("custom interrupts map to the event contract and unsupported chunks fail", 
   assert.equal(state.status, "waiting");
 
   const failed = await collect(
-    serveAgent(createGraph([["values", {}]])).stream({
+    new Agentdock(createGraph([["values", {}]])).stream({
       threadId: "unknown-mode",
       input: { messages: [] },
     }),
@@ -252,7 +335,7 @@ test("custom interrupts map to the event contract and unsupported chunks fail", 
 
 test("LangGraph update chunks advance the event phase", async () => {
   const events = await collect(
-    serveAgent(
+    new Agentdock(
       createGraph([
         ["updates", { agent: { step: "model-started" } }],
         ["messages", [{ id: "phase-message", content: "answer" }, {}]],
