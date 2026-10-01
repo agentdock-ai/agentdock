@@ -28,12 +28,11 @@ uses.
 
 ## Serve a compiled graph
 
-Use `withAgentEventState(fields)` in the graph's state schema when the graph can
-interrupt and resume. Its `agentEventState` field preserves event identity,
-sequence, and the full pending interrupt across requests and runtime instances.
+A native compiled graph needs no serving state fields. Agentdock reads pending
+tasks and forwards native execution without calling `updateState()`.
 
 ```ts
-import { Agentdock, withAgentEventState } from "@agentdock-ai/agentdock";
+import { Agentdock } from "@agentdock-ai/agentdock";
 import { createAgent, tool } from "langchain";
 import { MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
@@ -48,25 +47,22 @@ const lookup = tool(async ({ city }) => ({ city, forecast: "Sunny" }), {
 const graph = createAgent({
   model, // Supply a LangChain chat model from your provider integration.
   tools: [lookup],
-  stateSchema: withAgentEventState({}),
   checkpointer,
 }).graph;
 
 const runtime = new Agentdock(graph);
 ```
 
-Use `withAgentEventState(fields)` to compose the required event checkpoint
-field with application state. It reserves `agentEventState` for Agentdock
-and preserves the field validators and defaults supplied by the application.
-`getMessages(threadId)` reads a checkpoint's message channel.
+`getMessages(threadId, { channel?, config? })` reads a checkpoint's message channel.
+`getResumeState(threadId, config?)` returns a reducer seed for native pending
+interrupts or static breakpoints, or `null` when none are pending. Reads preserve
+saver configuration and overwrite `configurable.thread_id` with the authorized
+thread ID. The seed contains `interrupts`, the native IDs and complete payloads,
+and `runId: null`; load conversation history separately.
 
-For cold-client hydration, `runtime.getResumeState(threadId)` returns a reducer
-seed only when the checkpoint contains a complete, validated pending interrupt.
-The seed restores run identity, sequence, and interrupt status; load conversation
-history separately.
-
-Fallback message and tool-call IDs are UUID-based and opaque. Keep the IDs
-received in events for correlation; do not rely on their generated format.
+Every invocation receives a fresh `runId` and sequence starting at 1. IDs in child
+graph events are scoped by the optional `namespace` to avoid collisions. Treat
+message and tool IDs as opaque correlation values.
 
 After authenticating and authorizing the request, give the runtime the
 application-derived thread ID and graph input:
@@ -99,7 +95,10 @@ calling it.
 ## Resume an interrupt
 
 Use the same authorized thread ID and pass LangGraph's resume value unchanged.
-The graph and checkpointer own the approval policy and resume payload shape.
+The graph and checkpointer own the approval policy and execution. Agentdock
+validates human-in-the-loop decision shapes against the native review configuration
+before invocation or response headers. Invalid shapes leave the native checkpoint
+untouched and reject the call.
 
 ```ts
 await runtime.pipe(response, {
@@ -108,6 +107,30 @@ await runtime.pipe(response, {
   context: { userId: authenticatedUser.id },
 });
 ```
+
+For multiple pending interrupts, target native IDs with a resume map:
+
+```ts
+await runtime.pipe(response, {
+  threadId: authenticatedThreadId,
+  resume: { [interruptId]: { decisions: [{ type: "approve" }] } },
+});
+```
+
+Continue a static `interruptBefore` or `interruptAfter` breakpoint using
+`{ threadId, continue: true }`. Dynamic interrupts require `resume`. Custom resume
+values must be JSON-compatible; use an ID map for falsy values such as `false` or
+`null` that native LangGraph does not accept as scalar resume values.
+
+`run.paused` marks a static breakpoint or a continuation that still has pending
+interrupts. `interrupt.required` carries each newly pending interrupt. A failed or
+cancelled continuation reports `recoverable: true` when the native checkpoint
+still has pending work. Refresh `getResumeState()` before deciding how to retry.
+
+For server diagnostics, supply `new Agentdock(graph, { onError(error, details) {} })`.
+The details include `threadId`, `runId`, and `stage` (`graph`, `mapper`, or
+`checkpoint`); client errors remain sanitized. Exceptions in the observer do not
+replace the original failure.
 
 `runtime.stream(run)` exposes the same contract events without a transport.
 `runtime.toResponse(run)` returns a Web `Response` backed by a cancelable
@@ -128,16 +151,12 @@ when they need to consume events directly.
 - Cancellation reaches LangGraph and cooperative tools through an
   `AbortSignal`. A tool that ignores its signal may continue after a client has
   disconnected.
-- Without `withAgentEventState(fields)`, a graph can serve a non-interrupted start,
-  but a resume is rejected because the runtime cannot restore the event stream
-  identity safely.
 
 ## Event contract
 
 The runtime emits the JSON-safe event types and reducer from
 [`@agentdock-ai/contracts`](https://www.npmjs.com/package/@agentdock-ai/contracts).
-The package includes the `Agentdock` class and checkpoint-backed event
-state schema; agent loops, tool registries, providers, and session stores remain
+The package includes the `Agentdock` class and checkpoint read helpers; agent loops, tool registries, providers, and session stores remain
 LangChain/LangGraph or application responsibilities.
 
 ## License

@@ -1,9 +1,17 @@
+import { isCommand } from "@langchain/langgraph";
+import {
+  isBaseMessage,
+  isBaseMessageChunk,
+  isToolMessage,
+} from "@langchain/core/messages";
 import {
   AgentEventType,
   cloneContentParts,
   cloneJsonObject,
   cloneJsonValue,
+  sumUsage,
   type AgentEvent,
+  type AgentEventInput,
   type AgentInterrupt,
   type AgentUsage,
   type ContentPart,
@@ -18,6 +26,7 @@ import { isRecord } from "../utils/is-record.js";
 
 interface OpenMessage {
   messageId: string;
+  role: "assistant" | "user" | "tool";
   content: ContentPart[];
 }
 
@@ -32,9 +41,23 @@ export class WireEventMapper {
   private readonly openMessages = new Map<string, OpenMessage>();
   private readonly activeTools = new Map<string, ActiveTool>();
   private readonly unnamedTools = new Map<string, string[]>();
+  private readonly usages = new Map<string, AgentUsage>();
+  private readonly fallbackMessageIds = new Map<string, string>();
   private readonly partialToolCalls = new Map<string, PartialToolCall>();
 
-  constructor(private readonly context: EventContext) {}
+  constructor(
+    private readonly context: EventContext,
+    private readonly namespace: readonly string[] = [],
+  ) {}
+
+  private emit(input: AgentEventInput): AgentEvent {
+    return this.context.emit(input, this.namespace);
+  }
+  private scopeId(id: string): string {
+    return this.namespace.length
+      ? `${JSON.stringify(this.namespace)}:${id}`
+      : id;
+  }
 
   map(mode: string, rawChunk: unknown): AgentEvent[] {
     switch (mode) {
@@ -52,10 +75,10 @@ export class WireEventMapper {
   completeMessages(): AgentEvent[] {
     return [...this.openMessages.values()].map((message) => {
       this.openMessages.delete(message.messageId);
-      return this.context.emit({
+      return this.emit({
         type: AgentEventType.MessageCompleted,
         messageId: message.messageId,
-        role: "assistant",
+        role: message.role,
         content: message.content,
       });
     });
@@ -65,55 +88,57 @@ export class WireEventMapper {
     if (!Array.isArray(rawChunk) || rawChunk.length !== 2) {
       throw new Error("LangGraph emitted an unsupported message chunk.");
     }
-    const [rawMessage] = rawChunk;
+    const [rawMessage, metadata] = rawChunk;
     if (!isRecord(rawMessage)) {
       throw new Error("LangGraph emitted an invalid message chunk.");
     }
 
-    const messageId =
+    const nativeRole = isBaseMessage(rawMessage)
+      ? rawMessage.getType()
+      : rawMessage.role;
+    if (nativeRole === "system") return [];
+    let role: OpenMessage["role"] = "assistant";
+    if (nativeRole === "human" || nativeRole === "user") role = "user";
+    else if (nativeRole === "tool") role = "tool";
+    const fallbackKey = JSON.stringify(metadata ?? {});
+    const fallbackId =
+      this.fallbackMessageIds.get(fallbackKey) ??
+      `${this.context.runId}:message:${crypto.randomUUID()}`;
+    this.fallbackMessageIds.set(fallbackKey, fallbackId);
+    const nativeMessageId =
       typeof rawMessage.id === "string" && rawMessage.id.length > 0
         ? rawMessage.id
-        : `${this.context.runId}:message:${crypto.randomUUID()}`;
+        : fallbackId;
+    const messageId = this.scopeId(nativeMessageId);
     this.collectToolCallChunks(messageId, rawMessage);
     const events: AgentEvent[] = [];
     const content = toContentParts(rawMessage.content);
     let openMessage = this.openMessages.get(messageId);
 
     if (!openMessage) {
-      for (const previous of this.openMessages.values()) {
-        events.push(
-          this.context.emit({
-            type: AgentEventType.MessageCompleted,
-            messageId: previous.messageId,
-            role: "assistant",
-            content: previous.content,
-          }),
-        );
-      }
-      this.openMessages.clear();
       if (content.length === 0) {
-        const usage = toUsage(rawMessage.usage_metadata);
+        const usage = this.messageUsage(messageId, rawMessage);
         if (usage)
           events.push(
-            this.context.emit({ type: AgentEventType.UsageUpdated, usage }),
+            this.emit({ type: AgentEventType.UsageUpdated, usage, messageId }),
           );
         return events;
       }
       events.push(
-        this.context.emit({
+        this.emit({
           type: AgentEventType.MessageStarted,
           messageId,
-          role: "assistant",
+          role,
         }),
       );
-      openMessage = { messageId, content: [] };
+      openMessage = { messageId, role, content: [] };
       this.openMessages.set(messageId, openMessage);
     }
 
     for (const part of content) {
-      openMessage.content.push(part);
+      appendContent(openMessage.content, part);
       events.push(
-        this.context.emit({
+        this.emit({
           type: AgentEventType.MessagePartDelta,
           messageId,
           part,
@@ -121,10 +146,10 @@ export class WireEventMapper {
       );
     }
 
-    const usage = toUsage(rawMessage.usage_metadata);
+    const usage = this.messageUsage(messageId, rawMessage);
     if (usage)
       events.push(
-        this.context.emit({ type: AgentEventType.UsageUpdated, usage }),
+        this.emit({ type: AgentEventType.UsageUpdated, usage, messageId }),
       );
     return events;
   }
@@ -136,7 +161,7 @@ export class WireEventMapper {
     const toolName = typeof rawChunk.name === "string" ? rawChunk.name : "tool";
     const suppliedId =
       typeof rawChunk.toolCallId === "string" && rawChunk.toolCallId.length > 0
-        ? rawChunk.toolCallId
+        ? this.scopeId(rawChunk.toolCallId)
         : undefined;
 
     if (rawChunk.event === "on_tool_start") {
@@ -153,7 +178,7 @@ export class WireEventMapper {
         ids.push(toolCallId);
         this.unnamedTools.set(toolName, ids);
       }
-      return [this.context.emit({ type: AgentEventType.ToolCalled, toolCall })];
+      return [this.emit({ type: AgentEventType.ToolCalled, toolCall })];
     }
 
     const isTerminalToolEvent =
@@ -172,7 +197,7 @@ export class WireEventMapper {
 
     if (rawChunk.event === "on_tool_event") {
       return [
-        this.context.emit({
+        this.emit({
           type: AgentEventType.ToolProgress,
           toolCallId,
           content: toProgressContent(rawChunk.data),
@@ -182,11 +207,16 @@ export class WireEventMapper {
     if (rawChunk.event === "on_tool_end") {
       this.activeTools.delete(toolCallId);
       return [
-        this.context.emit({
+        this.emit({
           type: AgentEventType.ToolCompleted,
           result: {
             ...toolCall,
-            output: toToolOutput(rawChunk.output),
+            ...toToolOutput(
+              rawChunk.output,
+              typeof rawChunk.toolCallId === "string"
+                ? rawChunk.toolCallId
+                : toolCallId,
+            ),
           } satisfies ToolResultRecord,
         }),
       ];
@@ -198,7 +228,7 @@ export class WireEventMapper {
         error: "Tool execution failed.",
         code: "tool_error",
       };
-      return [this.context.emit({ type: AgentEventType.ToolFailed, error })];
+      return [this.emit({ type: AgentEventType.ToolFailed, error })];
     }
     throw new Error("LangGraph emitted an unsupported tool event.");
   }
@@ -207,12 +237,20 @@ export class WireEventMapper {
     if (!isRecord(rawChunk)) {
       throw new Error("LangGraph emitted an unsupported update chunk.");
     }
+    for (const update of Object.values(rawChunk)) {
+      if (!isRecord(update) || !Array.isArray(update.messages)) continue;
+      for (const message of update.messages) {
+        if (!isRecord(message)) continue;
+        const id = typeof message.id === "string" ? message.id : "checkpoint";
+        this.collectToolCallChunks(id, message, true);
+      }
+    }
     const interrupts = rawChunk.__interrupt__;
     if (!Array.isArray(interrupts) || interrupts.length === 0) return [];
-    if (interrupts.length > 1) {
-      throw new Error("LangGraph emitted multiple interrupts in one update.");
-    }
-    const first = interrupts[0];
+    return interrupts.flatMap((first) => this.mapInterrupt(first));
+  }
+
+  private mapInterrupt(first: unknown): AgentEvent[] {
     if (!isRecord(first) || typeof first.id !== "string") {
       throw new Error("LangGraph emitted an interrupt without an ID.");
     }
@@ -244,30 +282,71 @@ export class WireEventMapper {
       }
       return [
         {
-          id: toolCallId ?? `${interruptId}:action:${index}`,
+          id: toolCallId
+            ? this.scopeId(toolCallId)
+            : `${interruptId}:action:${index}`,
           name: typeof rawAction.name === "string" ? rawAction.name : "action",
           input: cloneJsonValue(actionInput, "Interrupt action input"),
-          ...(toolCallId ? { toolCallId } : {}),
+          ...(toolCallId ? { toolCallId: this.scopeId(toolCallId) } : {}),
         },
       ];
     });
     // The tool-approval path above rejects actions without a matching call ID;
     // this assertion records that discriminated guarantee for the union.
+    let prompt = "Approval required.";
+    if (typeof first.value === "string") prompt = first.value;
+    else if (typeof value.prompt === "string") prompt = value.prompt;
     const interrupt: AgentInterrupt = {
       interruptId,
       kind: isToolApproval ? "tool-approval" : "custom",
-      prompt:
-        typeof value.prompt === "string" ? value.prompt : "Approval required.",
-      ...(value.payload === undefined
-        ? {}
-        : { payload: cloneJsonValue(value.payload, "Interrupt payload") }),
+      prompt,
+      payload: cloneJsonValue(first.value, "Interrupt payload"),
       actions,
     } as AgentInterrupt;
     const completedMessages = this.completeMessages();
     completedMessages.push(
-      this.context.emit({ type: AgentEventType.InterruptRequired, interrupt }),
+      this.emit({ type: AgentEventType.InterruptRequired, interrupt }),
     );
     return completedMessages;
+  }
+
+  seedMessages(values: unknown): void {
+    if (!isRecord(values) || !Array.isArray(values.messages)) return;
+    for (const message of [...values.messages].reverse()) {
+      if (
+        !isRecord(message) ||
+        !Array.isArray(message.tool_calls) ||
+        message.tool_calls.length === 0
+      )
+        continue;
+      this.partialToolCalls.clear();
+      this.collectToolCallChunks(
+        typeof message.id === "string" ? message.id : "checkpoint",
+        message,
+        true,
+      );
+      break;
+    }
+  }
+
+  get usage(): AgentUsage | undefined {
+    if (this.usages.size === 0) return undefined;
+    return sumUsage([...this.usages.values()]);
+  }
+
+  private messageUsage(
+    messageId: string,
+    message: Record<string, unknown>,
+  ): AgentUsage | undefined {
+    const usage = toUsage(message.usage_metadata);
+    if (!usage) return undefined;
+    const previous = this.usages.get(messageId);
+    const total =
+      isBaseMessageChunk(message) && previous
+        ? sumUsage([previous, usage])
+        : usage;
+    this.usages.set(messageId, total);
+    return total;
   }
 
   private findUnnamedTool(name: string, consume: boolean): string | undefined {
@@ -280,8 +359,14 @@ export class WireEventMapper {
   private collectToolCallChunks(
     messageId: string,
     message: Record<string, unknown>,
+    snapshot = false,
   ): void {
-    if (Array.isArray(message.tool_calls)) {
+    if (
+      Array.isArray(message.tool_calls) &&
+      (snapshot ||
+        !Array.isArray(message.tool_call_chunks) ||
+        message.tool_call_chunks.length === 0)
+    ) {
       for (const [index, call] of message.tool_calls.entries()) {
         if (
           !isRecord(call) ||
@@ -349,11 +434,38 @@ function toProgressContent(value: unknown): ContentPart[] {
   ];
 }
 
-function toToolOutput(value: unknown): JsonValue {
-  if (isRecord(value) && "content" in value) {
-    return cloneJsonValue(value.content, "Tool output content");
+function toToolOutput(
+  value: unknown,
+  toolCallId: string,
+): { output: JsonValue; isError?: boolean } {
+  if (isCommand(value)) {
+    const update: unknown = value.update;
+    let messages: unknown[] = [];
+    if (isRecord(update) && Array.isArray(update.messages))
+      messages = update.messages;
+    else if (Array.isArray(update)) {
+      for (const entry of update) {
+        if (
+          Array.isArray(entry) &&
+          entry[0] === "messages" &&
+          Array.isArray(entry[1])
+        )
+          messages.push(...entry[1]);
+      }
+    }
+    value =
+      messages.find(
+        (message) =>
+          isToolMessage(message) && message.tool_call_id === toolCallId,
+      ) ?? null;
   }
-  return cloneJsonValue(value, "Tool output");
+  const output = isRecord(value) && "content" in value ? value.content : value;
+  return {
+    output: cloneJsonValue(output, "Tool output"),
+    ...(isToolMessage(value) && value.status === "error"
+      ? { isError: true }
+      : {}),
+  };
 }
 
 function toContentParts(value: unknown): ContentPart[] {
@@ -381,9 +493,14 @@ function toContentParts(value: unknown): ContentPart[] {
     }
     if (
       (item.type === "reasoning" || item.type === "thinking") &&
-      typeof item.text === "string"
+      (typeof item.text === "string" ||
+        typeof item.reasoning === "string" ||
+        typeof item.thinking === "string")
     ) {
-      return [{ type: "reasoning", text: item.text }];
+      let text = String(item.thinking);
+      if (typeof item.text === "string") text = item.text;
+      else if (typeof item.reasoning === "string") text = item.reasoning;
+      return [{ type: "reasoning", text }];
     }
     if (
       item.type === "image" ||
@@ -391,7 +508,21 @@ function toContentParts(value: unknown): ContentPart[] {
       item.type === "video" ||
       item.type === "file"
     ) {
-      return cloneContentParts([item], "Model content");
+      const media: Record<string, unknown> = { type: item.type };
+      if (typeof item.url === "string") media.url = item.url;
+      else if (typeof item.data === "string") media.data = item.data;
+      else if (typeof item.base64 === "string") media.data = item.base64;
+      else if (typeof item.fileId === "string") media.fileId = item.fileId;
+      else if (typeof item.file_id === "string") media.fileId = item.file_id;
+      else
+        return [
+          { type: "custom", name: "model-content", data: cloneJsonValue(item) },
+        ];
+      const mimeType = item.mimeType ?? item.mime_type;
+      if (typeof mimeType === "string") media.mimeType = mimeType;
+      const name = item.name ?? item.filename;
+      if (item.type === "file" && typeof name === "string") media.name = name;
+      return cloneContentParts([media], "Model content");
     }
     return [
       { type: "custom", name: "model-content", data: cloneJsonValue(item) },
@@ -422,7 +553,27 @@ function toUsage(value: unknown): AgentUsage | undefined {
     usage.outputTokens = value.output_tokens;
   if (typeof value.total_tokens === "number")
     usage.totalTokens = value.total_tokens;
-  if (typeof value.reasoning_tokens === "number")
+  if (
+    isRecord(value.output_token_details) &&
+    typeof value.output_token_details.reasoning === "number"
+  )
+    usage.reasoningTokens = value.output_token_details.reasoning;
+  else if (typeof value.reasoning_tokens === "number")
     usage.reasoningTokens = value.reasoning_tokens;
+  if (
+    isRecord(value.input_token_details) &&
+    typeof value.input_token_details.cache_read === "number"
+  )
+    usage.cachedInputTokens = value.input_token_details.cache_read;
   return Object.keys(usage).length > 0 ? usage : undefined;
+}
+
+function appendContent(content: ContentPart[], part: ContentPart): void {
+  const last = content[content.length - 1];
+  if (
+    (part.type === "text" || part.type === "reasoning") &&
+    last?.type === part.type
+  )
+    last.text += part.text;
+  else content.push({ ...part });
 }

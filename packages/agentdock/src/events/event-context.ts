@@ -17,7 +17,7 @@ export class EventContext {
     this.logicalSequence = logicalSequence;
   }
 
-  emit(input: AgentEventInput): AgentEvent {
+  emit(input: AgentEventInput, namespace: readonly string[] = []): AgentEvent {
     assertAgentEventInput(input);
     this.logicalSequence += 1;
     this.phaseSequence += 1;
@@ -25,6 +25,7 @@ export class EventContext {
     // completes the corresponding AgentEvent variant.
     return {
       ...input,
+      ...(namespace.length ? { namespace: [...namespace] } : {}),
       protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
       eventId: `${this.runId}:${this.logicalSequence}`,
       runId: this.runId,

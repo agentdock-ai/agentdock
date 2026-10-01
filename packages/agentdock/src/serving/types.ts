@@ -4,13 +4,19 @@ import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 /** LangGraph run options; serving-owned context, signal, mode, and recursion are excluded. */
 export type GraphRunConfig = Omit<
   LangGraphRunnableConfig,
-  "context" | "signal" | "streamMode" | "recursionLimit"
->;
+  "context" | "signal" | "streamMode" | "recursionLimit" | "encoding"
+> & {
+  subgraphs?: boolean;
+  interruptBefore?: "*" | string[];
+  interruptAfter?: "*" | string[];
+  durability?: "sync" | "async" | "exit";
+};
 
 export type StartRun<TInput, TContext extends Record<string, unknown>> = {
   /** Input accepted by the compiled graph. */
   input: TInput;
   resume?: never;
+  continue?: never;
   /** Stable, application-authorized LangGraph thread identity. */
   threadId: string;
   /** Per-invocation graph context; never persisted by Agentdock. */
@@ -23,6 +29,7 @@ export type StartRun<TInput, TContext extends Record<string, unknown>> = {
 
 export type ResumeRun<TContext extends Record<string, unknown>> = {
   input?: never;
+  continue?: never;
   /** The same application-authorized thread ID used for the interrupted run. */
   threadId: string;
   /** Opaque value forwarded unchanged to LangGraph's `Command({ resume })`. */
@@ -33,8 +40,19 @@ export type ResumeRun<TContext extends Record<string, unknown>> = {
   signal?: AbortSignal;
 };
 
+export type ContinueRun<TContext extends Record<string, unknown>> = {
+  input?: never;
+  resume?: never;
+  /** Continue a native static breakpoint using graph.stream(null). */
+  continue: true;
+  threadId: string;
+  context?: TContext;
+  config?: GraphRunConfig;
+  signal?: AbortSignal;
+};
+
 export type Run<TInput, TContext extends Record<string, unknown>> =
-  StartRun<TInput, TContext> | ResumeRun<TContext>;
+  StartRun<TInput, TContext> | ResumeRun<TContext> | ContinueRun<TContext>;
 
 export interface AgentRuntime<
   TInput,
@@ -81,9 +99,8 @@ export type GraphContext<Graph> =
 
 export interface ServableCompiledGraph {
   stream(input: never, options?: never): unknown;
-  getState(config: LangGraphRunnableConfig): Promise<{ values: unknown }>;
-  updateState(
+  getState(
     config: LangGraphRunnableConfig,
-    update: Record<string, unknown>,
-  ): unknown;
+    options?: { subgraphs?: boolean },
+  ): Promise<import("../langgraph/thread-read.js").ThreadSnapshot>;
 }

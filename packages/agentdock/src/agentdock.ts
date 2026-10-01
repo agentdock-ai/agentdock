@@ -1,4 +1,4 @@
-import { RunStream } from "./serving/run-stream.js";
+import { RunStream, type RunStreamOptions } from "./serving/run-stream.js";
 import { pipeEvents } from "./transports/node/pipe.js";
 import { createSseResponse } from "./transports/web/to-response.js";
 import { createResumeState } from "./langgraph/resume-state.js";
@@ -11,6 +11,7 @@ import type {
   AgentRuntime,
   GraphContext,
   GraphInput,
+  GraphRunConfig,
   NodeSseResponse,
   Run,
   ServableCompiledGraph,
@@ -19,6 +20,8 @@ import type {
 export interface AgentdockOptions {
   /** LangGraph safety limit; defaults to 25 graph steps. */
   recursionLimit?: number;
+  /** Server-side diagnostics; errors sent to clients remain sanitized. */
+  onError?: RunStreamOptions["onError"];
 }
 
 const DEFAULT_RECURSION_LIMIT = 25;
@@ -36,7 +39,10 @@ export class Agentdock<
       throw new Error("recursionLimit must be a positive safe integer.");
     }
     this.graph = graph;
-    this.runStream = new RunStream(graph, { recursionLimit });
+    this.runStream = new RunStream(graph, {
+      recursionLimit,
+      onError: options.onError,
+    });
   }
 
   stream(
@@ -60,15 +66,18 @@ export class Agentdock<
 
   getMessages(
     threadId: string,
-    options: { channel?: string } = {},
+    options: { channel?: string; config?: GraphRunConfig } = {},
   ): Promise<unknown[] | null> {
     return getThreadMessages(this.graph, threadId, options);
   }
 
-  async getResumeState(threadId: string): Promise<AgentReducerState | null> {
-    const snapshot = await getThreadSnapshot(this.graph, threadId);
+  async getResumeState(
+    threadId: string,
+    config: GraphRunConfig = {},
+  ): Promise<AgentReducerState | null> {
+    const snapshot = await getThreadSnapshot(this.graph, threadId, config);
     if (!snapshot) return null;
-    const result = createResumeState(snapshot.values, threadId);
+    const result = createResumeState(snapshot, threadId);
     return result.status === "ready" ? result.state : null;
   }
 }

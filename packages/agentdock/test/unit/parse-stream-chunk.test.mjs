@@ -18,3 +18,24 @@ test.each([
 ])("rejects malformed stream chunks: %j", (chunk, error) => {
   assert.throws(() => parseStreamChunk(chunk), error);
 });
+
+test.each(["messages", "tools", "updates"])(
+  "parses namespaced %s chunks",
+  (mode) => {
+    const namespace = ["child:uuid", "nested:uuid"];
+    assert.deepEqual(parseStreamChunk([namespace, mode, { value: 1 }]), {
+      namespace,
+      mode,
+      value: { value: 1 },
+    });
+  },
+);
+
+test.each([
+  [null, "updates", {}],
+  [[1], "messages", {}],
+  ["child", "messages", {}],
+  [[], "unknown", {}],
+])("rejects invalid namespaced chunks: %j", (...chunk) => {
+  assert.throws(() => parseStreamChunk(chunk));
+});

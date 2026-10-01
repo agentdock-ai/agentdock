@@ -189,9 +189,7 @@ test("fallback message and tool IDs remain unique across resumed mappers", () =>
 });
 
 test("LangGraph-provided message and tool-call IDs remain unchanged", () => {
-  const mapper = new WireEventMapper(
-    new EventContext("provided-ids", 0),
-  );
+  const mapper = new WireEventMapper(new EventContext("provided-ids", 0));
   const messageEvents = mapper.map("messages", [
     { id: "langgraph-message-1", content: "answer" },
     {},
@@ -212,9 +210,7 @@ test("LangGraph-provided message and tool-call IDs remain unchanged", () => {
 });
 
 test("fallback tool IDs stay correlated through terminal tool events", () => {
-  const mapper = new WireEventMapper(
-    new EventContext("fallback-tool", 0),
-  );
+  const mapper = new WireEventMapper(new EventContext("fallback-tool", 0));
   const [started] = mapper.map("tools", {
     event: "on_tool_start",
     name: "read",
@@ -280,9 +276,7 @@ test("approval interrupts match a streamed partial tool call when IDs are omitte
 });
 
 test("unmatched tool lifecycle events fail instead of inventing a call", () => {
-  const mapper = new WireEventMapper(
-    new EventContext("unmatched-tool", 0),
-  );
+  const mapper = new WireEventMapper(new EventContext("unmatched-tool", 0));
   assert.throws(
     () =>
       mapper.map("tools", {
@@ -330,7 +324,7 @@ test("custom interrupts map to the event contract and unsupported chunks fail", 
     }),
   );
   assert.equal(failed.at(-1).type, AgentEventType.RunFailed);
-  assert.equal(failed.at(-1).code, "graph_error");
+  assert.equal(failed.at(-1).code, "mapper_error");
 });
 
 test("LangGraph update chunks advance the event phase", async () => {

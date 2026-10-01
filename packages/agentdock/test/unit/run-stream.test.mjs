@@ -1,248 +1,298 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { AgentEventType } from "@agentdock-ai/contracts";
 import { RunStream } from "../../src/serving/run-stream.js";
 
-const RECURSION_LIMIT = 25;
-
-test("persists checkpoint event state before yielding an interrupt", async () => {
-  const graph = createGraph({
-    chunks: [
-      [
-        "updates",
-        {
-          __interrupt__: [{ id: "approval-1", value: { prompt: "Approve?" } }],
-        },
-      ],
-    ],
-  });
-  let persistedBeforeInterrupt = false;
-  graph.onUpdate = () => {
-    persistedBeforeInterrupt = true;
+function graph({
+  chunks = [],
+  error,
+  snapshot = { values: {}, next: [], tasks: [] },
+} = {}) {
+  return {
+    calls: [],
+    writes: 0,
+    async stream(input, options) {
+      this.calls.push({ input, options });
+      if (error) throw error;
+      return (async function* () {
+        yield* chunks;
+      })();
+    },
+    async getState() {
+      return snapshot;
+    },
+    async updateState() {
+      this.writes++;
+      throw new Error("Serving must not write state");
+    },
   };
-  const stream = new RunStream(graph, { recursionLimit: RECURSION_LIMIT });
+}
+const runtime = (current, options = {}) =>
+  new RunStream(current, { recursionLimit: 25, ...options });
+async function collect(source) {
+  const result = [];
+  for await (const event of source) result.push(event);
+  return result;
+}
 
-  for await (const event of stream.stream({
-    input: {},
-    threadId: "interrupt",
-  })) {
-    if (event.type === AgentEventType.InterruptRequired) {
-      assert.equal(persistedBeforeInterrupt, true);
-      assert.deepEqual(graph.values.agentEventState, {
-        runId: event.runId,
-        logicalSequence: event.logicalSequence,
-        pendingInterrupt: event.interrupt,
-      });
-    }
-  }
-
-  assert.equal(persistedBeforeInterrupt, true);
-});
-
-test("rejects resume without saved event state before starting the graph", async () => {
-  const graph = createGraph();
-  const iterator = new RunStream(graph, { recursionLimit: RECURSION_LIMIT })
-    .stream({ threadId: "missing-checkpoint", resume: { decisions: [] } })
-    [Symbol.asyncIterator]();
-
-  await assert.rejects(
-    iterator.next(),
-    /must use withAgentEventState and have a valid pending interrupt/,
-  );
-  assert.equal(graph.streamCalls.length, 0);
-});
-
-test("rejects a corrupt saved interrupt before starting the graph", async () => {
-  const graph = createGraph({
-    values: {
-      agentEventState: {
-        runId: "saved-run",
-        logicalSequence: 4,
-        pendingInterrupt: {
-          kind: "custom",
-          interruptId: "approval-1",
-          prompt: "Continue?",
-          actions: undefined,
-        },
-      },
+test("serves interruptions without writing any graph checkpoints", async () => {
+  const interruption = { id: "approval", value: { prompt: "Approve?" } };
+  const current = graph({
+    chunks: [["updates", { __interrupt__: [interruption] }]],
+    snapshot: {
+      values: {},
+      next: ["ask"],
+      tasks: [{ name: "ask", interrupts: [interruption] }],
     },
   });
-  const iterator = new RunStream(graph, { recursionLimit: RECURSION_LIMIT })
-    .stream({ threadId: "corrupt-checkpoint", resume: { decisions: [] } })
-    [Symbol.asyncIterator]();
-
-  await assert.rejects(iterator.next(), /pending interrupt/);
-  assert.equal(graph.streamCalls.length, 0);
+  const events = await collect(
+    runtime(current).stream({ threadId: "t", input: {} }),
+  );
+  assert.equal(events.at(-1).type, "interrupt.required");
+  assert.equal(events.at(-1).interrupt.interruptId, "approval");
+  assert.equal(current.writes, 0);
 });
 
-test("read-back verification rejects a checkpoint that drops interrupt data", async () => {
-  const graph = createGraph({
-    chunks: [
-      [
-        "updates",
-        {
-          __interrupt__: [{ id: "approval-1", value: { prompt: "Approve?" } }],
-        },
-      ],
-    ],
-  });
-  graph.updateState = async (_config, update) => {
-    const persistedState = structuredClone(update.agentEventState);
-    if (persistedState.pendingInterrupt) {
-      persistedState.pendingInterrupt.prompt = "Wrong prompt";
-    }
-    graph.values = { ...graph.values, agentEventState: persistedState };
-  };
-
-  const events = await collect(
-    new RunStream(graph, { recursionLimit: RECURSION_LIMIT }).stream({
-      input: {},
-      threadId: "bad-read-back",
-    }),
+test("rejects resume without native pending work before invoking the graph", async () => {
+  const current = graph();
+  await assert.rejects(
+    () => collect(runtime(current).stream({ threadId: "t", resume: true })),
+    /native pending/,
   );
+  assert.equal(current.calls.length, 0);
+});
 
-  assert.equal(events.at(-1).type, AgentEventType.RunFailed);
+test("rejects malformed native checkpoint interruption before graph execution", async () => {
+  const current = graph({
+    snapshot: { values: {}, tasks: [{ interrupts: [{ value: "no ID" }] }] },
+  });
+  await assert.rejects(
+    () => collect(runtime(current).stream({ threadId: "t", resume: true })),
+    /invalid native interrupt/,
+  );
+  assert.equal(current.calls.length, 0);
+});
+
+test("independent invocations forward graph input without adding state fields", async () => {
+  const current = graph();
+  const stream = runtime(current);
+  for (const input of [{ marker: "x" }, "text", [1, 2], null]) {
+    const events = await collect(stream.stream({ threadId: "t", input }));
+    assert.equal(current.calls.at(-1).input, input);
+    assert.equal(events.at(-1).type, "run.completed");
+    assert.equal(events[0].logicalSequence, 1);
+  }
+  assert.equal(current.writes, 0);
+});
+
+test("completion, graph errors, and cancellation emit exactly one terminal event", async () => {
+  const cases = [
+    [graph(), { input: {}, threadId: "complete" }, "run.completed"],
+    [
+      graph({ error: new Error("private secret") }),
+      { input: {}, threadId: "failed" },
+      "run.failed",
+    ],
+    [
+      graph(),
+      { input: {}, threadId: "cancel", signal: AbortSignal.abort() },
+      "run.cancelled",
+    ],
+  ];
+  for (const [current, run, expected] of cases) {
+    const events = await collect(runtime(current).stream(run));
+    assert.deepEqual(
+      events
+        .filter((event) =>
+          ["run.completed", "run.failed", "run.cancelled"].includes(event.type),
+        )
+        .map((event) => event.type),
+      [expected],
+    );
+    assert.equal(JSON.stringify(events).includes("private secret"), false);
+    assert.equal(current.writes, 0);
+  }
+});
+
+test("reports original causes server-side and isolates a throwing observer", async () => {
+  const error = new Error("private secret");
+  const observed = [];
+  const events = await collect(
+    runtime(graph({ error }), {
+      onError(cause, details) {
+        observed.push({ cause, details });
+        throw new Error("logging failed");
+      },
+    }).stream({ threadId: "t", input: {} }),
+  );
+  assert.equal(observed[0].cause, error);
+  assert.equal(observed[0].details.stage, "graph");
+  assert.equal(observed[0].details.runId, events[0].runId);
+  assert.equal(events.at(-1).type, "run.failed");
+  assert.equal(events.at(-1).code, "graph_error");
+});
+
+test.each([
+  ["encoding", "text/event-stream"],
+  ["encoding", undefined],
+])("rejects serving-owned config %s before starting", async (key, value) => {
+  const current = graph();
+  await assert.rejects(
+    () =>
+      collect(
+        runtime(current).stream({
+          threadId: "t",
+          input: {},
+          config: { [key]: value },
+        }),
+      ),
+    /encoding/,
+  );
+  assert.equal(current.calls.length, 0);
+});
+
+test.each([
+  { threadId: "t" },
+  { threadId: "t", input: {}, resume: true },
+  { threadId: "t", continue: false },
+  { threadId: "t", input: {}, continue: true },
+  { threadId: "t", input: {}, signal: {} },
+])("rejects malformed runs: %j", async (run) => {
+  await assert.rejects(() => collect(runtime(graph()).stream(run)));
+});
+
+test("mapper failures abort cooperative work and retain the original diagnostic", async () => {
+  const current = graph({ chunks: [["unsupported", {}]] });
+  const observed = [];
+  const events = await collect(
+    runtime(current, {
+      onError(error, details) {
+        observed.push({ error, details });
+      },
+    }).stream({ threadId: "t", input: {} }),
+  );
+  assert.equal(events.at(-1).code, "mapper_error");
+  assert.equal(current.calls[0].options.signal.aborted, true);
+  assert.equal(observed[0].details.stage, "mapper");
+});
+
+test("one runtime isolates concurrent invocation IDs and messages", async () => {
+  const current = graph();
+  current.stream = async (input) =>
+    (async function* () {
+      yield ["messages", [{ id: input.marker, content: input.marker }, {}]];
+    })();
+  const stream = runtime(current);
+  const results = await Promise.all(
+    ["first", "second"].map((marker) =>
+      collect(stream.stream({ input: { marker }, threadId: marker })),
+    ),
+  );
+  assert.notEqual(results[0][0].runId, results[1][0].runId);
+  for (const [index, events] of results.entries()) {
+    assert.equal(events.at(-1).type, "run.completed");
+    assert.equal(
+      events.find((event) => event.type === "message.part.delta").part.text,
+      ["first", "second"][index],
+    );
+  }
+});
+
+test("rejects static continuation while a dynamic interrupt is waiting", async () => {
+  const current = graph({
+    snapshot: {
+      values: {},
+      next: ["ask"],
+      tasks: [{ name: "ask", interrupts: [{ id: "i", value: "Choose" }] }],
+    },
+  });
+  await assert.rejects(
+    () => collect(runtime(current).stream({ threadId: "t", continue: true })),
+    /require a resume/,
+  );
+  assert.equal(current.calls.length, 0);
+});
+
+test("a continuation leaving the same interrupts pending ends in waiting state", async () => {
+  const raw = { id: "i", value: "Choose" };
+  const current = graph({
+    chunks: [["updates", { __interrupt__: [raw] }]],
+    snapshot: {
+      values: {},
+      next: ["ask"],
+      tasks: [{ name: "ask", interrupts: [raw] }],
+    },
+  });
+  const events = await collect(
+    runtime(current).stream({ threadId: "t", resume: { other: true } }),
+  );
+  assert.equal(events.at(-1).type, "run.paused");
   assert.equal(
-    events.some((event) => event.type === AgentEventType.InterruptRequired),
+    events.some((event) => event.type === "interrupt.resolved"),
+    false,
+  );
+  assert.equal(
+    events.some((event) => event.type === "interrupt.required"),
     false,
   );
 });
 
-test("resume restores run identity and advances the saved logical sequence", async () => {
-  const graph = createGraph({
-    values: {
-      agentEventState: {
-        runId: "saved-run",
-        logicalSequence: 8,
-        pendingInterrupt: {
-          kind: "custom",
-          interruptId: "approval-2",
-          prompt: "Approve?",
-          actions: [],
-        },
-      },
-    },
-  });
-  const events = await collect(
-    new RunStream(graph, { recursionLimit: RECURSION_LIMIT }).stream({
-      threadId: "resume-thread",
-      resume: { decisions: [{ type: "approve" }] },
-    }),
-  );
-
-  assert.deepEqual(
-    events.map(({ type, logicalSequence }) => ({ type, logicalSequence })),
-    [
-      { type: AgentEventType.RunStarted, logicalSequence: 9 },
-      { type: AgentEventType.InterruptResolved, logicalSequence: 10 },
-      { type: AgentEventType.RunCompleted, logicalSequence: 11 },
-    ],
-  );
-  assert.ok(events.every((event) => event.runId === "saved-run"));
-  assert.deepEqual(graph.values.agentEventState, {
-    runId: "saved-run",
-    logicalSequence: 11,
-  });
-});
-
-test("emits exactly one terminal event for completion, failure, and cancellation", async () => {
-  const cases = [
-    {
-      name: "completion",
-      graph: createGraph(),
-      run: { input: {}, threadId: "completed" },
-      expected: AgentEventType.RunCompleted,
-    },
-    {
-      name: "failure",
-      graph: createGraph({ error: new Error("private graph error") }),
-      run: { input: {}, threadId: "failed" },
-      expected: AgentEventType.RunFailed,
-    },
-    {
-      name: "cancellation",
-      graph: createGraph(),
-      run: cancelledRun("cancelled"),
-      expected: AgentEventType.RunCancelled,
-    },
-  ];
-
-  for (const scenario of cases) {
-    const events = await collect(
-      new RunStream(scenario.graph, { recursionLimit: RECURSION_LIMIT }).stream(
-        scenario.run,
-      ),
-    );
-    const terminalEvents = events.filter((event) =>
-      [
-        AgentEventType.RunCompleted,
-        AgentEventType.RunFailed,
-        AgentEventType.RunCancelled,
-      ].includes(event.type),
-    );
-
-    assert.deepEqual(
-      terminalEvents.map((event) => event.type),
-      [scenario.expected],
-      scenario.name,
-    );
-  }
-});
-
-test("concurrent runs keep event identity and message state isolated", async () => {
-  const graph = createGraph({
-    streamChunks: (input) => [
-      [
-        "messages",
-        [{ id: `message-${input.marker}`, content: input.marker }, {}],
-      ],
-    ],
-  });
-  const stream = new RunStream(graph, { recursionLimit: RECURSION_LIMIT });
-  const [first, second] = await Promise.all([
-    collect(stream.stream({ input: { marker: "first" }, threadId: "first" })),
-    collect(stream.stream({ input: { marker: "second" }, threadId: "second" })),
-  ]);
-
-  assert.notEqual(first[0].runId, second[0].runId);
-  assert.ok(first.every((event) => event.runId === first[0].runId));
-  assert.ok(second.every((event) => event.runId === second[0].runId));
-  assert.ok(first.some((event) => event.messageId === "message-first"));
-  assert.ok(second.some((event) => event.messageId === "message-second"));
-  assert.ok(first.every((event) => event.messageId !== "message-second"));
-  assert.ok(second.every((event) => event.messageId !== "message-first"));
-});
-
-function createGraph({ chunks = [], streamChunks, values = {}, error } = {}) {
-  return {
-    values,
-    streamCalls: [],
-    async stream(input, options) {
-      this.streamCalls.push({ input, options });
-      if (error) throw error;
-      const currentChunks = streamChunks ? streamChunks(input) : chunks;
-      return (async function* () {
-        for (const chunk of currentChunks) yield chunk;
-      })();
-    },
-    async getState() {
-      return { values: this.values };
-    },
-    async updateState(_config, update) {
-      this.onUpdate?.(update);
-      this.values = { ...this.values, ...update };
-    },
+test("checkpoint failures preserve original diagnostics and emit a sanitized terminal event", async () => {
+  const raw = { id: "i", value: "Choose" };
+  const current = graph({ chunks: [["updates", { __interrupt__: [raw] }]] });
+  const error = new Error("private checkpoint failure");
+  current.getState = async () => {
+    throw error;
   };
-}
+  const observed = [];
+  const events = await collect(
+    runtime(current, {
+      onError(cause, details) {
+        observed.push({ cause, details });
+      },
+    }).stream({ threadId: "t", input: {} }),
+  );
+  assert.equal(events.at(-1).code, "checkpoint_error");
+  assert.equal(observed[0].cause, error);
+  assert.equal(observed[0].details.stage, "checkpoint");
+  assert.equal(JSON.stringify(events).includes(error.message), false);
+});
 
-function cancelledRun(threadId) {
-  const controller = new AbortController();
-  controller.abort(new Error("cancelled"));
-  return { input: {}, threadId, signal: controller.signal };
-}
+test("a completed native continuation is not advertised as recoverable after mapper failure", async () => {
+  const raw = { id: "i", value: "Choose" };
+  const current = graph({ chunks: [["messages", null]] });
+  let reads = 0;
+  current.getState = async () =>
+    ++reads === 1
+      ? {
+          values: {},
+          next: ["ask"],
+          tasks: [{ name: "ask", interrupts: [raw] }],
+        }
+      : { values: {}, next: [], tasks: [] };
+  const events = await collect(
+    runtime(current).stream({ threadId: "t", resume: true }),
+  );
+  assert.equal(events.at(-1).recoverable, false);
+});
 
-async function collect(iterable) {
-  const events = [];
-  for await (const event of iterable) events.push(event);
-  return events;
-}
+test("consumer return aborts unfinished graph work and closes its iterator", async () => {
+  const current = graph();
+  let returned = false;
+  current.stream = async (_input, options) => {
+    current.options = options;
+    return (async function* () {
+      try {
+        yield ["messages", [{ id: "m", content: "one" }, {}]];
+        yield ["messages", [{ id: "m", content: "two" }, {}]];
+      } finally {
+        returned = true;
+      }
+    })();
+  };
+  const source = runtime(current).stream({ threadId: "t", input: {} });
+  await source.next();
+  await source.next();
+  await source.return();
+  assert.equal(current.options.signal.aborted, true);
+  assert.equal(returned, true);
+});

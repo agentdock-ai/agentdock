@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
   AGENT_EVENT_STATE_KEY,
-  parseAgentEventState,
   withAgentEventState,
 } from "../../src/langgraph/event-state.js";
 import { z } from "zod";
@@ -16,57 +15,35 @@ test("the composed schema adds the Agentdock checkpoint field by default", () =>
   assert.equal(AGENT_EVENT_STATE_KEY, "agentEventState");
 });
 
-test("the Agentdock state parser accepts complete state and rejects malformed state", () => {
+test("the legacy schema still validates saved pending interrupt fields", () => {
+  const schema = withAgentEventState({});
   const interrupt = {
     kind: "custom",
-    interruptId: "interrupt-1",
-    prompt: "Continue?",
+    interruptId: "i",
+    prompt: "Choose",
+    actions: [],
     payload: { reason: "review" },
-    actions: [{ id: "yes", name: "continue", input: { enabled: true } }],
   };
-  const parsed = parseAgentEventState({
+  const value = {
     agentEventState: {
-      runId: "run-1",
+      runId: "old-run",
       logicalSequence: 5,
       pendingInterrupt: interrupt,
     },
-  });
-
-  assert.deepEqual(parsed, {
-    status: "valid",
-    state: {
-      runId: "run-1",
-      logicalSequence: 5,
-      pendingInterrupt: interrupt,
-    },
-  });
-  assert.deepEqual(parseAgentEventState({}), { status: "missing" });
-  assert.deepEqual(
-    parseAgentEventState({ agentEventState: { logicalSequence: 0 } }),
-    {
-      status: "valid",
-      state: { logicalSequence: 0 },
-    },
-  );
-  assert.deepEqual(
-    parseAgentEventState({
-      agentEventState: {
-        runId: "run-1",
-        logicalSequence: 5,
-        unexpected: "field",
-      },
+  };
+  assert.deepEqual(schema.parse(value), value);
+  assert.throws(() =>
+    schema.parse({
+      agentEventState: { ...value.agentEventState, unexpected: "field" },
     }),
-    { status: "invalid" },
   );
-  assert.deepEqual(
-    parseAgentEventState({
+  assert.throws(() =>
+    schema.parse({
       agentEventState: {
-        runId: "run-1",
-        logicalSequence: 5,
+        ...value.agentEventState,
         pendingInterrupt: { ...interrupt, payload: { invalid: undefined } },
       },
     }),
-    { status: "invalid" },
   );
 });
 

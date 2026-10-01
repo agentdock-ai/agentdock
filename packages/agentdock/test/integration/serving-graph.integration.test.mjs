@@ -43,7 +43,7 @@ test("composed event state works with createAgent and a general StateGraph", asy
   assert.equal(typeof graph.stream, "function");
 });
 
-test("event identity and sequence survive interrupt/resume with a fresh runtime", async () => {
+test("invocation identity and native interrupt survive resume with a fresh runtime", async () => {
   const { sent, contexts, graph, threadId } = await createApprovalAgent();
   const startRuntime = new Agentdock(graph);
   const startEvents = await collect(
@@ -61,11 +61,11 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
   const paused = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(paused.values.agentEventState, {
-    runId: startEvents[0].runId,
-    logicalSequence: startEvents.at(-1).logicalSequence,
-    pendingInterrupt: startEvents.at(-1).interrupt,
-  });
+  assert.deepEqual(paused.values.agentEventState, { logicalSequence: 0 });
+  assert.equal(
+    paused.tasks[0].interrupts[0].id,
+    startEvents.at(-1).interrupt.interruptId,
+  );
 
   const resumeRuntime = new Agentdock(graph);
   const resumeEvents = await collect(
@@ -78,11 +78,13 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
   assert.deepEqual(sent, ["hello"]);
   assert.deepEqual(contexts, ["user-42"]);
   assert.equal(resumeEvents[0].type, AgentEventType.RunStarted);
-  assert.equal(resumeEvents[0].runId, startEvents[0].runId);
-  assert.equal(resumeEvents[1].type, AgentEventType.InterruptResolved);
+  assert.notEqual(resumeEvents[0].runId, startEvents[0].runId);
   assert.ok(
-    resumeEvents[0].logicalSequence > startEvents.at(-1).logicalSequence,
+    resumeEvents.some(
+      (event) => event.type === AgentEventType.InterruptResolved,
+    ),
   );
+  assert.equal(resumeEvents[0].logicalSequence, 1);
   assert.equal(
     resumeEvents.at(-1).type,
     AgentEventType.RunCompleted,
@@ -92,9 +94,9 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
     configurable: { thread_id: threadId },
   });
   assert.deepEqual(completedCheckpoint.values.agentEventState, {
-    runId: startEvents[0].runId,
-    logicalSequence: resumeEvents.at(-1).logicalSequence,
+    logicalSequence: 0,
   });
+  assert.deepEqual(completedCheckpoint.next, []);
 
   const finalState = [...startEvents, ...resumeEvents].reduce(
     reduceAgentEvent,
@@ -104,7 +106,7 @@ test("event identity and sequence survive interrupt/resume with a fresh runtime"
   assert.equal(finalState.interrupt, null);
 });
 
-test("checkpoint event state is durable before the interrupt event is yielded", async () => {
+test("native interrupt checkpoint is durable before the interrupt event is yielded", async () => {
   const { sent, graph, threadId } = await createApprovalAgent();
   const iterator = new Agentdock(graph)
     .stream({
@@ -128,11 +130,11 @@ test("checkpoint event state is durable before the interrupt event is yielded", 
   const checkpoint = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(checkpoint.values.agentEventState, {
-    runId: interrupt.runId,
-    logicalSequence: interrupt.logicalSequence,
-    pendingInterrupt: interrupt.interrupt,
-  });
+  assert.deepEqual(checkpoint.values.agentEventState, { logicalSequence: 0 });
+  assert.equal(
+    checkpoint.tasks[0].interrupts[0].id,
+    interrupt.interrupt.interruptId,
+  );
   assert.equal(sent.length, 0);
   await iterator.return();
 });
@@ -230,7 +232,7 @@ test("one runtime keeps concurrent run state isolated", async () => {
   assert.equal(second[0].logicalSequence, 1);
 });
 
-test("resume requires checkpointed event state and a pending interrupt", async () => {
+test("resume requires native pending execution", async () => {
   const graph = new StateGraph(
     new StateSchema({
       value: z.string().default(""),
@@ -248,7 +250,7 @@ test("resume requires checkpointed event state and a pending interrupt", async (
       collect(
         runtime.stream({ threadId: "missing-interrupt", resume: { ok: true } }),
       ),
-    /valid pending interrupt/,
+    /native pending interrupt/,
   );
 });
 

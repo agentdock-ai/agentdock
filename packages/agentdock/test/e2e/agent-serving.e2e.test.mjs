@@ -116,8 +116,12 @@ test("resumes an approval across separate SSE requests on the same user thread",
 
     assert.equal(resumeResponse.status, 200);
     assert.equal(resumeEvents[0].type, AgentEventType.RunStarted);
-    assert.equal(resumeEvents[0].runId, startEvents[0].runId);
-    assert.equal(resumeEvents[1].type, AgentEventType.InterruptResolved);
+    assert.notEqual(resumeEvents[0].runId, startEvents[0].runId);
+    assert.ok(
+      resumeEvents.some(
+        (event) => event.type === AgentEventType.InterruptResolved,
+      ),
+    );
     assert.deepEqual(sideEffects, ["hello"]);
     assert.equal(
       combinedEvents.reduce(reduceAgentEvent, createAgentReducerState()).status,

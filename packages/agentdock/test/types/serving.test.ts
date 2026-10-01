@@ -46,12 +46,11 @@ withAgentEventState({ agentEventState: z.string() });
 
 // @ts-expect-error Start input retains the graph's state type.
 runtime.stream({ threadId: "type-test-thread", input: { value: 42 } });
-// @ts-expect-error Context inference rejects a non-string tenant.
-const invalidContext: { tenantId: string } = { tenantId: 42 };
 runtime.stream({
-  threadId: "type-test-thread",
+  threadId: "t",
   input: { value: "x" },
-  context: invalidContext,
+  // @ts-expect-error Context inference rejects a non-string tenant.
+  context: { tenantId: 42 },
 });
 // @ts-expect-error A run requires exactly one of input or resume.
 runtime.stream({ threadId: "type-test-thread" });
@@ -60,4 +59,25 @@ runtime.stream({
   threadId: "type-test-thread",
   input: { value: "x" },
   resume: {},
+});
+
+runtime.stream({ threadId: "t", continue: true });
+runtime.stream({
+  threadId: "t",
+  input: { value: "x" },
+  config: { subgraphs: true, durability: "exit", interruptBefore: ["finish"] },
+});
+// @ts-expect-error Static continuation does not also accept a resume value.
+runtime.stream({ threadId: "t", continue: true, resume: {} });
+runtime.stream({
+  threadId: "t",
+  input: { value: "x" },
+  // @ts-expect-error Agentdock owns stream encoding.
+  config: { encoding: "text/event-stream" },
+});
+runtime.stream({
+  threadId: "t",
+  input: { value: "x" },
+  // @ts-expect-error Agentdock owns the abort signal outside graph config.
+  config: { signal: new AbortController().signal },
 });

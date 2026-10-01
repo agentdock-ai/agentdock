@@ -8,8 +8,10 @@ export type {
   GraphRunConfig,
   NodeSseResponse,
   ResumeRun,
+  ContinueRun,
   Run,
   ServableCompiledGraph,
   StartRun,
 } from "./serving/types.js";
 export type { AgentEventState } from "./langgraph/event-state.js";
+export type { RunFailureStage } from "./serving/run-stream.js";

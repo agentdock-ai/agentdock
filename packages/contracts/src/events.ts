@@ -79,7 +79,7 @@ export type AgentInterrupt =
       actions: AgentInterruptAction[];
     });
 
-export const AGENT_EVENT_PROTOCOL_VERSION = 2 as const;
+export const AGENT_EVENT_PROTOCOL_VERSION = 3 as const;
 
 export interface AgentEventBase {
   protocolVersion: typeof AGENT_EVENT_PROTOCOL_VERSION;
@@ -89,6 +89,7 @@ export interface AgentEventBase {
   phaseId: string;
   sequence: number;
   timestamp: string;
+  namespace?: string[];
 }
 
 export const AgentEventType = {
@@ -103,6 +104,7 @@ export const AgentEventType = {
   InterruptRequired: "interrupt.required",
   InterruptResolved: "interrupt.resolved",
   UsageUpdated: "usage.updated",
+  RunPaused: "run.paused",
   RunCompleted: "run.completed",
   RunFailed: "run.failed",
   RunCancelled: "run.cancelled",
@@ -143,7 +145,12 @@ export type AgentEventInput =
       interruptId: string;
       decisions: JsonValue[];
     }
-  | { type: typeof AgentEventType.UsageUpdated; usage: AgentUsage }
+  | {
+      type: typeof AgentEventType.UsageUpdated;
+      usage: AgentUsage;
+      messageId?: string;
+    }
+  | { type: typeof AgentEventType.RunPaused; next: string[] }
   | {
       type: typeof AgentEventType.RunCompleted;
       finishReason: string;
@@ -155,11 +162,13 @@ export type AgentEventInput =
       type: typeof AgentEventType.RunFailed;
       code: string;
       message: string;
+      recoverable?: boolean;
       limit?: AgentLimitInfo;
     }
   | {
       type: typeof AgentEventType.RunCancelled;
       reason?: string;
+      recoverable?: boolean;
       limit?: AgentLimitInfo;
     };
 
@@ -191,7 +200,11 @@ export interface AgentReducerState {
   toolProgress: AgentToolProgress[];
   toolResults: ToolResultRecord[];
   toolErrors: ToolErrorRecord[];
+  /** First pending interrupt; use interrupts when more than one is pending. */
   interrupt: AgentInterrupt | null;
+  interrupts: AgentInterrupt[];
+  pausedNodes: string[];
+  usageByMessage: Record<string, AgentUsage>;
   interruptResolution: AgentInterruptResolution | null;
   usage: AgentUsage | null;
   limit: AgentLimitInfo | null;
@@ -217,6 +230,9 @@ export function createAgentReducerState(): AgentReducerState {
     toolResults: [],
     toolErrors: [],
     interrupt: null,
+    interrupts: [],
+    pausedNodes: [],
+    usageByMessage: {},
     interruptResolution: null,
     usage: null,
     limit: null,
@@ -251,6 +267,12 @@ export function cloneAgentEvent(value: unknown): AgentEvent {
   assertString(event.runId, "Agent event.runId");
   assertString(event.phaseId, "Agent event.phaseId");
   assertString(event.timestamp, "Agent event.timestamp");
+  if (
+    event.namespace !== undefined &&
+    (!Array.isArray(event.namespace) ||
+      !event.namespace.every((part) => typeof part === "string"))
+  )
+    throw new Error("Agent event.namespace must be a string array.");
   assertSequence(event.logicalSequence, "Agent event.logicalSequence");
   assertSequence(event.sequence, "Agent event.sequence");
   const {
@@ -261,6 +283,7 @@ export function cloneAgentEvent(value: unknown): AgentEvent {
     phaseId: _phaseId,
     sequence: _sequence,
     timestamp: _timestamp,
+    namespace: _namespace,
     ...input
   } = event;
   assertAgentEventInput(input as JsonObject);
@@ -309,7 +332,16 @@ export function assertAgentEventInput(
       assertString(value.interruptId, "Agent event.interruptId");
       assertJsonArray(value.decisions, "Agent event.decisions");
       return;
+    case AgentEventType.RunPaused:
+      if (
+        !Array.isArray(value.next) ||
+        !value.next.every((node) => typeof node === "string")
+      )
+        throw new Error("Agent event.next must be a string array.");
+      return;
     case AgentEventType.UsageUpdated:
+      if (value.messageId !== undefined)
+        assertString(value.messageId, "Agent event.messageId");
       assertUsage(value.usage, "Agent event.usage");
       return;
     case AgentEventType.RunCompleted:
@@ -321,12 +353,14 @@ export function assertAgentEventInput(
         assertLimit(value.limit, "Agent event.limit");
       return;
     case AgentEventType.RunFailed:
+      assertRecoverable(value.recoverable);
       assertString(value.code, "Agent event.code");
       assertString(value.message, "Agent event.message");
       if (value.limit !== undefined)
         assertLimit(value.limit, "Agent event.limit");
       return;
     case AgentEventType.RunCancelled:
+      assertRecoverable(value.recoverable);
       if (value.reason !== undefined)
         assertString(value.reason, "Agent event.reason");
       if (value.limit !== undefined)
@@ -343,21 +377,29 @@ export function reduceAgentEvent(
 ): AgentReducerState {
   const event = cloneAgentEvent(rawEvent);
   const fingerprint = JSON.stringify(event);
-  const previousFingerprint = state.eventFingerprints[event.eventId];
+  const previousFingerprint = Object.prototype.hasOwnProperty.call(
+    state.eventFingerprints,
+    event.eventId,
+  )
+    ? state.eventFingerprints[event.eventId]
+    : undefined;
+  const newInvocation =
+    event.type === AgentEventType.RunStarted && state.runId !== event.runId;
   if (previousFingerprint !== undefined) {
     if (previousFingerprint !== fingerprint)
       throw new Error("Agent event ID was reused for different event data.");
     return state;
   }
   if (
-    state.status === "completed" ||
-    state.status === "failed" ||
-    state.status === "cancelled"
+    (state.status === "completed" ||
+      state.status === "failed" ||
+      state.status === "cancelled") &&
+    !newInvocation
   )
     throw new Error("Agent event cannot be applied after the run is terminal.");
   if (state.status === "idle" && event.type !== AgentEventType.RunStarted)
     throw new Error("Agent event stream must begin with run.started.");
-  if (state.runId !== null && state.runId !== event.runId)
+  if (state.runId !== null && state.runId !== event.runId && !newInvocation)
     throw new Error("Agent event run ID does not match reducer state.");
   if (
     state.protocolVersion !== null &&
@@ -366,16 +408,30 @@ export function reduceAgentEvent(
     throw new Error(
       "Agent event protocol version does not match reducer state.",
     );
-  if (event.logicalSequence <= state.lastLogicalSequence)
+  if (!newInvocation && event.logicalSequence <= state.lastLogicalSequence)
     throw new Error(
       "Agent event logical sequence must increase monotonically.",
     );
   if (
+    !newInvocation &&
     state.lastPhaseId === event.phaseId &&
     event.sequence <= state.lastSequence
   )
     throw new Error("Agent event sequence must increase within a phase.");
 
+  const eventIds = [
+    ...(newInvocation ? [] : state.eventIds),
+    event.eventId,
+  ].slice(-128);
+  const eventFingerprints: Record<string, string> = {};
+  for (const id of eventIds) {
+    Object.defineProperty(eventFingerprints, id, {
+      value: id === event.eventId ? fingerprint : state.eventFingerprints[id],
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
   const next: AgentReducerState = {
     ...state,
     protocolVersion: event.protocolVersion,
@@ -383,17 +439,23 @@ export function reduceAgentEvent(
     lastSequence: event.sequence,
     lastLogicalSequence: event.logicalSequence,
     lastPhaseId: event.phaseId,
-    eventIds: [...state.eventIds, event.eventId],
-    eventFingerprints: {
-      ...state.eventFingerprints,
-      [event.eventId]: fingerprint,
-    },
+    eventIds,
+    eventFingerprints,
   };
   switch (event.type) {
     case AgentEventType.RunStarted:
-      if (state.status !== "idle" && state.status !== "waiting")
+      if (
+        state.status === "running" ||
+        (!newInvocation && state.status !== "idle")
+      )
         throw new Error("Run can only start from idle or waiting state.");
       next.status = "running";
+      next.errorCode = null;
+      next.cancellationReason = null;
+      next.finishReason = null;
+      next.usage = null;
+      next.usageByMessage = {};
+      next.limit = null;
       break;
     case AgentEventType.MessageStarted:
       next.messages = upsertMessage(next.messages, {
@@ -409,7 +471,7 @@ export function reduceAgentEvent(
         throw new Error("Message delta has no started message.");
       next.messages = next.messages.map((message) =>
         message.messageId === event.messageId
-          ? { ...message, content: [...message.content, event.part] }
+          ? { ...message, content: appendContent(message.content, event.part) }
           : message,
       );
       break;
@@ -443,39 +505,64 @@ export function reduceAgentEvent(
       next.toolErrors = upsertById(next.toolErrors, event.error);
       break;
     case AgentEventType.InterruptRequired:
-      if (next.interrupt) throw new Error("An interrupt is already pending.");
-      next.interrupt = event.interrupt;
+      if (
+        next.interrupts.some(
+          (item) => item.interruptId === event.interrupt.interruptId,
+        )
+      )
+        throw new Error("An interrupt with this ID is already pending.");
+      next.interrupts = [...next.interrupts, event.interrupt];
+      next.interrupt = next.interrupts[0] ?? null;
       next.interruptResolution = null;
       next.status = "waiting";
       break;
     case AgentEventType.InterruptResolved:
-      if (next.interrupt?.interruptId !== event.interruptId)
+      if (
+        !next.interrupts.some((item) => item.interruptId === event.interruptId)
+      )
         throw new Error(
           "Interrupt resolution does not match the pending interrupt.",
         );
-      next.interrupt = null;
+      next.interrupts = next.interrupts.filter(
+        (item) => item.interruptId !== event.interruptId,
+      );
+      next.interrupt = next.interrupts[0] ?? null;
       next.interruptResolution = {
         interruptId: event.interruptId,
         decisions: event.decisions,
       };
-      next.status = "running";
+      next.status = next.interrupts.length > 0 ? "waiting" : "running";
+      break;
+    case AgentEventType.RunPaused:
+      next.pausedNodes = event.next;
+      next.status = "waiting";
       break;
     case AgentEventType.UsageUpdated:
-      next.usage = event.usage;
+      if (event.messageId === undefined) next.usage = event.usage;
+      else {
+        next.usageByMessage = {
+          ...next.usageByMessage,
+          [event.messageId]: event.usage,
+        };
+        next.usage = sumUsage(Object.values(next.usageByMessage));
+      }
       break;
     case AgentEventType.RunCompleted:
+      if (next.interrupts.length > 0)
+        throw new Error("Cannot complete while interrupts are pending.");
+      next.pausedNodes = [];
       next.status = "completed";
       next.finishReason = event.finishReason;
       next.usage = event.usage ?? next.usage;
       next.limit = event.limit ?? next.limit;
       break;
     case AgentEventType.RunFailed:
-      next.status = "failed";
+      next.status = event.recoverable ? "waiting" : "failed";
       next.errorCode = event.code;
       next.limit = event.limit ?? next.limit;
       break;
     case AgentEventType.RunCancelled:
-      next.status = "cancelled";
+      next.status = event.recoverable ? "waiting" : "cancelled";
       next.cancellationReason = event.reason ?? null;
       next.limit = event.limit ?? next.limit;
       break;
@@ -725,4 +812,42 @@ function upsertById<T extends { toolCallId: string }>(
   return records.map((candidate, candidateIndex) =>
     candidateIndex === index ? record : candidate,
   );
+}
+
+function assertRecoverable(value: unknown): void {
+  if (value !== undefined && typeof value !== "boolean")
+    throw new Error("Agent event.recoverable must be a boolean.");
+}
+
+function appendContent(
+  content: ContentPart[],
+  part: ContentPart,
+): ContentPart[] {
+  const last = content[content.length - 1];
+  if (
+    (part.type === "text" || part.type === "reasoning") &&
+    last?.type === part.type
+  ) {
+    return [...content.slice(0, -1), { ...part, text: last.text + part.text }];
+  }
+  return [...content, part];
+}
+
+export function sumUsage(usages: readonly AgentUsage[]): AgentUsage {
+  const result: AgentUsage = {};
+  for (const key of [
+    "inputTokens",
+    "cachedInputTokens",
+    "outputTokens",
+    "reasoningTokens",
+    "totalTokens",
+    "costUsd",
+  ] as const) {
+    const values = usages.flatMap((usage) =>
+      usage[key] === undefined ? [] : [usage[key]],
+    );
+    if (values.length > 0)
+      result[key] = values.reduce((sum, value) => sum + value, 0);
+  }
+  return result;
 }

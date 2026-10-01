@@ -57,6 +57,29 @@ function applyEvent(
 The event protocol carries run identity and sequence metadata. Authentication,
 authorization, and thread identity remain the serving application's responsibility.
 
+## Protocol v3
+
+- Each invocation has a fresh `runId` and monotonically increasing
+  `logicalSequence` starting at 1. `phaseId` and `sequence` describe a phase.
+- The reducer retains messages and tool history across invocations. Start the
+  next invocation after waiting or a terminal status; concurrent invocations
+  must use separate reducers.
+- `interrupts` contains all pending interrupts. `interrupt` is a convenience
+  alias for the first. Resolution removes only the matching native ID.
+- `run.paused` supplies pending node names for static breakpoints; a recoverable
+  failure or cancellation retains waiting state.
+- `usage.updated` with `messageId` is a cumulative snapshot for that message;
+  the reducer replaces the previous snapshot and sums all messages in the
+  invocation. `run.completed.usage` is the invocation total.
+- Optional `namespace` identifies a child graph. Message and tool IDs are opaque.
+- Duplicate replay is idempotent within the last 128 events of an invocation.
+  Reuse with different data and older out-of-order events are rejected. Adjacent
+  text and reasoning deltas are coalesced; message history remains application-owned.
+
+Protocol v2 events are rejected. Upgrade serving and consumers together and use
+`createAgentReducerState()` instead of constructing a reducer seed by hand. See
+[the migration guide](https://github.com/agentdock-ai/agentdock/blob/main/MIGRATION.md).
+
 This package contains data contracts and JSON-safe helpers; model, graph,
 checkpoint, and HTTP implementations belong to the application and its chosen
 frameworks.

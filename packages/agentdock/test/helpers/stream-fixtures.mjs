@@ -128,12 +128,21 @@ class ScriptedChatModel extends BaseChatModel {
     return "agentdock-scripted";
   }
 
-  async *_streamResponseChunks() {
+  async *_streamResponseChunks(_messages, _options, runManager) {
     const chunks = this.streamSequences
       ? (this.streamSequences[this.streamIndex++] ?? [])
       : this.chunks;
     for (const chunk of chunks) {
-      yield new ChatGenerationChunk({ message: chunk });
+      const generation = new ChatGenerationChunk({ message: chunk });
+      yield generation;
+      await runManager?.handleLLMNewToken(
+        "",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { chunk: generation },
+      );
     }
   }
 

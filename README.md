@@ -32,7 +32,7 @@ uses. Agentdock does not configure or manage either one.
 import { MemorySaver } from "@langchain/langgraph";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { createAgent } from "langchain";
-import { withAgentEventState, Agentdock } from "@agentdock-ai/agentdock";
+import { Agentdock } from "@agentdock-ai/agentdock";
 
 const graph = createAgent({
   model: new ChatOpenRouter({
@@ -40,35 +40,25 @@ const graph = createAgent({
     apiKey: process.env.OPENROUTER_API_KEY,
   }),
   tools: [], // Use LangChain tool() to add application tools.
-  stateSchema: withAgentEventState({}),
   checkpointer: new MemorySaver(),
   systemPrompt: "You are a helpful assistant.",
-});
+}).graph;
 
 const runtime = new Agentdock(graph);
 ```
 
-`withAgentEventState(fields)` adds the required `agentEventState` checkpoint
-field to your graph schema. It preserves Agentdock's run identity, sequence,
-and full pending interrupt across requests; LangGraph's checkpointer and
-`thread_id` still control graph execution and resumption.
+Agentdock reads native pending tasks and never writes serving metadata into graph
+checkpoints. No Agentdock state schema is required. Use LangGraph or LangChain's
+ordinary schema for application state.
 
-Use `withAgentEventState(fields)` to include application state, and use
-`getResumeState(threadId)` to seed a fresh client from a checkpoint:
+Use `runtime.getResumeState(authorizedThreadId)` to seed a fresh client when native
+interrupts or static breakpoints are pending. The seed contains every pending
+interrupt, preserves native IDs and payloads, and starts with `runId: null`.
+Load conversation history separately with `runtime.getMessages(threadId)`.
 
-```ts
-import { Agentdock, withAgentEventState } from "@agentdock-ai/agentdock";
-import { z } from "zod";
-
-const stateSchema = withAgentEventState({ note: z.string().default("") });
-const agent = new Agentdock(graph);
-const resumeState = await agent.getResumeState(authorizedThreadId);
-```
-
-`getResumeState(threadId)` returns `null` when a checkpoint cannot seed a fresh
-client. A ready result requires a complete, validated pending interrupt.
-Hydration restores control state; load conversation history separately.
-Generated fallback message and tool-call IDs are UUID-based opaque identifiers.
+Each invocation gets a fresh `runId` with `logicalSequence` starting at 1. A client
+can apply continuation events to its existing reducer state or a hydrated seed.
+See [protocol v3 migration](./MIGRATION.md) for client changes.
 
 ## Call Agentdock from your route controller
 

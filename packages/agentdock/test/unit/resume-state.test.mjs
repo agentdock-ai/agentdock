@@ -4,41 +4,32 @@ import { AgentEventType, reduceAgentEvent } from "@agentdock-ai/contracts";
 import { EventContext } from "../../src/events/event-context.js";
 import { createResumeState } from "../../src/langgraph/resume-state.js";
 
-const interrupt = {
-  kind: "custom",
-  interruptId: "interrupt-1",
-  prompt: "Continue?",
-  actions: [{ id: "continue", name: "continue", input: {} }],
+const native = {
+  id: "interrupt-1",
+  value: { prompt: "Continue?", custom: ["yes", "no"] },
 };
-
-test("creates a thread-bound waiting reducer seed for a resume stream", () => {
+test("hydrates control state from native tasks without event bookkeeping", () => {
   const result = createResumeState(
     {
-      agentEventState: {
-        runId: "run-1",
-        logicalSequence: 7,
-        pendingInterrupt: interrupt,
-      },
+      values: {},
+      next: ["ask"],
+      tasks: [{ name: "ask", interrupts: [native] }],
     },
     "thread-1",
   );
-
   assert.equal(result.status, "ready");
-  if (result.status !== "ready") return;
-  assert.equal(result.state.status, "waiting");
-  assert.equal(result.state.runId, "run-1");
+  assert.equal(result.state.runId, null);
   assert.equal(result.state.threadId, "thread-1");
-  assert.equal(result.state.lastLogicalSequence, 7);
-  assert.deepEqual(result.state.messages, []);
-  assert.deepEqual(result.state.interrupt, interrupt);
-
-  const context = new EventContext("run-1", 7);
+  assert.equal(result.state.lastLogicalSequence, 0);
+  assert.deepEqual(result.state.interrupt.payload, native.value);
+  assert.equal(result.state.interrupts.length, 1);
+  const context = new EventContext("new-invocation", 0);
   const events = [
     context.emit({ type: AgentEventType.RunStarted }),
     context.emit({
       type: AgentEventType.InterruptResolved,
       interruptId: "interrupt-1",
-      decisions: [{ type: "approve" }],
+      decisions: [true],
     }),
     context.emit({
       type: AgentEventType.RunCompleted,
@@ -46,37 +37,90 @@ test("creates a thread-bound waiting reducer seed for a resume stream", () => {
       content: [],
     }),
   ];
-  const finalState = events.reduce(reduceAgentEvent, result.state);
-  assert.equal(finalState.status, "completed");
-  assert.equal(finalState.interrupt, null);
+  assert.equal(
+    events.reduce(reduceAgentEvent, result.state).status,
+    "completed",
+  );
 });
 
-test("reports no pending interrupt and invalid checkpoints explicitly", () => {
-  assert.deepEqual(createResumeState({}, "thread-1"), {
-    status: "invalid_checkpoint",
-  });
+test("reports malformed native interruptions and missing pending execution", () => {
   assert.deepEqual(
-    createResumeState({ agentEventState: { logicalSequence: 0 } }, "thread-1"),
+    createResumeState({ values: {}, next: [], tasks: [] }, "thread-1"),
     { status: "no_pending_interrupt" },
   );
   assert.deepEqual(
     createResumeState(
-      {
-        agentEventState: {
-          runId: "run-1",
-          logicalSequence: 7,
-          pendingInterrupt: { ...interrupt, interruptId: "" },
-        },
-      },
+      { values: { agentEventState: { pendingInterrupt: native } } },
       "thread-1",
     ),
-    { status: "invalid_checkpoint" },
+    { status: "no_pending_interrupt" },
   );
-  assert.deepEqual(createResumeState({ agentEventState: null }, "thread-1"), {
-    status: "invalid_checkpoint",
-  });
-  assert.throws(
-    () => createResumeState({}, " "),
-    /threadId must be a non-empty string/,
+  for (const interrupt of [
+    { value: "bad" },
+    { id: "", value: "bad" },
+    { id: "bad", value: undefined },
+  ]) {
+    assert.equal(
+      createResumeState(
+        { values: {}, tasks: [{ interrupts: [interrupt] }] },
+        "thread-1",
+      ).status,
+      "invalid_checkpoint",
+    );
+  }
+  assert.throws(() => createResumeState({ values: {} }, " "), /threadId/);
+});
+
+test("hydrates static breakpoints and ignores resolved task interrupts", () => {
+  const ready = createResumeState(
+    { values: {}, next: ["work"], tasks: [] },
+    "t",
+  );
+  assert.equal(ready.state.status, "waiting");
+  assert.deepEqual(ready.state.pausedNodes, ["work"]);
+  assert.equal(ready.state.interrupt, null);
+  assert.equal(
+    createResumeState(
+      { values: {}, next: [], tasks: [{ name: "done", interrupts: [native] }] },
+      "t",
+    ).status,
+    "no_pending_interrupt",
+  );
+});
+
+test("nested native snapshots deduplicate parent mirrors and retain errored pending tasks", () => {
+  const child = {
+    values: {},
+    config: { configurable: { checkpoint_ns: "child:uuid" } },
+    next: ["ask"],
+    tasks: [{ name: "ask", interrupts: [native] }],
+  };
+  const parent = {
+    values: {},
+    next: ["child"],
+    tasks: [{ name: "child", state: child, interrupts: [native] }],
+  };
+  assert.equal(createResumeState(parent, "t").state.interrupts.length, 1);
+  assert.equal(
+    createResumeState(
+      {
+        values: {},
+        next: [],
+        tasks: [{ name: "failed", error: "failed", interrupts: [native] }],
+      },
+      "t",
+    ).state.interrupt.interruptId,
+    native.id,
+  );
+});
+
+test.each([
+  { values: {}, next: [42] },
+  { values: {}, tasks: [null] },
+  { values: {}, config: 42 },
+])("rejects malformed nested native state: %j", (state) => {
+  assert.equal(
+    createResumeState({ values: {}, tasks: [{ state }] }, "t").status,
+    "invalid_checkpoint",
   );
 });

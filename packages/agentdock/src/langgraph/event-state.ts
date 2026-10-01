@@ -1,10 +1,8 @@
 import {
   assertAgentInterrupt,
-  cloneJsonValue,
   type AgentInterrupt,
 } from "@agentdock-ai/contracts";
 import { z } from "zod";
-import { isRecord } from "../utils/is-record.js";
 
 function isAgentInterrupt(value: unknown): value is AgentInterrupt {
   try {
@@ -29,12 +27,7 @@ export type AgentEventState = z.infer<typeof eventStateShape>;
 
 export const AGENT_EVENT_STATE_KEY = "agentEventState";
 
-export type AgentEventStateReadResult =
-  | { status: "valid"; state: AgentEventState }
-  | { status: "missing" }
-  | { status: "invalid" };
-
-/** Adds Agentdock's checkpoint state to fields supplied by the application. */
+/** @deprecated Protocol v3 reads native tasks; use an ordinary graph state schema. */
 export function withAgentEventState<const Fields extends z.ZodRawShape>(
   fields: Fields &
     (typeof AGENT_EVENT_STATE_KEY extends keyof Fields ? never : unknown),
@@ -46,40 +39,4 @@ export function withAgentEventState<const Fields extends z.ZodRawShape>(
     [AGENT_EVENT_STATE_KEY]: eventStateShape.default({ logicalSequence: 0 }),
     ...fields,
   });
-}
-
-export function parsePendingInterrupt(value: unknown): AgentInterrupt | null {
-  if (!isAgentInterrupt(value)) return null;
-  return cloneJsonValue(
-    value,
-    "Checkpoint pending interrupt",
-  ) as unknown as AgentInterrupt;
-}
-
-export function parseAgentEventState(
-  values: unknown,
-): AgentEventStateReadResult {
-  if (
-    !isRecord(values) ||
-    !Object.prototype.hasOwnProperty.call(values, AGENT_EVENT_STATE_KEY)
-  ) {
-    return { status: "missing" };
-  }
-
-  const rawState = values[AGENT_EVENT_STATE_KEY];
-  if (!isRecord(rawState)) return { status: "invalid" };
-  const parsed = eventStateShape.safeParse(rawState);
-  if (!parsed.success) return { status: "invalid" };
-
-  const state = parsed.data;
-  if (state.pendingInterrupt === undefined) {
-    return { status: "valid", state };
-  }
-  if (!state.runId || state.logicalSequence < 1) {
-    return { status: "invalid" };
-  }
-
-  const pendingInterrupt = parsePendingInterrupt(state.pendingInterrupt);
-  if (!pendingInterrupt) return { status: "invalid" };
-  return { status: "valid", state: { ...state, pendingInterrupt } };
 }
