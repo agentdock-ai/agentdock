@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.4",
     "prettier": "^3.5.3"
   },
   "engines": {
