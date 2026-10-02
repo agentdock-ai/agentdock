@@ -1,7 +1,7 @@
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { MemorySaver } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware } from "langchain";
-import { Agentdock } from "@agentdock-ai/agentdock";
+import { Agentdock, validateToolApprovalResume } from "@agentdock-ai/agentdock";
 import { contextSchema, getWeather, sendEmail } from "./tools.js";
 
 const model = new ChatOpenRouter({
@@ -9,7 +9,7 @@ const model = new ChatOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-export const graph = createAgent({
+const agent = createAgent({
   model,
   tools: [getWeather, sendEmail],
   contextSchema,
@@ -20,4 +20,9 @@ export const graph = createAgent({
   middleware: [humanInTheLoopMiddleware({ interruptOn: { send_email: true } })],
 });
 
-export const runtime = new Agentdock(graph);
+export const graph = agent.graph;
+
+export const runtime = new Agentdock(graph, {
+  interruptFormat: "langchain-hitl",
+  validateResume: validateToolApprovalResume,
+});

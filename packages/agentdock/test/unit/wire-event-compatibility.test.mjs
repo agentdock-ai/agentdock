@@ -64,7 +64,7 @@ test("supported message and tool chunks reduce as canonical AgentEvents", async 
     ["messages", [{ id: "final-message", content: "done" }, {}]],
   ];
   const context = new EventContext("wire-run", 0);
-  const mapper = new WireEventMapper(context);
+  const mapper = new WireEventMapper(context, [], "langchain-hitl");
   const events = [
     context.emit({ type: AgentEventType.RunStarted }),
     ...chunks.flatMap(([mode, value]) => mapper.map(mode, value)),
@@ -101,7 +101,7 @@ test("supported message and tool chunks reduce as canonical AgentEvents", async 
 
 test("tool calls keep correlation IDs across concurrent progress and completion", () => {
   const context = new EventContext("parallel-tools", 0);
-  const mapper = new WireEventMapper(context);
+  const mapper = new WireEventMapper(context, [], "langchain-hitl");
   const events = [
     context.emit({ type: AgentEventType.RunStarted }),
     ...mapper.map("tools", {
@@ -229,7 +229,7 @@ test("fallback tool IDs stay correlated through terminal tool events", () => {
 
 test("approval interrupts match a streamed partial tool call when IDs are omitted", () => {
   const context = new EventContext("partial-approval", 0);
-  const mapper = new WireEventMapper(context);
+  const mapper = new WireEventMapper(context, [], "langchain-hitl");
   const start = context.emit({ type: AgentEventType.RunStarted });
   mapper.map("messages", [
     {

@@ -1,4 +1,4 @@
-export type StreamMode = "messages" | "tools" | "updates";
+export type StreamMode = "messages" | "tools" | "updates" | "tasks";
 
 export interface StreamChunk {
   mode: StreamMode;
@@ -20,7 +20,12 @@ export function parseStreamChunk(value: unknown): StreamChunk {
     throw new Error("LangGraph emitted an invalid stream namespace.");
   const mode = value[namespaced ? 1 : 0];
   const chunk = value[namespaced ? 2 : 1];
-  if (mode !== "messages" && mode !== "tools" && mode !== "updates") {
+  if (
+    mode !== "messages" &&
+    mode !== "tools" &&
+    mode !== "updates" &&
+    mode !== "tasks"
+  ) {
     throw new Error("LangGraph emitted an unsupported stream mode.");
   }
   return { mode, value: chunk, ...(namespaced ? { namespace } : {}) };

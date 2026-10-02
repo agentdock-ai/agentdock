@@ -24,7 +24,7 @@ npm install @agentdock-ai/agentdock @agentdock-ai/contracts \
 ```
 
 Install the LangChain provider and LangGraph checkpointer that your application
-uses. Agentdock does not configure or manage either one.
+uses. LangGraph 1.4.17+ is required. Agentdock does not configure or manage either one.
 
 ## Create and serve a graph
 
@@ -58,7 +58,7 @@ Load conversation history separately with `runtime.getMessages(threadId)`.
 
 Each invocation gets a fresh `runId` with `logicalSequence` starting at 1. A client
 can apply continuation events to its existing reducer state or a hydrated seed.
-See [protocol v3 migration](./MIGRATION.md) for client changes.
+See the [protocol migration guide](./MIGRATION.md) for client changes.
 
 ## Call Agentdock from your route controller
 
@@ -75,7 +75,10 @@ await runtime.pipe(response, {
 ```
 
 To resume an interrupted graph, use the same authorized thread ID and pass the
-resume value expected by the graph or middleware:
+resume value expected by the graph or middleware. Generic interruptions remain
+opaque. For LangChain tool approval UI, select `interruptFormat: "langchain-hitl"`
+when constructing `Agentdock`. An optional application `validateResume` hook runs
+before invocation or SSE headers; native middleware owns decision permissions:
 
 ```ts
 await runtime.pipe(response, {
@@ -98,8 +101,8 @@ Agentdock does not define URL paths or HTTP request/response envelopes.
   your application handles overlapping requests for the same thread safely.
 - Pass trusted per-request data through `context`; keep secrets and authorization
   decisions in the application.
-- The Agentdock event mapper supports documented `messages`, `tools`, and
-  `updates` streams. Arbitrary graph output remains application-specific.
+- The Agentdock event mapper observes native messages, tools, updates, tasks,
+  and lifecycle callbacks. Native cache hits retain their returned messages. Arbitrary graph output remains application-specific.
 
 See [`examples/react-agent`](./examples/react-agent/README.md) for a complete
 Node server with tools and an approval interrupt.

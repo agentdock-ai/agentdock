@@ -84,7 +84,8 @@ test("stream forwards LangGraph config and keeps the server thread ID authoritat
   );
 
   const options = graph.streamOptions[0];
-  assert.equal(options.callbacks, callbacks);
+  assert.equal(options.callbacks[0], callbacks[0]);
+  assert.equal(options.callbacks.length, 2);
   assert.deepEqual(options.tags, ["request-tag"]);
   assert.deepEqual(options.metadata, { requestId: "request-1" });
   assert.equal(options.maxConcurrency, 3);
@@ -93,8 +94,13 @@ test("stream forwards LangGraph config and keeps the server thread ID authoritat
     tenantId: "tenant-1",
     thread_id: "server-thread-1",
   });
-  assert.deepEqual(options.streamMode, ["messages", "tools", "updates"]);
-  assert.equal(options.recursionLimit, 25);
+  assert.deepEqual(options.streamMode, [
+    "messages",
+    "tools",
+    "updates",
+    "tasks",
+  ]);
+  assert.equal(options.recursionLimit, undefined);
   assert.ok(options.signal instanceof AbortSignal);
 });
 
@@ -667,3 +673,10 @@ async function waitFor(predicate) {
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
 }
+
+test("Agentdock rejects invalid interrupt formatting instead of silently falling back", () => {
+  assert.throws(
+    () => new Agentdock(createGraph(), { interruptFormat: "automatic" }),
+    /interruptFormat/,
+  );
+});

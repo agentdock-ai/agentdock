@@ -12,7 +12,7 @@ import { EventContext } from "../../src/events/event-context.js";
 import { WireEventMapper } from "../../src/events/from-langgraph.js";
 
 const mapper = (namespace = []) =>
-  new WireEventMapper(new EventContext("run", 0), namespace);
+  new WireEventMapper(new EventContext("run", 0), namespace, "langchain-hitl");
 const message = (current, value, metadata = {}) =>
   current.map("messages", [value, metadata]);
 const approval = (
@@ -47,6 +47,39 @@ test("interleaved message IDs retain content without mutating emitted deltas", (
     [[{ type: "text", text: "A1A2" }], [{ type: "text", text: "B1B2" }]],
   );
   assert.deepEqual(current.completeMessages(), []);
+});
+
+test("message completion retains its native task namespace while identities use graph scope", () => {
+  const scope = ["child:graph"];
+  const current = mapper(scope);
+  const a = [...scope, "model:a"];
+  const b = [...scope, "model:b"];
+  const startedA = current.map(
+    "messages",
+    [new AIMessageChunk({ id: "a", content: "A" }), {}],
+    a,
+  )[0];
+  current.map(
+    "tools",
+    { event: "on_tool_start", toolCallId: "call", name: "lookup", input: {} },
+    [...scope, "tools:task"],
+  );
+  const startedB = current.map(
+    "messages",
+    [new AIMessageChunk({ id: "b", content: "B" }), {}],
+    b,
+  )[0];
+  current.map("updates", { done: {} }, scope);
+  const completed = current.completeMessages();
+  assert.deepEqual(
+    completed.map((e) => e.namespace),
+    [a, b],
+  );
+  assert.deepEqual(
+    completed.map((e) => e.messageId),
+    [startedA.messageId, startedB.messageId],
+  );
+  assert.equal(startedA.messageId, `${JSON.stringify(scope)}:a`);
 });
 
 test("fallback IDs stay stable within a stream and distinct across node metadata", () => {

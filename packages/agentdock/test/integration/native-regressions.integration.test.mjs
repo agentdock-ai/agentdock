@@ -12,7 +12,7 @@ import {
 } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
 import { z } from "zod";
-import { Agentdock } from "../../src/index.js";
+import { Agentdock, validateToolApprovalResume } from "../../src/index.js";
 import {
   createAgentReducerState,
   reduceAgentEvent,
@@ -89,7 +89,10 @@ for (const durability of ["sync", "async", "exit"]) {
     graph.updateState = () => {
       throw new Error("Serving must never write graph state");
     };
-    const runtime = new Agentdock(graph);
+    const runtime = new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    });
     const events = await collect(
       runtime.stream({
         threadId: durability,
@@ -104,11 +107,17 @@ for (const durability of ["sync", "async", "exit"]) {
     assert.equal(snapshot.tasks[0].interrupts[0].id, pending.interruptId);
     assert.deepEqual(snapshot.next, ["ask"]);
     assert.equal("agentEventState" in snapshot.values, false);
-    const seed = await new Agentdock(graph).getResumeState(durability);
+    const seed = await new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).getResumeState(durability);
     assert.equal(seed.runId, null);
     assert.equal(seed.interrupt.interruptId, pending.interruptId);
     const resumed = await collect(
-      new Agentdock(graph).stream({
+      new Agentdock(graph, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({
         threadId: durability,
         resume: { [pending.interruptId]: true },
         config: { durability },
@@ -138,7 +147,10 @@ test.each([true, false, "edited", [1, 2], { approved: true }, null])(
       .addEdge("ask", END)
       .compile({ checkpointer: new MemorySaver() });
     const events = await collect(
-      new Agentdock(graph).stream({ threadId: "opaque", input: {} }),
+      new Agentdock(graph, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({ threadId: "opaque", input: {} }),
     );
     assert.deepEqual(events.at(-1).interrupt.payload, {
       question: "Choose",
@@ -149,7 +161,10 @@ test.each([true, false, "edited", [1, 2], { approved: true }, null])(
         ? { [events.at(-1).interrupt.interruptId]: answer }
         : answer;
     const resumed = await collect(
-      new Agentdock(graph).stream({ threadId: "opaque", resume }),
+      new Agentdock(graph, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({ threadId: "opaque", resume }),
     );
     assert.equal(resumed.at(-1).type, "run.completed");
     assert.deepEqual(
@@ -170,7 +185,10 @@ test("parallel interrupts hydrate, partially resolve, and preserve native IDs", 
     .addEdge("askA", END)
     .addEdge("askB", END)
     .compile({ checkpointer: new MemorySaver() });
-  const runtime = new Agentdock(graph);
+  const runtime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
   const start = await collect(
     runtime.stream({ threadId: "parallel", input: {} }),
   );
@@ -198,7 +216,10 @@ test("parallel interrupts hydrate, partially resolve, and preserve native IDs", 
   assert.equal(terminal(partial).length, 0);
   const remaining = state.interrupts[0];
   const end = await collect(
-    new Agentdock(graph).stream({
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({
       threadId: "parallel",
       resume: { [remaining.interruptId]: "second answer" },
     }),
@@ -215,7 +236,10 @@ test.each([
   "invalid human decisions preserve retry and hydration: %j",
   async (decisions) => {
     const { graph, effects } = approvalGraph();
-    const runtime = new Agentdock(graph);
+    const runtime = new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    });
     const start = await collect(runtime.stream({ threadId: "retry", input }));
     const before = await graph.getState(config("retry"));
     await assert.rejects(
@@ -227,7 +251,10 @@ test.each([
     const after = await graph.getState(config("retry"));
     assert.deepEqual(after.next, before.next);
     assert.equal(after.tasks[0].id, before.tasks[0].id);
-    const seed = await new Agentdock(graph).getResumeState("retry");
+    const seed = await new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).getResumeState("retry");
     assert.equal(
       seed.interrupt.interruptId,
       start.at(-1).interrupt.interruptId,
@@ -235,7 +262,10 @@ test.each([
     const state = reduce(start);
     assert.equal(state.status, "waiting");
     const good = await collect(
-      new Agentdock(graph).stream({
+      new Agentdock(graph, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({
         threadId: "retry",
         resume: { decisions: [{ type: "approve" }] },
       }),
@@ -265,7 +295,10 @@ test("fragmented JSON tool arguments use raw chunks and preserve approval metada
   assert.deepEqual(chunks[0].tool_calls[0].args, { q: "he" });
   const { graph } = approvalGraph({ chunks });
   const events = await collect(
-    new Agentdock(graph).stream({ threadId: "fragments", input }),
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({ threadId: "fragments", input }),
   );
   assert.equal(events.at(-1).type, "interrupt.required");
   assert.equal(events.at(-1).interrupt.actions[0].toolCallId, "call");
@@ -283,7 +316,10 @@ test("fragmented JSON tool arguments use raw chunks and preserve approval metada
 test("approval matching works when token output is hidden", async () => {
   const { graph } = approvalGraph();
   const events = await collect(
-    new Agentdock(graph).stream({
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({
       threadId: "hidden",
       input,
       config: { tags: ["nostream"] },
@@ -311,7 +347,10 @@ test("parallel token streams retain every fragment and complete each message onc
     .addEdge("nodeB", END)
     .compile();
   const events = await collect(
-    new Agentdock(graph).stream({ threadId: "tokens", input: {} }),
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({ threadId: "tokens", input: {} }),
   );
   const state = reduce(events);
   assert.deepEqual(
@@ -351,7 +390,10 @@ test.each(["interruptBefore", "interruptAfter"])(
       .addEdge("work", "finish")
       .addEdge("finish", END)
       .compile({ checkpointer: new MemorySaver() });
-    const runtime = new Agentdock(graph);
+    const runtime = new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    });
     const start = await collect(
       runtime.stream({
         threadId: kind,
@@ -390,7 +432,10 @@ test.each([false, true])(
         }),
     });
     const events = await collect(
-      new Agentdock(graph).stream({
+      new Agentdock(graph, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({
         threadId: "command",
         input,
         config: { subgraphs },
@@ -420,7 +465,10 @@ test("tool roles and returned error status survive serving", async () => {
       }),
   });
   const events = await collect(
-    new Agentdock(graph).stream({ threadId: "roles", input }),
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({ threadId: "roles", input }),
   );
   const state = reduce(events);
   assert.equal(state.toolResults[0].isError, true);
@@ -460,7 +508,10 @@ test("per-invocation usage aggregates models and nested native token details", a
     .addEdge("generate", END)
     .compile();
   const events = await collect(
-    new Agentdock(graph).stream({ threadId: "usage", input: {} }),
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({ threadId: "usage", input: {} }),
   );
   assert.deepEqual(reduce(events).usage, {
     inputTokens: 3,
@@ -497,7 +548,10 @@ test.each([false, true])(
       .addEdge(START, "child")
       .addEdge("child", END)
       .compile({ checkpointer: new MemorySaver() });
-    const runtime = new Agentdock(parent);
+    const runtime = new Agentdock(parent, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    });
     const start = await collect(
       runtime.stream({ threadId: "nested", input: {}, config: { subgraphs } }),
     );
@@ -508,7 +562,10 @@ test.each([false, true])(
       start.at(-1).interrupt.interruptId,
     );
     const resumed = await collect(
-      new Agentdock(parent).stream({
+      new Agentdock(parent, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({
         threadId: "nested",
         resume: { [seed.interrupt.interruptId]: "approved child" },
         config: { subgraphs },
@@ -564,14 +621,20 @@ test("sequential approvals retain independent native IDs across fresh runtimes",
   }).graph;
   let state = reduce(
     await collect(
-      new Agentdock(graph).stream({ threadId: "sequential", input }),
+      new Agentdock(graph, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({ threadId: "sequential", input }),
     ),
   );
   const ids = [];
   for (let index = 0; index < 2; index++) {
     ids.push(state.interrupt.interruptId);
     const events = await collect(
-      new Agentdock(graph).stream({
+      new Agentdock(graph, {
+        interruptFormat: "langchain-hitl",
+        validateResume: validateToolApprovalResume,
+      }).stream({
         threadId: "sequential",
         resume: {
           [state.interrupt.interruptId]: { decisions: [{ type: "approve" }] },
@@ -589,7 +652,10 @@ test.each(["approve", "edit", "reject"])(
   "native HITL decision %s preserves graph authority",
   async (type) => {
     const { graph, effects } = approvalGraph();
-    const runtime = new Agentdock(graph);
+    const runtime = new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    });
     const start = await collect(runtime.stream({ threadId: type, input }));
     const decision =
       type === "edit"
@@ -609,7 +675,10 @@ test.each(["approve", "edit", "reject"])(
 
 test("pre-aborted resume preserves native task identity and remains retryable", async () => {
   const { graph, effects } = approvalGraph();
-  const runtime = new Agentdock(graph);
+  const runtime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
   const start = await collect(
     runtime.stream({ threadId: "cancel-resume", input }),
   );
@@ -637,7 +706,10 @@ test("pre-aborted resume preserves native task identity and remains retryable", 
 
 test("approval shape validation happens before Node and Web commit responses", async () => {
   const { graph } = approvalGraph();
-  const runtime = new Agentdock(graph);
+  const runtime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
   await collect(runtime.stream({ threadId: "validation", input }));
   const response = {
     destroyed: false,

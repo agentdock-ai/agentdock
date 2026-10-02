@@ -31,16 +31,12 @@ test.each([
   assert.throws(() => validateResume(value, [approval("i")]));
 });
 
-test("follows native review permissions for scalar and ID-map approval answers", () => {
+test("validates shape while leaving decision permissions to native middleware", () => {
   validateResume(response, [approval("i", ["approve"])]);
   validateResume({ i: response }, [approval("i", ["approve"])]);
-  assert.throws(
-    () =>
-      validateResume({ decisions: [{ type: "reject" }] }, [
-        approval("i", ["approve"]),
-      ]),
-    /not allowed/,
-  );
+  validateResume({ decisions: [{ type: "reject" }] }, [
+    approval("i", ["approve"]),
+  ]);
 });
 
 test("validates only addressed parallel approvals, requiring at least one native ID", () => {

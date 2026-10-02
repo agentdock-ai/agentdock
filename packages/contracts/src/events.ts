@@ -67,6 +67,10 @@ interface AgentInterruptBase {
   interruptId: string;
   prompt: string;
   payload?: JsonValue;
+  /** JSON Schema supplied by native interrupt response validation. */
+  responseSchema?: JsonValue;
+  /** Native answer index when available; subsequent questions may reuse an ID. */
+  occurrence?: number;
 }
 
 export type AgentInterrupt =
@@ -688,6 +692,15 @@ function assertInterrupt(
   });
   if (value.payload !== undefined)
     cloneJsonValue(value.payload, `${path}.payload`);
+  if (value.responseSchema !== undefined)
+    cloneJsonValue(value.responseSchema, `${path}.responseSchema`);
+  if (
+    value.occurrence !== undefined &&
+    (!Number.isSafeInteger(value.occurrence) ||
+      typeof value.occurrence !== "number" ||
+      value.occurrence < 0)
+  )
+    throw new Error(`${path}.occurrence must be a non-negative safe integer.`);
 }
 
 function assertUsage(

@@ -24,7 +24,7 @@ npm install @agentdock-ai/agentdock @agentdock-ai/contracts @langchain/langgraph
 ```
 
 Install the LangChain provider integration and checkpoint saver your application
-uses.
+uses. LangGraph 1.4.17 or newer is required for native lifecycle callbacks.
 
 ## Serve a compiled graph
 
@@ -55,13 +55,15 @@ const runtime = new Agentdock(graph);
 
 `getMessages(threadId, { channel?, config? })` reads a checkpoint's message channel.
 `getResumeState(threadId, config?)` returns a reducer seed for native pending
-interrupts or static breakpoints, or `null` when none are pending. Reads preserve
+interrupts or static breakpoints, or `null` when none are pending. Invalid native
+state projections throw instead of reporting no pending work. Reads preserve
 saver configuration and overwrite `configurable.thread_id` with the authorized
 thread ID. The seed contains `interrupts`, the native IDs and complete payloads,
 and `runId: null`; load conversation history separately.
 
 Every invocation receives a fresh `runId` and sequence starting at 1. IDs in child
-graph events are scoped by the optional `namespace` to avoid collisions. Treat
+graph events use the enclosing graph namespace to avoid collisions. The optional
+`namespace` attributes each event to its full native task path. Treat
 message and tool IDs as opaque correlation values.
 
 After authenticating and authorizing the request, give the runtime the
@@ -84,8 +86,9 @@ await runtime.pipe(response, {
 `config` forwards LangGraph run options such as callbacks, tags, metadata,
 store, and extra `configurable` values. Agentdock overwrites
 `configurable.thread_id` with the application-authorized `threadId`; stream
-modes, context, signal, and recursion limit are also controlled by the serving
-runtime.
+modes, context, and signal are controlled by serving. Recursion limits remain
+LangGraph-owned unless `new Agentdock(graph, { recursionLimit })` explicitly
+overrides them.
 
 `pipe()` writes a `text/event-stream` response, waits for Node backpressure,
 aborts graph work after a disconnect, and ends the response once. The app should
@@ -95,10 +98,29 @@ calling it.
 ## Resume an interrupt
 
 Use the same authorized thread ID and pass LangGraph's resume value unchanged.
-The graph and checkpointer own the approval policy and execution. Agentdock
-validates human-in-the-loop decision shapes against the native review configuration
-before invocation or response headers. Invalid shapes leave the native checkpoint
-untouched and reject the call.
+The graph and middleware own approval policy and execution. Generic interruptions
+stay opaque, including payloads with keys such as `reviewConfigs`. Native
+`responseSchema` metadata is preserved as `interrupt.responseSchema`.
+
+For LangChain HITL presentation, explicitly select its display format. Request
+validation belongs to the application; an optional hook runs before graph execution
+or SSE headers. The supplied helper checks the response envelope and action count;
+it does not enforce permissions. Choose it when your application's current policy
+uses the pending batch unchanged:
+
+```ts
+import { Agentdock, validateToolApprovalResume } from "@agentdock-ai/agentdock";
+
+const runtime = new Agentdock(graph, {
+  interruptFormat: "langchain-hitl",
+  validateResume: validateToolApprovalResume,
+});
+```
+
+The hook receives `(resumeValue, pendingInterrupts, currentContext)` and may be
+asynchronous. Applications changing the batch or policy on resume should supply
+their own validator using that current context. Native `interrupt(value,
+{ responseSchema })` keeps schema validation and corrected retries in LangGraph.
 
 ```ts
 await runtime.pipe(response, {
@@ -118,14 +140,18 @@ await runtime.pipe(response, {
 ```
 
 Continue a static `interruptBefore` or `interruptAfter` breakpoint using
-`{ threadId, continue: true }`. Dynamic interrupts require `resume`. Custom resume
+`{ threadId, continue: true }`. Dynamic interrupts require `resume`. Passing native
+`input: new Command({ resume, update, goto })` or `input: null` uses the same
+control projection and preserves the native input. Custom resume
 values must be JSON-compatible; use an ID map for falsy values such as `false` or
 `null` that native LangGraph does not accept as scalar resume values.
 
 `run.paused` marks a static breakpoint or a continuation that still has pending
 interrupts. `interrupt.required` carries each newly pending interrupt. A failed or
 cancelled continuation reports `recoverable: true` when the native checkpoint
-still has pending work. Refresh `getResumeState()` before deciding how to retry.
+still has pending work. Control events reconcile resolved approvals before a recoverable failure or
+cancellation, so warm clients and cold hydration agree. A static stop after the
+final node emits completion because no native work remains.
 
 For server diagnostics, supply `new Agentdock(graph, { onError(error, details) {} })`.
 The details include `threadId`, `runId`, and `stage` (`graph`, `mapper`, or

@@ -7,7 +7,7 @@ import {
 import { WireEventMapper } from "../events/from-langgraph.js";
 import { EventContext } from "../events/event-context.js";
 import { isRecord } from "../utils/is-record.js";
-import type { ThreadSnapshot } from "./thread-read.js";
+import { assertThreadSnapshot, type ThreadSnapshot } from "./thread-read.js";
 
 export type CreateResumeStateResult =
   | { status: "ready"; state: AgentReducerState }
@@ -18,18 +18,12 @@ export type CreateResumeStateResult =
 interface PendingNativeInterrupt {
   raw: unknown;
   snapshot: ThreadSnapshot;
+  occurrence?: number;
 }
 
 function pendingNative(snapshot: ThreadSnapshot): PendingNativeInterrupt[] {
   const pending: PendingNativeInterrupt[] = [];
   for (const task of snapshot.tasks ?? []) {
-    if (
-      snapshot.next &&
-      task.name &&
-      !snapshot.next.includes(task.name) &&
-      !task.error
-    )
-      continue;
     if (isRecord(task.state) && "values" in task.state) {
       pending.push(...pendingNative(toNestedSnapshot(task.state)));
     }
@@ -37,7 +31,7 @@ function pendingNative(snapshot: ThreadSnapshot): PendingNativeInterrupt[] {
       if (!isRecord(raw) || typeof raw.id !== "string")
         throw new Error("Checkpoint contains an invalid native interrupt.");
       if (!pending.some((item) => isRecord(item.raw) && item.raw.id === raw.id))
-        pending.push({ raw, snapshot });
+        pending.push({ raw, snapshot, occurrence: task.resumeCount });
     }
   }
   return pending;
@@ -49,6 +43,7 @@ export function nativeInterrupts(snapshot: ThreadSnapshot): unknown[] {
 
 export function mapSnapshotInterrupts(
   snapshot: ThreadSnapshot,
+  interruptFormat: "opaque" | "langchain-hitl" = "opaque",
 ): AgentInterrupt[] {
   const interrupts = new Map<string, AgentInterrupt>();
   for (const pending of pendingNative(snapshot)) {
@@ -57,13 +52,17 @@ export function mapSnapshotInterrupts(
     const mapper = new WireEventMapper(
       new EventContext(crypto.randomUUID(), 0),
       namespace,
+      interruptFormat,
     );
     mapper.seedMessages(pending.snapshot.values);
     for (const event of mapper.map("updates", {
       __interrupt__: [pending.raw],
     })) {
-      if (event.type === "interrupt.required")
+      if (event.type === "interrupt.required") {
+        if (pending.occurrence !== undefined)
+          event.interrupt.occurrence = pending.occurrence;
         interrupts.set(event.interrupt.interruptId, event.interrupt);
+      }
     }
   }
   return [...interrupts.values()];
@@ -72,11 +71,12 @@ export function mapSnapshotInterrupts(
 export function createResumeState(
   snapshot: ThreadSnapshot,
   threadId: string,
+  interruptFormat: "opaque" | "langchain-hitl" = "opaque",
 ): CreateResumeStateResult {
   if (typeof threadId !== "string" || !threadId.trim())
     throw new Error("threadId must be a non-empty string.");
   try {
-    const interrupts = mapSnapshotInterrupts(snapshot);
+    const interrupts = mapSnapshotInterrupts(snapshot, interruptFormat);
     const pausedNodes = [...(snapshot.next ?? [])];
     if (interrupts.length === 0 && pausedNodes.length === 0)
       return { status: "no_pending_interrupt" };
@@ -98,23 +98,6 @@ export function createResumeState(
 }
 
 function toNestedSnapshot(value: Record<string, unknown>): ThreadSnapshot {
-  if (
-    value.next !== undefined &&
-    (!Array.isArray(value.next) ||
-      !value.next.every((node) => typeof node === "string"))
-  )
-    throw new Error("Checkpoint contains invalid pending nodes.");
-  if (
-    value.tasks !== undefined &&
-    (!Array.isArray(value.tasks) ||
-      !value.tasks.every(
-        (task) =>
-          isRecord(task) &&
-          (task.interrupts === undefined || Array.isArray(task.interrupts)),
-      ))
-  )
-    throw new Error("Checkpoint contains invalid native tasks.");
-  if (value.config !== undefined && !isRecord(value.config))
-    throw new Error("Checkpoint contains invalid configuration.");
-  return value as unknown as ThreadSnapshot;
+  assertThreadSnapshot(value);
+  return value;
 }

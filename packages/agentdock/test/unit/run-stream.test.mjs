@@ -296,3 +296,45 @@ test("consumer return aborts unfinished graph work and closes its iterator", asy
   assert.equal(current.options.signal.aborted, true);
   assert.equal(returned, true);
 });
+
+test("application preflight validation receives current context and runs before graph execution", async () => {
+  const current = graph({
+    snapshot: {
+      values: {},
+      tasks: [{ interrupts: [{ id: "i", value: "Choose" }] }],
+    },
+  });
+  const context = { policy: "current" };
+  const calls = [];
+  const source = runtime(current, {
+    async validateResume(value, pending, receivedContext) {
+      calls.push({ value, pending, receivedContext });
+      throw new Error("Application rejected response");
+    },
+  });
+  await assert.rejects(
+    () => collect(source.stream({ threadId: "t", resume: true, context })),
+    /Application rejected/,
+  );
+  assert.equal(current.calls.length, 0);
+  assert.equal(calls[0].receivedContext, context);
+  assert.equal(calls[0].pending[0].interruptId, "i");
+});
+test("opaque resume is not inspected without an application validator", async () => {
+  const current = graph({
+    snapshot: {
+      values: {},
+      tasks: [{ interrupts: [{ id: "i", value: "Choose" }] }],
+    },
+  });
+  const events = await collect(
+    runtime(current).stream({
+      threadId: "t",
+      resume: { decision: "application-defined" },
+    }),
+  );
+  assert.deepEqual(current.calls[0].input.resume, {
+    decision: "application-defined",
+  });
+  assert.equal(events.at(-1).type, "run.completed");
+});

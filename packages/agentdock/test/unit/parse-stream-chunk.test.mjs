@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { parseStreamChunk } from "../../src/langgraph/parse-stream-chunk.js";
 
-test.each(["messages", "tools", "updates"])(
+test.each(["messages", "tools", "updates", "tasks"])(
   "parses a %s stream chunk",
   (mode) => {
     const value = { payload: mode };
@@ -19,7 +19,7 @@ test.each([
   assert.throws(() => parseStreamChunk(chunk), error);
 });
 
-test.each(["messages", "tools", "updates"])(
+test.each(["messages", "tools", "updates", "tasks"])(
   "parses namespaced %s chunks",
   (mode) => {
     const namespace = ["child:uuid", "nested:uuid"];

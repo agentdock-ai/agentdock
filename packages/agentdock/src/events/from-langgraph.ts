@@ -28,6 +28,7 @@ interface OpenMessage {
   messageId: string;
   role: "assistant" | "user" | "tool";
   content: ContentPart[];
+  namespace: readonly string[];
 }
 
 interface ActiveTool extends ToolCallRecord {}
@@ -41,6 +42,9 @@ export class WireEventMapper {
   private readonly openMessages = new Map<string, OpenMessage>();
   private readonly activeTools = new Map<string, ActiveTool>();
   private readonly unnamedTools = new Map<string, string[]>();
+  private readonly seenMessages = new Set<string>();
+  private currentNamespace: readonly string[];
+  private lastContent: ContentPart[] = [];
   private readonly usages = new Map<string, AgentUsage>();
   private readonly fallbackMessageIds = new Map<string, string>();
   private readonly partialToolCalls = new Map<string, PartialToolCall>();
@@ -48,10 +52,13 @@ export class WireEventMapper {
   constructor(
     private readonly context: EventContext,
     private readonly namespace: readonly string[] = [],
-  ) {}
+    private readonly interruptFormat: "opaque" | "langchain-hitl" = "opaque",
+  ) {
+    this.currentNamespace = namespace;
+  }
 
   private emit(input: AgentEventInput): AgentEvent {
-    return this.context.emit(input, this.namespace);
+    return this.context.emit(input, this.currentNamespace);
   }
   private scopeId(id: string): string {
     return this.namespace.length
@@ -59,7 +66,12 @@ export class WireEventMapper {
       : id;
   }
 
-  map(mode: string, rawChunk: unknown): AgentEvent[] {
+  map(
+    mode: string,
+    rawChunk: unknown,
+    eventNamespace = this.namespace,
+  ): AgentEvent[] {
+    this.currentNamespace = eventNamespace;
     switch (mode) {
       case "messages":
         return this.mapMessage(rawChunk);
@@ -73,18 +85,27 @@ export class WireEventMapper {
   }
 
   completeMessages(): AgentEvent[] {
-    return [...this.openMessages.values()].map((message) => {
-      this.openMessages.delete(message.messageId);
-      return this.emit({
+    return [...this.openMessages.values()].map((message) =>
+      this.completeMessage(message),
+    );
+  }
+
+  private completeMessage(message: OpenMessage): AgentEvent {
+    this.openMessages.delete(message.messageId);
+    this.seenMessages.add(message.messageId);
+    if (message.role === "assistant") this.lastContent = message.content;
+    return this.context.emit(
+      {
         type: AgentEventType.MessageCompleted,
         messageId: message.messageId,
         role: message.role,
         content: message.content,
-      });
-    });
+      },
+      message.namespace,
+    );
   }
 
-  private mapMessage(rawChunk: unknown): AgentEvent[] {
+  private mapMessage(rawChunk: unknown, collectUsage = true): AgentEvent[] {
     if (!Array.isArray(rawChunk) || rawChunk.length !== 2) {
       throw new Error("LangGraph emitted an unsupported message chunk.");
     }
@@ -110,6 +131,7 @@ export class WireEventMapper {
         ? rawMessage.id
         : fallbackId;
     const messageId = this.scopeId(nativeMessageId);
+    if (this.seenMessages.has(messageId)) return [];
     this.collectToolCallChunks(messageId, rawMessage);
     const events: AgentEvent[] = [];
     const content = toContentParts(rawMessage.content);
@@ -117,7 +139,9 @@ export class WireEventMapper {
 
     if (!openMessage) {
       if (content.length === 0) {
-        const usage = this.messageUsage(messageId, rawMessage);
+        const usage = collectUsage
+          ? this.messageUsage(messageId, rawMessage)
+          : undefined;
         if (usage)
           events.push(
             this.emit({ type: AgentEventType.UsageUpdated, usage, messageId }),
@@ -131,7 +155,12 @@ export class WireEventMapper {
           role,
         }),
       );
-      openMessage = { messageId, role, content: [] };
+      openMessage = {
+        messageId,
+        role,
+        content: [],
+        namespace: [...this.currentNamespace],
+      };
       this.openMessages.set(messageId, openMessage);
     }
 
@@ -146,7 +175,9 @@ export class WireEventMapper {
       );
     }
 
-    const usage = this.messageUsage(messageId, rawMessage);
+    const usage = collectUsage
+      ? this.messageUsage(messageId, rawMessage)
+      : undefined;
     if (usage)
       events.push(
         this.emit({ type: AgentEventType.UsageUpdated, usage, messageId }),
@@ -237,17 +268,33 @@ export class WireEventMapper {
     if (!isRecord(rawChunk)) {
       throw new Error("LangGraph emitted an unsupported update chunk.");
     }
+    const events: AgentEvent[] = [];
+    const cached =
+      isRecord(rawChunk.__metadata__) && rawChunk.__metadata__.cached === true;
     for (const update of Object.values(rawChunk)) {
       if (!isRecord(update) || !Array.isArray(update.messages)) continue;
       for (const message of update.messages) {
         if (!isRecord(message)) continue;
         const id = typeof message.id === "string" ? message.id : "checkpoint";
         this.collectToolCallChunks(id, message, true);
+        if (!cached) continue;
+        const messageId = this.scopeId(id);
+        if (this.seenMessages.has(messageId)) continue;
+        const open = this.openMessages.get(messageId);
+        if (!open) events.push(...this.mapMessage([message, {}], false));
+        const current = this.openMessages.get(messageId);
+        if (current) {
+          current.content = toContentParts(message.content);
+          events.push(this.completeMessage(current));
+        }
       }
     }
     const interrupts = rawChunk.__interrupt__;
-    if (!Array.isArray(interrupts) || interrupts.length === 0) return [];
-    return interrupts.flatMap((first) => this.mapInterrupt(first));
+    if (!Array.isArray(interrupts) || interrupts.length === 0) return events;
+    return [
+      ...events,
+      ...interrupts.flatMap((first) => this.mapInterrupt(first)),
+    ];
   }
 
   private mapInterrupt(first: unknown): AgentEvent[] {
@@ -256,10 +303,14 @@ export class WireEventMapper {
     }
     const interruptId = first.id;
     const value = isRecord(first.value) ? first.value : {};
-    const rawActions = Array.isArray(value.actionRequests)
-      ? value.actionRequests
-      : [];
-    const isToolApproval = Array.isArray(value.reviewConfigs);
+    const rawActions =
+      this.interruptFormat === "langchain-hitl" &&
+      Array.isArray(value.actionRequests)
+        ? value.actionRequests
+        : [];
+    const isToolApproval =
+      this.interruptFormat === "langchain-hitl" &&
+      Array.isArray(value.reviewConfigs);
     const actions = rawActions.flatMap((rawAction, index) => {
       if (!isRecord(rawAction)) return [];
       const explicitToolCallId =
@@ -303,6 +354,11 @@ export class WireEventMapper {
       payload: cloneJsonValue(first.value, "Interrupt payload"),
       actions,
     } as AgentInterrupt;
+    if (first.response_schema !== undefined)
+      interrupt.responseSchema = cloneJsonValue(
+        first.response_schema,
+        "Interrupt response schema",
+      );
     const completedMessages = this.completeMessages();
     completedMessages.push(
       this.emit({ type: AgentEventType.InterruptRequired, interrupt }),
@@ -329,6 +385,17 @@ export class WireEventMapper {
     }
   }
 
+  seedHistory(values: unknown): void {
+    if (!isRecord(values) || !Array.isArray(values.messages)) return;
+    for (const message of values.messages)
+      if (isRecord(message) && typeof message.id === "string")
+        this.seenMessages.add(this.scopeId(message.id));
+  }
+
+  get content(): ContentPart[] {
+    return cloneContentParts(this.lastContent);
+  }
+
   get usage(): AgentUsage | undefined {
     if (this.usages.size === 0) return undefined;
     return sumUsage([...this.usages.values()]);
@@ -351,6 +418,8 @@ export class WireEventMapper {
 
   private findUnnamedTool(name: string, consume: boolean): string | undefined {
     const ids = this.unnamedTools.get(name);
+    if (ids && ids.length > 1)
+      throw new Error("Parallel tool events require a native execution ID.");
     const id = consume ? ids?.shift() : ids?.[0];
     if (consume && ids?.length === 0) this.unnamedTools.delete(name);
     return id;

@@ -15,3 +15,5 @@ export type {
 } from "./serving/types.js";
 export type { AgentEventState } from "./langgraph/event-state.js";
 export type { RunFailureStage } from "./serving/run-stream.js";
+
+export { validateResume as validateToolApprovalResume } from "./langgraph/validate-resume.js";

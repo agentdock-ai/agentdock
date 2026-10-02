@@ -27,7 +27,7 @@ export type AgentEventState = z.infer<typeof eventStateShape>;
 
 export const AGENT_EVENT_STATE_KEY = "agentEventState";
 
-/** @deprecated Protocol v3 reads native tasks; use an ordinary graph state schema. */
+/** @deprecated Native tasks determine pending work; use an ordinary graph state schema. */
 export function withAgentEventState<const Fields extends z.ZodRawShape>(
   fields: Fields &
     (typeof AGENT_EVENT_STATE_KEY extends keyof Fields ? never : unknown),

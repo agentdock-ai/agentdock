@@ -269,3 +269,85 @@ it("many message deltas coalesce into stable content parts", () => {
     { type: "text", text: "x".repeat(97) },
   ]);
 });
+
+it("preserves JSON response schemas without sharing mutable schema objects", () => {
+  const input: AgentEventInput = {
+    type: AgentEventType.InterruptRequired,
+    interrupt: {
+      kind: "custom",
+      interruptId: "schema",
+      prompt: "Answer",
+      actions: [],
+      responseSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+      },
+    },
+  };
+  const original = event(input, 2);
+  const cloned = cloneAgentEvent(original);
+  expect(cloned).toEqual(original);
+  if (
+    cloned.type === "interrupt.required" &&
+    original.type === "interrupt.required"
+  )
+    expect(cloned.interrupt.responseSchema).not.toBe(
+      original.interrupt.responseSchema,
+    );
+  const state = [started, original].reduce(
+    reduceAgentEvent,
+    createAgentReducerState(),
+  );
+  expect(state.interrupt?.responseSchema).toEqual(
+    input.interrupt.responseSchema,
+  );
+});
+it("allows native interrupt ID reuse only after its previous occurrence resolves", () => {
+  const events = [
+    started,
+    event(interruption("same"), 2),
+    event({ type: AgentEventType.RunStarted }, 1, "next"),
+    event(
+      {
+        type: AgentEventType.InterruptResolved,
+        interruptId: "same",
+        decisions: ["first"],
+      },
+      2,
+      "next",
+    ),
+    event(interruption("same"), 3, "next"),
+  ];
+  const state = events.reduce(reduceAgentEvent, createAgentReducerState());
+  expect(state.interrupts).toHaveLength(1);
+  expect(state.status).toBe("waiting");
+});
+
+it("preserves native interrupt occurrence indices in events and reducer state", () => {
+  const input = interruption("question");
+  if (input.type !== "interrupt.required")
+    throw new Error("Expected interrupt");
+  input.interrupt.occurrence = 2;
+  const required = event(input, 2);
+  expect(cloneAgentEvent(required)).toEqual(required);
+  const state = [started, required].reduce(
+    reduceAgentEvent,
+    createAgentReducerState(),
+  );
+  expect(state.interrupt?.occurrence).toBe(2);
+});
+
+it.each([-1, 0.5, Number.MAX_SAFE_INTEGER + 1, Infinity, "1", null])(
+  "rejects invalid native interrupt occurrence %j",
+  (occurrence) => {
+    const input = interruption("question");
+    if (input.type !== "interrupt.required")
+      throw new Error("Expected interrupt");
+    expect(() =>
+      cloneAgentEvent({
+        ...event(input, 2),
+        interrupt: { ...input.interrupt, occurrence },
+      }),
+    ).toThrow(/occurrence/);
+  },
+);

@@ -71,7 +71,7 @@ test("reports malformed native interruptions and missing pending execution", () 
   assert.throws(() => createResumeState({ values: {} }, " "), /threadId/);
 });
 
-test("hydrates static breakpoints and ignores resolved task interrupts", () => {
+test("hydrates static breakpoints and never infers task identity from node names", () => {
   const ready = createResumeState(
     { values: {}, next: ["work"], tasks: [] },
     "t",
@@ -84,7 +84,7 @@ test("hydrates static breakpoints and ignores resolved task interrupts", () => {
       { values: {}, next: [], tasks: [{ name: "done", interrupts: [native] }] },
       "t",
     ).status,
-    "no_pending_interrupt",
+    "ready",
   );
 });
 

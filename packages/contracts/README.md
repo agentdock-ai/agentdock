@@ -57,7 +57,7 @@ function applyEvent(
 The event protocol carries run identity and sequence metadata. Authentication,
 authorization, and thread identity remain the serving application's responsibility.
 
-## Protocol v3
+## Event protocol
 
 - Each invocation has a fresh `runId` and monotonically increasing
   `logicalSequence` starting at 1. `phaseId` and `sequence` describe a phase.
@@ -65,7 +65,10 @@ authorization, and thread identity remain the serving application's responsibili
   next invocation after waiting or a terminal status; concurrent invocations
   must use separate reducers.
 - `interrupts` contains all pending interrupts. `interrupt` is a convenience
-  alias for the first. Resolution removes only the matching native ID.
+  alias for the first. Resolution removes only the matching native ID. A later
+  occurrence may reuse that ID after resolution. Optional `occurrence` records
+  the native task's saved resume count. `responseSchema`, when present,
+  contains the native JSON Schema for its answer.
 - `run.paused` supplies pending node names for static breakpoints; a recoverable
   failure or cancellation retains waiting state.
 - `usage.updated` with `messageId` is a cumulative snapshot for that message;

@@ -6,39 +6,52 @@ import {
   type AgentEventInput,
   type AgentInterrupt,
 } from "@agentdock-ai/contracts";
-import { Command, type LangGraphRunnableConfig } from "@langchain/langgraph";
+import {
+  Command,
+  isCommand,
+  type LangGraphRunnableConfig,
+} from "@langchain/langgraph";
 import { createAbortScope } from "../signals/compose-abort-signals.js";
 import { EventContext } from "../events/event-context.js";
 import { WireEventMapper } from "../events/from-langgraph.js";
+import { mapSnapshotInterrupts } from "../langgraph/resume-state.js";
 import {
-  mapSnapshotInterrupts,
-  nativeInterrupts,
-} from "../langgraph/resume-state.js";
-import { validateResume } from "../langgraph/validate-resume.js";
-import { parseStreamChunk } from "../langgraph/parse-stream-chunk.js";
+  parseStreamChunk,
+  type StreamChunk,
+} from "../langgraph/parse-stream-chunk.js";
+import { ToolObserver } from "../langgraph/tool-observer.js";
+import { mergeConfigs } from "@langchain/core/runnables";
+import {
+  readControlSnapshot,
+  readFailureSnapshot,
+  reconcileInterrupts,
+  type NativeControlGraph,
+} from "../langgraph/control-projection.js";
 import { isRecord } from "../utils/is-record.js";
 import type { ThreadSnapshot } from "../langgraph/thread-read.js";
 import type { Run, ServableCompiledGraph } from "./types.js";
 
 export type RunFailureStage = "graph" | "mapper" | "checkpoint";
 export interface RunStreamOptions {
-  recursionLimit: number;
+  recursionLimit?: number;
+  interruptFormat?: "opaque" | "langchain-hitl";
+  validateResume?: (
+    value: unknown,
+    pending: readonly AgentInterrupt[],
+    context: Record<string, unknown> | undefined,
+  ) => void | Promise<void>;
   onError?: (
     error: unknown,
     details: { threadId: string; runId: string; stage: RunFailureStage },
   ) => void;
 }
-interface RuntimeGraph {
+interface RuntimeGraph extends NativeControlGraph {
   stream(
     input: unknown,
     options: LangGraphRunnableConfig & {
-      streamMode: readonly ["messages", "tools", "updates"];
+      streamMode: readonly ["messages", "tools", "updates", "tasks"];
     },
   ): Promise<AsyncIterable<unknown>>;
-  getState(
-    config: LangGraphRunnableConfig,
-    options?: { subgraphs?: boolean },
-  ): Promise<ThreadSnapshot>;
 }
 
 /** Serves one native invocation without mutating graph checkpoints. */
@@ -63,20 +76,34 @@ export class RunStream {
       ...run.config,
       configurable: { ...run.config?.configurable, thread_id: run.threadId },
     };
-    let pending: AgentInterrupt[] = [];
-    if (!("input" in run)) {
-      const snapshot = await this.graph.getState(config, { subgraphs: true });
-      pending = mapSnapshotInterrupts(snapshot);
-      if (!snapshot.next?.length && !pending.length)
-        throw new Error(
-          "Cannot resume this thread: no native pending interrupt or breakpoint.",
-        );
-      if ("resume" in run) validateResume(run.resume, pending);
-      if ("continue" in run && pending.length)
-        throw new Error("Dynamic interrupts require a resume value.");
-    }
+    let input: unknown;
+    if ("resume" in run) input = new Command({ resume: run.resume });
+    else if ("continue" in run) input = null;
+    else input = run.input;
+    const resume = isCommand(input) ? input.resume : undefined;
+    const continuation = input === null || isCommand(input);
+    let before: ThreadSnapshot | undefined;
+    if (continuation || this.graph.checkpointer)
+      before = await readControlSnapshot(this.graph, config);
+    const pending = before
+      ? mapSnapshotInterrupts(before, this.options.interruptFormat)
+      : [];
+    if ("resume" in run && !pending.length && !before?.next?.length)
+      throw new Error(
+        "Cannot resume this thread: no native pending interrupt or breakpoint.",
+      );
+    if (resume !== undefined)
+      await this.options.validateResume?.(resume, pending, run.context);
+    if ("continue" in run && pending.length)
+      throw new Error("Dynamic interrupts require a resume value.");
     const context = new EventContext(crypto.randomUUID(), 0);
-    const mapper = new WireEventMapper(context);
+    const mapper = new WireEventMapper(
+      context,
+      [],
+      this.options.interruptFormat,
+    );
+    mapper.seedHistory(before?.values);
+    if (!continuation) mapper.seedHistory(input);
     const mappers = new Map<string, WireEventMapper>([["[]", mapper]]);
     const abortScope = createAbortScope(run.signal);
     const interrupts = new Map<string, unknown>();
@@ -84,108 +111,138 @@ export class RunStream {
     let finished = false;
     let iterator: AsyncIterator<unknown> | undefined;
     let stage: RunFailureStage = "graph";
+    const observer = new ToolObserver();
+    let checkpointConfig = config;
+    const raised = new Set<string>();
+    const project = (chunk: StreamChunk) => {
+      let namespace = chunk.namespace ?? [];
+      if (
+        chunk.mode === "messages" &&
+        Array.isArray(chunk.value) &&
+        isRecord(chunk.value[1]) &&
+        typeof chunk.value[1].langgraph_checkpoint_ns === "string"
+      )
+        namespace = chunk.value[1].langgraph_checkpoint_ns
+          .split("|")
+          .filter(Boolean);
+      if (chunk.mode === "messages" || chunk.mode === "tools")
+        namespace = namespace.slice(0, -1);
+      const key = JSON.stringify(namespace);
+      let current = mappers.get(key);
+      if (!current) {
+        current = new WireEventMapper(
+          context,
+          namespace,
+          this.options.interruptFormat,
+        );
+        mappers.set(key, current);
+      }
+      return current.map(chunk.mode, chunk.value, chunk.namespace ?? []);
+    };
     try {
       yield context.emit({ type: AgentEventType.RunStarted });
       if (abortScope.signal.aborted) throw abortScope.signal.reason;
-      let input: unknown;
-      if ("resume" in run) input = new Command({ resume: run.resume });
-      else if ("continue" in run) input = null;
-      else input = run.input;
+      const options: LangGraphRunnableConfig = mergeConfigs(config, {
+        callbacks: [observer],
+      });
+      options.context = run.context;
+      options.signal = abortScope.signal;
+      if (this.options.recursionLimit !== undefined)
+        options.recursionLimit = this.options.recursionLimit;
       const source = await this.graph.stream(input, {
-        ...config,
-        context: run.context,
-        signal: abortScope.signal,
-        streamMode: ["messages", "tools", "updates"],
-        recursionLimit: this.options.recursionLimit,
+        ...options,
+        streamMode: ["messages", "tools", "updates", "tasks"],
       });
       iterator = source[Symbol.asyncIterator]();
       while (true) {
         stage = "graph";
         const next = await iterator.next();
-        if (next.done) break;
         stage = "mapper";
+        for (const chunk of observer.drain())
+          for (const event of project(chunk)) yield event;
+        if (next.done) break;
         const chunk = parseStreamChunk(next.value);
-        if (chunk.mode === "updates") context.advancePhase();
-        if (
-          chunk.mode === "updates" &&
-          isRecord(chunk.value) &&
-          Array.isArray(chunk.value.__interrupt__)
-        ) {
-          if (chunk.value.__interrupt__.length === 0) breakpoint = true;
-          for (const interrupt of chunk.value.__interrupt__) {
-            if (!isRecord(interrupt) || typeof interrupt.id !== "string")
-              throw new Error("LangGraph emitted an invalid interrupt.");
-            interrupts.set(interrupt.id, interrupt);
-          }
+        if (chunk.mode === "tasks") {
+          if (isRecord(chunk.value) && "result" in chunk.value)
+            for (const interrupt of Array.isArray(chunk.value.interrupts)
+              ? chunk.value.interrupts
+              : [])
+              if (isRecord(interrupt) && typeof interrupt.id === "string")
+                raised.add(interrupt.id);
           continue;
         }
-        const namespace = chunk.namespace ?? [];
-        const key = JSON.stringify(namespace);
-        let currentMapper = mappers.get(key);
-        if (!currentMapper) {
-          currentMapper = new WireEventMapper(context, namespace);
-          mappers.set(key, currentMapper);
+        {
+          if (chunk.mode === "updates") context.advancePhase();
+          if (
+            chunk.mode === "updates" &&
+            isRecord(chunk.value) &&
+            Array.isArray(chunk.value.__interrupt__)
+          ) {
+            if (!chunk.value.__interrupt__.length) breakpoint = true;
+            for (const interrupt of chunk.value.__interrupt__) {
+              if (!isRecord(interrupt) || typeof interrupt.id !== "string")
+                throw new Error("LangGraph emitted an invalid interrupt.");
+              interrupts.set(interrupt.id, interrupt);
+            }
+            continue;
+          }
+          if (observer.observedTools && chunk.mode === "tools") continue;
+          for (const event of project(chunk)) yield event;
         }
-        for (const event of currentMapper.map(chunk.mode, chunk.value))
-          yield event;
       }
       if (abortScope.signal.aborted) throw abortScope.signal.reason;
       stage = "checkpoint";
+      if (observer.interruption) {
+        checkpointConfig = {
+          ...config,
+          configurable: {
+            ...config.configurable,
+            checkpoint_id: observer.interruption.checkpointId,
+          },
+        };
+        breakpoint = observer.interruption.interrupts.length === 0;
+      }
       let snapshot: ThreadSnapshot | undefined;
-      if (pending.length || breakpoint || interrupts.size) {
-        snapshot = await this.graph.getState(config, { subgraphs: true });
-        mapper.seedMessages(snapshot.values);
-        if (snapshot.tasks) {
-          interrupts.clear();
-          for (const interrupt of nativeInterrupts(snapshot)) {
-            if (isRecord(interrupt) && typeof interrupt.id === "string")
-              interrupts.set(interrupt.id, interrupt);
-          }
-        }
-      }
+      if (breakpoint || interrupts.size || observer.interruption)
+        snapshot = await readControlSnapshot(this.graph, checkpointConfig);
       stage = "mapper";
-      for (const currentMapper of mappers.values()) {
+      for (const currentMapper of mappers.values())
         for (const event of currentMapper.completeMessages()) yield event;
-      }
-      // A successfully exhausted invocation confirms which previous interrupts resolved.
-      for (const interrupt of pending) {
-        if (interrupts.has(interrupt.interruptId)) continue;
-        const value = "resume" in run ? run.resume : null;
-        yield context.emit({
-          type: AgentEventType.InterruptResolved,
-          interruptId: interrupt.interruptId,
-          decisions: this.resumeDecisions(
-            value,
-            interrupt.interruptId,
-            pending.length,
-          ),
-        });
-      }
-      const newInterrupts = [...interrupts.entries()]
-        .filter(([id]) => !pending.some((item) => item.interruptId === id))
-        .map(([, value]) => value);
       if (snapshot?.tasks) {
-        for (const interrupt of mapSnapshotInterrupts(snapshot)) {
-          if (
-            !pending.some((item) => item.interruptId === interrupt.interruptId)
-          )
-            yield context.emit({
-              type: AgentEventType.InterruptRequired,
-              interrupt,
-            });
-        }
+        const current = mapSnapshotInterrupts(
+          snapshot,
+          this.options.interruptFormat,
+        );
+        for (const event of reconcileInterrupts(
+          context,
+          pending,
+          current,
+          resume,
+          raised,
+          snapshot.next,
+        ))
+          yield event;
+        interrupts.clear();
+        for (const interrupt of current)
+          interrupts.set(interrupt.interruptId, interrupt);
+        breakpoint = breakpoint && Boolean(snapshot.next?.length);
       } else {
+        if (!interrupts.size)
+          for (const event of reconcileInterrupts(
+            context,
+            pending,
+            [],
+            resume,
+            raised,
+            snapshot?.next,
+          ))
+            yield event;
         for (const event of mapper.map("updates", {
-          __interrupt__: newInterrupts,
+          __interrupt__: [...interrupts.values()],
         }))
           yield event;
       }
       if (interrupts.size || breakpoint) {
-        if (breakpoint || newInterrupts.length === 0)
-          yield context.emit({
-            type: AgentEventType.RunPaused,
-            next: [...(snapshot?.next ?? [])],
-          });
         finished = true;
         return;
       }
@@ -198,7 +255,7 @@ export class RunStream {
       const completed: Extract<AgentEventInput, { type: "run.completed" }> = {
         type: AgentEventType.RunCompleted,
         finishReason: "stop",
-        content: [],
+        content: [...mappers.values()].flatMap((current) => current.content),
       };
       if (usages.length) completed.usage = sumUsage(usages);
       yield context.emit(completed);
@@ -214,19 +271,31 @@ export class RunStream {
       } catch {
         /* Logging must not replace the original failure. */
       }
-      let recoverable = false;
-      if (!("input" in run)) {
-        try {
-          const snapshot = await this.graph.getState(config, {
-            subgraphs: true,
-          });
-          recoverable = Boolean(
-            snapshot.next?.length || nativeInterrupts(snapshot).length,
+      let recoverable = pending.length > 0;
+      try {
+        const snapshot = await readFailureSnapshot(
+          this.graph,
+          checkpointConfig,
+          observer.rootTasks,
+        );
+        if (snapshot) {
+          const current = mapSnapshotInterrupts(
+            snapshot,
+            this.options.interruptFormat,
           );
-        } catch {
-          // Preserve the failure when its recovery checkpoint cannot be read.
-          recoverable = pending.length > 0;
-        }
+          for (const event of reconcileInterrupts(
+            context,
+            pending,
+            current,
+            resume,
+            raised,
+            snapshot.next,
+          ))
+            yield event;
+          recoverable = Boolean(snapshot.next?.length || current.length);
+        } else recoverable = false;
+      } catch {
+        // Retain the original error and last known control state when a read fails.
       }
       finished = true;
       yield context.emit(
@@ -248,14 +317,6 @@ export class RunStream {
       if (iterator?.return) await iterator.return().catch(() => undefined);
       abortScope.dispose();
     }
-  }
-  private resumeDecisions(value: unknown, id: string, count: number) {
-    if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, id))
-      return [cloneJsonValue(value[id])];
-    if (count > 1) return [];
-    if (isRecord(value) && Array.isArray(value.decisions))
-      return value.decisions.map((item) => cloneJsonValue(item));
-    return [cloneJsonValue(value)];
   }
   private assertRun(run: Run<unknown, Record<string, unknown>>): void {
     if (!run || typeof run !== "object")

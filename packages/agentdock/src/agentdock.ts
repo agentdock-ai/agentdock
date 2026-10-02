@@ -18,13 +18,15 @@ import type {
 } from "./serving/types.js";
 
 export interface AgentdockOptions {
-  /** LangGraph safety limit; defaults to 25 graph steps. */
+  /** Optional override; otherwise LangGraph resolves its configured limit. */
   recursionLimit?: number;
+  /** Explicit display format for native LangChain HITL middleware. Defaults to opaque. */
+  interruptFormat?: "opaque" | "langchain-hitl";
+  /** Application-owned preflight validation, before execution or SSE headers. */
+  validateResume?: RunStreamOptions["validateResume"];
   /** Server-side diagnostics; errors sent to clients remain sanitized. */
   onError?: RunStreamOptions["onError"];
 }
-
-const DEFAULT_RECURSION_LIMIT = 25;
 
 /** Owns graph serving and checkpoint reads without binding to an HTTP server. */
 export class Agentdock<
@@ -32,15 +34,28 @@ export class Agentdock<
 > implements AgentRuntime<GraphInput<Graph>, GraphContext<Graph>> {
   private readonly runStream: RunStream;
   private readonly graph: Graph;
+  private readonly interruptFormat: "opaque" | "langchain-hitl";
 
   constructor(graph: Graph, options: AgentdockOptions = {}) {
-    const recursionLimit = options.recursionLimit ?? DEFAULT_RECURSION_LIMIT;
-    if (!Number.isSafeInteger(recursionLimit) || recursionLimit <= 0) {
+    const recursionLimit = options.recursionLimit;
+    if (
+      recursionLimit !== undefined &&
+      (!Number.isSafeInteger(recursionLimit) || recursionLimit <= 0)
+    ) {
       throw new Error("recursionLimit must be a positive safe integer.");
     }
+    if (
+      options.interruptFormat !== undefined &&
+      options.interruptFormat !== "opaque" &&
+      options.interruptFormat !== "langchain-hitl"
+    )
+      throw new Error("interruptFormat must be opaque or langchain-hitl.");
     this.graph = graph;
+    this.interruptFormat = options.interruptFormat ?? "opaque";
     this.runStream = new RunStream(graph, {
       recursionLimit,
+      interruptFormat: this.interruptFormat,
+      validateResume: options.validateResume,
       onError: options.onError,
     });
   }
@@ -77,7 +92,11 @@ export class Agentdock<
   ): Promise<AgentReducerState | null> {
     const snapshot = await getThreadSnapshot(this.graph, threadId, config);
     if (!snapshot) return null;
-    const result = createResumeState(snapshot, threadId);
+    const result = createResumeState(snapshot, threadId, this.interruptFormat);
+    if (result.status === "invalid_checkpoint")
+      throw new Error(
+        "Native checkpoint could not be projected into resume state.",
+      );
     return result.status === "ready" ? result.state : null;
   }
 }

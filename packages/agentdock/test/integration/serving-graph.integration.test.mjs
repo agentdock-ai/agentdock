@@ -5,7 +5,11 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { Agentdock, withAgentEventState } from "../../src/index.js";
+import {
+  Agentdock,
+  withAgentEventState,
+  validateToolApprovalResume,
+} from "../../src/index.js";
 import {
   Command,
   END,
@@ -45,7 +49,10 @@ test("composed event state works with createAgent and a general StateGraph", asy
 
 test("invocation identity and native interrupt survive resume with a fresh runtime", async () => {
   const { sent, contexts, graph, threadId } = await createApprovalAgent();
-  const startRuntime = new Agentdock(graph);
+  const startRuntime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
   const startEvents = await collect(
     startRuntime.stream({
       input: { messages: [{ role: "user", content: "send hello" }] },
@@ -67,7 +74,10 @@ test("invocation identity and native interrupt survive resume with a fresh runti
     startEvents.at(-1).interrupt.interruptId,
   );
 
-  const resumeRuntime = new Agentdock(graph);
+  const resumeRuntime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
   const resumeEvents = await collect(
     resumeRuntime.stream({
       threadId,
@@ -108,7 +118,10 @@ test("invocation identity and native interrupt survive resume with a fresh runti
 
 test("native interrupt checkpoint is durable before the interrupt event is yielded", async () => {
   const { sent, graph, threadId } = await createApprovalAgent();
-  const iterator = new Agentdock(graph)
+  const iterator = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  })
     .stream({
       input: { messages: [{ role: "user", content: "send hello" }] },
       threadId,
@@ -142,19 +155,28 @@ test("native interrupt checkpoint is durable before the interrupt event is yield
 test("cold client hydrates from checkpoint and reduces resume events", async () => {
   const { graph, threadId } = await createApprovalAgent();
   const startEvents = await collect(
-    new Agentdock(graph).stream({
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({
       input: { messages: [{ role: "user", content: "send hello" }] },
       threadId,
       context: { userId: "user-42" },
     }),
   );
-  const seed = await new Agentdock(graph).getResumeState(threadId);
+  const seed = await new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  }).getResumeState(threadId);
   assert.ok(seed);
   assert.equal(seed.status, "waiting");
   assert.deepEqual(seed.interrupt, startEvents.at(-1).interrupt);
 
   const resumeEvents = await collect(
-    new Agentdock(graph).stream({
+    new Agentdock(graph, {
+      interruptFormat: "langchain-hitl",
+      validateResume: validateToolApprovalResume,
+    }).stream({
       threadId,
       resume: { decisions: [{ type: "approve" }] },
       context: { userId: "user-42" },
@@ -177,7 +199,10 @@ test("independent starts on one thread receive new event run identities", async 
     checkpointer: new MemorySaver(),
     stateSchema: withAgentEventState({}),
   }).graph;
-  const runtime = new Agentdock(graph);
+  const runtime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
   const input = { messages: [{ role: "user", content: "hello" }] };
   const first = await collect(
     runtime.stream({ threadId: "same-thread", input }),
@@ -209,7 +234,10 @@ test("one runtime keeps concurrent run state isolated", async () => {
     checkpointer: new MemorySaver(),
     stateSchema: withAgentEventState({}),
   }).graph;
-  const runtime = new Agentdock(graph);
+  const runtime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
   const [first, second] = await Promise.all([
     collect(
       runtime.stream({
@@ -243,7 +271,10 @@ test("resume requires native pending execution", async () => {
     .addEdge(START, "step")
     .addEdge("step", END)
     .compile({ checkpointer: new MemorySaver() });
-  const runtime = new Agentdock(graph);
+  const runtime = new Agentdock(graph, {
+    interruptFormat: "langchain-hitl",
+    validateResume: validateToolApprovalResume,
+  });
 
   await assert.rejects(
     async () =>

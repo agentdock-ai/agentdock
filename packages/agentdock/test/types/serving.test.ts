@@ -1,4 +1,4 @@
-import { END, START, StateGraph } from "@langchain/langgraph";
+import { Command, END, START, StateGraph } from "@langchain/langgraph";
 import { z } from "zod";
 import { withAgentEventState, Agentdock } from "../../src/index.js";
 
@@ -81,3 +81,15 @@ runtime.stream({
   // @ts-expect-error Agentdock owns the abort signal outside graph config.
   config: { signal: new AbortController().signal },
 });
+
+runtime.stream({
+  threadId: "t",
+  input: new Command({
+    resume: { approved: true },
+    update: { value: "changed" },
+  }),
+});
+runtime.stream({ threadId: "t", input: null });
+new Agentdock(graph, { interruptFormat: "langchain-hitl" });
+// @ts-expect-error Only supported interrupt display formats are accepted.
+new Agentdock(graph, { interruptFormat: "automatic" });

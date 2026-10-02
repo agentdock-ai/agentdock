@@ -1,7 +1,7 @@
 import type { AgentInterrupt } from "@agentdock-ai/contracts";
 import { isRecord } from "../utils/is-record.js";
 
-/** Validate wire shape using the native interrupt's review configuration. */
+/** Validate the opt-in HITL response envelope; middleware owns permissions. */
 export function validateResume(
   value: unknown,
   pending: readonly AgentInterrupt[],
@@ -34,28 +34,13 @@ export function validateResume(
       throw new Error(
         "Resume must contain one decision for each pending approval action.",
       );
-    const payload = interrupt.payload;
-    const configs =
-      isRecord(payload) && Array.isArray(payload.reviewConfigs)
-        ? payload.reviewConfigs
-        : [];
-    for (const [index, decision] of response.decisions.entries()) {
-      const action = interrupt.actions[index];
-      const review = configs.find(
-        (item) => isRecord(item) && item.actionName === action.name,
-      );
-      const allowed =
-        isRecord(review) && Array.isArray(review.allowedDecisions)
-          ? review.allowedDecisions
-          : [];
+    for (const decision of response.decisions) {
       if (
         !isRecord(decision) ||
         typeof decision.type !== "string" ||
-        !allowed.includes(decision.type)
+        !["approve", "edit", "reject"].includes(decision.type)
       )
-        throw new Error(
-          "Resume decision type is not allowed by the pending interrupt.",
-        );
+        throw new Error("Resume decision must be approve, edit, or reject.");
       if (
         decision.type === "edit" &&
         (!isRecord(decision.editedAction) ||
