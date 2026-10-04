@@ -16,7 +16,7 @@ import {
 import { createCheckpointStores } from "../helpers/checkpoint-stores.mjs";
 
 const cases = ["memory", "sqlite"].flatMap((backend) =>
-  ["zod", "annotation", "legacy", "application-field"].flatMap((schema) =>
+  ["zod", "annotation", "application-field"].flatMap((schema) =>
     ["sync", "async", "exit"].flatMap((durability) =>
       ["native", "adapter"].flatMap((start) =>
         ["native", "adapter"].map((resume) => ({

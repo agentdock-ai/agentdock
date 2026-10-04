@@ -1,6 +1,5 @@
 export { Agentdock } from "./agentdock.js";
 export type { AgentdockOptions } from "./agentdock.js";
-export { withAgentEventState } from "./langgraph/event-state.js";
 export type {
   AgentRuntime,
   GraphContext,
@@ -13,7 +12,6 @@ export type {
   ServableCompiledGraph,
   StartRun,
 } from "./serving/types.js";
-export type { AgentEventState } from "./langgraph/event-state.js";
 export type { RunFailureStage } from "./serving/run-stream.js";
 
-export { validateResume as validateToolApprovalResume } from "./langgraph/validate-resume.js";
+export { validateToolApprovalResume } from "./langgraph/validate-tool-approval-resume.js";

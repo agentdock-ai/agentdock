@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["test/**/*.test.mjs"],
+    include: ["test/**/*.test.ts"],
     clearMocks: true,
     restoreMocks: true,
     coverage: {
@@ -13,7 +13,7 @@ export default defineConfig({
       exclude: ["src/**/*.d.ts"],
       thresholds: {
         perFile: true,
-        statements: 98,
+        statements: 100,
         branches: 95,
         functions: 100,
         lines: 100,

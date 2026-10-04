@@ -44,8 +44,7 @@
   },
   "dependencies": {
     "@agentdock-ai/contracts": "^0.2.0",
-    "@langchain/langgraph": "^1.4.17",
-    "zod": "^4.5.4"
+    "@langchain/langgraph": "^1.4.17"
   },
   "devDependencies": {
     "@langchain/core": "^1.2.11",
@@ -54,7 +53,8 @@
     "langchain": "^1.5.10",
     "prettier": "^3.5.3",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "zod": "^4.5.4"
   },
   "engines": {
     "node": ">=22"

@@ -8,7 +8,6 @@ import type { StreamChunk } from "./parse-stream-chunk.js";
 export class ToolObserver extends GraphCallbackHandler {
   name = "AgentdockToolObserver";
   awaitHandlers = true;
-  observedTools = false;
   interruption?: GraphInterruptEvent;
   readonly rootTasks = new Set<string>();
   private rootStep = -Infinity;
@@ -39,6 +38,19 @@ export class ToolObserver extends GraphCallbackHandler {
     { namespace: string[]; id: string; name: string }
   >();
   private readonly chunks: StreamChunk[] = [];
+  private listener?: () => void;
+
+  subscribe(listener: () => void): () => void {
+    this.listener = listener;
+    return () => {
+      this.listener = undefined;
+    };
+  }
+
+  private enqueue(chunk: StreamChunk): void {
+    this.chunks.push(chunk);
+    this.listener?.();
+  }
 
   handleToolStart(
     _tool: unknown,
@@ -51,7 +63,6 @@ export class ToolObserver extends GraphCallbackHandler {
     toolCallId?: string,
   ): void {
     if (!metadata || tags?.includes("langsmith:hidden")) return;
-    this.observedTools = true;
     const namespace =
       typeof metadata.langgraph_checkpoint_ns === "string"
         ? metadata.langgraph_checkpoint_ns.split("|").filter(Boolean)
@@ -62,7 +73,7 @@ export class ToolObserver extends GraphCallbackHandler {
       name: runName ?? "tool",
     };
     this.calls.set(runId, call);
-    this.chunks.push({
+    this.enqueue({
       mode: "tools",
       namespace,
       value: {
@@ -89,7 +100,7 @@ export class ToolObserver extends GraphCallbackHandler {
   ): void {
     const call = this.calls.get(runId);
     if (!call) return;
-    this.chunks.push({
+    this.enqueue({
       mode: "tools",
       namespace: call.namespace,
       value: {

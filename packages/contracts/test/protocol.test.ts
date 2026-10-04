@@ -5,14 +5,14 @@ import {
   cloneAgentEvent,
   createAgentReducerState,
   reduceAgentEvent,
-  type AgentEvent,
   type AgentEventInput,
+  type AgentEventBase,
 } from "../src/index.js";
-function event(
-  input: AgentEventInput,
+function event<Input extends AgentEventInput>(
+  input: Input,
   sequence: number,
   runId = "run",
-): AgentEvent {
+): AgentEventBase & Input {
   return {
     ...input,
     protocolVersion: AGENT_EVENT_PROTOCOL_VERSION,
@@ -36,10 +36,13 @@ const interruption = (id: string): AgentEventInput => ({
   },
 });
 
-it("rejects old wire versions and accepts namespaces", () => {
-  expect(() => cloneAgentEvent({ ...started, protocolVersion: 2 })).toThrow(
-    /protocol version/,
-  );
+it("rejects unsupported wire versions and accepts namespaces", () => {
+  expect(() =>
+    cloneAgentEvent({
+      ...started,
+      protocolVersion: AGENT_EVENT_PROTOCOL_VERSION + 1,
+    }),
+  ).toThrow(/protocol version/);
   expect(
     cloneAgentEvent({ ...started, namespace: ["child:task"] }).namespace,
   ).toEqual(["child:task"]);

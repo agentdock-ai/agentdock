@@ -20,12 +20,7 @@ export function parseStreamChunk(value: unknown): StreamChunk {
     throw new Error("LangGraph emitted an invalid stream namespace.");
   const mode = value[namespaced ? 1 : 0];
   const chunk = value[namespaced ? 2 : 1];
-  if (
-    mode !== "messages" &&
-    mode !== "tools" &&
-    mode !== "updates" &&
-    mode !== "tasks"
-  ) {
+  if (mode !== "messages" && mode !== "updates" && mode !== "tasks") {
     throw new Error("LangGraph emitted an unsupported stream mode.");
   }
   return { mode, value: chunk, ...(namespaced ? { namespace } : {}) };

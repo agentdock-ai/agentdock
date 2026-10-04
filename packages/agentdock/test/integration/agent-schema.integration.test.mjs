@@ -11,11 +11,7 @@ import {
 } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
 import { z } from "zod";
-import {
-  Agentdock,
-  withAgentEventState,
-  validateToolApprovalResume,
-} from "../../src/index.js";
+import { Agentdock, validateToolApprovalResume } from "../../src/index.js";
 import {
   createScriptedChatModel,
   createScriptedMessageChunks,
@@ -32,7 +28,7 @@ import {
 } from "../helpers/native-state-fixtures.mjs";
 
 const cases = ["memory", "sqlite"].flatMap((backend) =>
-  ["default", "custom", "legacy"].flatMap((schema) =>
+  ["default", "custom"].flatMap((schema) =>
     ["approve", "edit", "reject"].map((decision) => ({
       backend,
       schema,
@@ -75,8 +71,7 @@ function createApprovalAgent(saver, schema, effects) {
     const fields = {
       business: z.object({ account: z.string(), flags: z.array(z.string()) }),
     };
-    options.stateSchema =
-      schema === "legacy" ? withAgentEventState(fields) : z.object(fields);
+    options.stateSchema = z.object(fields);
   }
   return createAgent(options).graph;
 }
@@ -110,17 +105,6 @@ test.each(cases)(
       const input = { messages: [{ role: "user", content: "Send the email" }] };
       if (schema !== "default")
         input.business = { account: "customer", flags: ["keep"] };
-      if (schema === "legacy")
-        input.agentEventState = {
-          runId: "stale",
-          logicalSequence: 99,
-          pendingInterrupt: {
-            kind: "custom",
-            interruptId: "wrong",
-            prompt: "Wrong",
-            actions: [],
-          },
-        };
       const originalInput = structuredClone(input);
       const config = threadConfig("email");
       const native = async (nativeInput) =>

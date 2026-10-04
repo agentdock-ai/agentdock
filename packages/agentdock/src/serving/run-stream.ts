@@ -11,7 +11,8 @@ import {
   isCommand,
   type LangGraphRunnableConfig,
 } from "@langchain/langgraph";
-import { createAbortScope } from "../signals/compose-abort-signals.js";
+import { closeIterator } from "../utils/close-iterator.js";
+import { createAbortScope } from "../signals/abort-scope.js";
 import { EventContext } from "../events/event-context.js";
 import { WireEventMapper } from "../events/from-langgraph.js";
 import { mapSnapshotInterrupts } from "../langgraph/resume-state.js";
@@ -20,6 +21,10 @@ import {
   type StreamChunk,
 } from "../langgraph/parse-stream-chunk.js";
 import { ToolObserver } from "../langgraph/tool-observer.js";
+import {
+  observeStream,
+  type ObservedChunk,
+} from "../langgraph/observed-stream.js";
 import { mergeConfigs } from "@langchain/core/runnables";
 import {
   readControlSnapshot,
@@ -49,7 +54,7 @@ interface RuntimeGraph extends NativeControlGraph {
   stream(
     input: unknown,
     options: LangGraphRunnableConfig & {
-      streamMode: readonly ["messages", "tools", "updates", "tasks"];
+      streamMode: readonly ["messages", "updates", "tasks"];
     },
   ): Promise<AsyncIterable<unknown>>;
 }
@@ -110,6 +115,7 @@ export class RunStream {
     let breakpoint = false;
     let finished = false;
     let iterator: AsyncIterator<unknown> | undefined;
+    let observed: AsyncIterator<ObservedChunk> | undefined;
     let stage: RunFailureStage = "graph";
     const observer = new ToolObserver();
     let checkpointConfig = config;
@@ -151,24 +157,36 @@ export class RunStream {
         options.recursionLimit = this.options.recursionLimit;
       const source = await this.graph.stream(input, {
         ...options,
-        streamMode: ["messages", "tools", "updates", "tasks"],
+        streamMode: ["messages", "updates", "tasks"],
       });
       iterator = source[Symbol.asyncIterator]();
+      observed = observeStream(iterator, observer, abortScope.signal);
       while (true) {
         stage = "graph";
-        const next = await iterator.next();
+        const next = await observed.next();
         stage = "mapper";
-        for (const chunk of observer.drain())
-          for (const event of project(chunk)) yield event;
         if (next.done) break;
-        const chunk = parseStreamChunk(next.value);
+        const chunk =
+          next.value.source === "callback"
+            ? next.value.chunk
+            : parseStreamChunk(next.value.value);
         if (chunk.mode === "tasks") {
-          if (isRecord(chunk.value) && "result" in chunk.value)
-            for (const interrupt of Array.isArray(chunk.value.interrupts)
-              ? chunk.value.interrupts
-              : [])
-              if (isRecord(interrupt) && typeof interrupt.id === "string")
-                raised.add(interrupt.id);
+          if (isRecord(chunk.value) && "result" in chunk.value) {
+            if (
+              chunk.value.interrupts !== undefined &&
+              !Array.isArray(chunk.value.interrupts)
+            )
+              throw new Error("LangGraph emitted invalid task interrupts.");
+            for (const interrupt of chunk.value.interrupts ?? []) {
+              if (
+                !isRecord(interrupt) ||
+                typeof interrupt.id !== "string" ||
+                !interrupt.id
+              )
+                throw new Error("LangGraph emitted an invalid task interrupt.");
+              raised.add(interrupt.id);
+            }
+          }
           continue;
         }
         {
@@ -186,7 +204,6 @@ export class RunStream {
             }
             continue;
           }
-          if (observer.observedTools && chunk.mode === "tools") continue;
           for (const event of project(chunk)) yield event;
         }
       }
@@ -314,7 +331,8 @@ export class RunStream {
       );
     } finally {
       if (!finished) abortScope.abort(new Error("Stream consumer stopped."));
-      if (iterator?.return) await iterator.return().catch(() => undefined);
+      await closeIterator(observed);
+      await closeIterator(iterator);
       abortScope.dispose();
     }
   }
@@ -332,8 +350,26 @@ export class RunStream {
     if ("continue" in run && run.continue !== true)
       throw new Error("Run continue must be true.");
     if ("resume" in run) cloneJsonValue(run.resume, "Run resume");
-    if (run.config && "encoding" in run.config)
-      throw new Error("Agentdock owns stream encoding.");
+    if (run.context !== undefined && !isRecord(run.context))
+      throw new Error("Run context must be an object.");
+    if (run.config !== undefined) {
+      if (!isRecord(run.config))
+        throw new Error("Run config must be an object.");
+      if (
+        run.config.configurable !== undefined &&
+        !isRecord(run.config.configurable)
+      )
+        throw new Error("Run config.configurable must be an object.");
+      for (const key of [
+        "encoding",
+        "streamMode",
+        "signal",
+        "context",
+        "recursionLimit",
+      ])
+        if (key in run.config)
+          throw new Error(`Agentdock owns stream option ${key}.`);
+    }
     if (run.signal !== undefined && !(run.signal instanceof AbortSignal))
       throw new Error("Run signal must be an AbortSignal.");
   }

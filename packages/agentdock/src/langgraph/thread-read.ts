@@ -38,6 +38,7 @@ export async function getThreadSnapshot(
     },
     { subgraphs: true },
   );
+  assertThreadSnapshot(snapshot);
   if (
     (!isRecord(snapshot.values) || Object.keys(snapshot.values).length === 0) &&
     !snapshot.tasks?.length &&
@@ -75,10 +76,11 @@ export async function normalizeSnapshot(
   const saver = graph.checkpointer;
   const completed = new Set<string>();
   const resumeCounts = new Map<string, number>();
+  const checkpointConfig = snapshot.config;
   const canReadWrites =
-    isCheckpointReader(saver) && snapshot.config !== undefined;
-  if (isCheckpointReader(saver) && snapshot.config) {
-    const saved = await saver.getTuple(snapshot.config);
+    isCheckpointReader(saver) && checkpointConfig !== undefined;
+  if (canReadWrites) {
+    const saved = await saver.getTuple(checkpointConfig);
     for (const [id, channel, value] of saved?.pendingWrites ?? []) {
       if (channel === "__resume__" && Array.isArray(value))
         resumeCounts.set(id, value.length);

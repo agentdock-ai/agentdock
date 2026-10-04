@@ -6,7 +6,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { withAgentEventState, Agentdock } from "../../src/index.js";
+import { Agentdock } from "../../src/index.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
 import { z } from "zod";
@@ -28,7 +28,6 @@ test("serves a completed createAgent workflow over an authenticated SSE route", 
       ],
     }),
     tools: [],
-    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
   }).graph;
   const runtime = new Agentdock(graph);
@@ -160,7 +159,6 @@ function createApprovalGraph() {
       responses: ["", "Done."],
     }),
     tools: [send],
-    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
     middleware: [humanInTheLoopMiddleware({ interruptOn: { send: true } })],
   }).graph;

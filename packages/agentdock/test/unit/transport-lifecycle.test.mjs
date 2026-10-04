@@ -166,3 +166,218 @@ function makeEvent(type) {
   }
   return context.emit({ type });
 }
+
+test.each(["node", "web"])(
+  "%s source construction failures detach parent cancellation",
+  async (transport) => {
+    const parent = new AbortController();
+    let added = 0;
+    let removed = 0;
+    const add = parent.signal.addEventListener.bind(parent.signal);
+    const remove = parent.signal.removeEventListener.bind(parent.signal);
+    parent.signal.addEventListener = (...args) => {
+      added++;
+      add(...args);
+    };
+    parent.signal.removeEventListener = (...args) => {
+      removed++;
+      remove(...args);
+    };
+    const response = new FakeResponse();
+    let signal;
+    const source = (run) => {
+      signal = run.signal;
+      throw new Error("construction failed");
+    };
+    const run = { ...createRun("construct"), signal: parent.signal };
+    await assert.rejects(
+      transport === "node"
+        ? pipeEvents(response, run, source)
+        : createSseResponse(run, source),
+      /construction failed/,
+    );
+    assert.equal(added, 1);
+    assert.equal(removed, 1);
+    assert.equal(signal.aborted, true);
+    assert.equal(response.listenerCount("close"), 0);
+  },
+);
+
+test("Node response end failures still close the source iterator", async () => {
+  const response = new FakeResponse();
+  response.end = () => {
+    throw new Error("end failed");
+  };
+  let returned = false;
+  await assert.rejects(
+    pipeEvents(response, createRun("end"), () =>
+      (async function* () {
+        try {
+          yield makeEvent(AgentEventType.RunStarted);
+          yield makeEvent(AgentEventType.RunCompleted);
+        } finally {
+          returned = true;
+        }
+      })(),
+    ),
+    /end failed/,
+  );
+  assert.equal(returned, true);
+  assert.equal(response.listenerCount("close"), 0);
+});
+
+test.each([false, true])(
+  "Web cancellation handles an in-flight read (reject=%s)",
+  async (reject) => {
+    let finish;
+    let readStarted;
+    const started = new Promise((resolve) => {
+      readStarted = resolve;
+    });
+    let calls = 0;
+    let returned = 0;
+    let signal;
+    const response = await createSseResponse(createRun("race"), (run) => {
+      signal = run.signal;
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            async next() {
+              calls++;
+              if (calls === 1)
+                return {
+                  done: false,
+                  value: makeEvent(AgentEventType.RunStarted),
+                };
+              return new Promise((resolve, rejectRead) => {
+                finish = () =>
+                  reject
+                    ? rejectRead(new Error("late rejection"))
+                    : resolve({
+                        done: false,
+                        value: makeEvent(AgentEventType.RunStarted),
+                      });
+                readStarted();
+              });
+            },
+            async return() {
+              returned++;
+              finish();
+              return { done: true };
+            },
+          };
+        },
+      };
+    });
+    const reader = response.body.getReader();
+    await reader.read();
+    const pending = reader.read();
+    await started;
+    await reader.cancel("closed");
+    assert.equal((await pending).done, true);
+    assert.equal(signal.reason, "closed");
+    assert.equal(returned, 1);
+  },
+);
+
+test("Node close after a normal response end does not signal a disconnect", async () => {
+  const response = new FakeResponse();
+  let signal;
+  response.write = (frame) => {
+    response.frames.push(frame);
+    response.writableEnded = true;
+    response.emit("close");
+    return true;
+  };
+  await pipeEvents(response, createRun("ended"), (run) => {
+    signal = run.signal;
+    return (async function* () {
+      yield makeEvent(AgentEventType.RunCompleted);
+    })();
+  });
+  assert.equal(signal.aborted, false);
+  assert.equal(response.endCount, 0);
+});
+
+test("Node backpressure handles a response destroyed during write", async () => {
+  const response = new FakeResponse();
+  response.write = () => {
+    response.destroyed = true;
+    return false;
+  };
+  await pipeEvents(response, createRun("destroyed-write"), () =>
+    (async function* () {
+      yield makeEvent(AgentEventType.RunStarted);
+    })(),
+  );
+  assert.equal(response.endCount, 0);
+  assert.equal(response.listenerCount("close"), 0);
+  assert.equal(response.listenerCount("drain"), 0);
+});
+
+test("Node source failure on an empty stream propagates when no event can frame it", async () => {
+  const response = new FakeResponse();
+  let calls = 0;
+  // Failure to commit headers cannot be framed as a stream event.
+  response.writeHead = () => {
+    throw new Error("headers failed");
+  };
+  await assert.rejects(
+    pipeEvents(response, createRun("headers"), () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: true };
+          },
+          async return() {
+            calls++;
+            return { done: true };
+          },
+        };
+      },
+    })),
+    /headers failed/,
+  );
+  assert.equal(calls, 1);
+  assert.equal(response.listenerCount("close"), 0);
+});
+
+test("Node closes an empty source without pulling a completed iterator twice", async () => {
+  const response = new FakeResponse();
+  let calls = 0;
+  await pipeEvents(response, createRun("empty"), () => ({
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          calls++;
+          return { done: true };
+        },
+      };
+    },
+  }));
+  assert.equal(calls, 1);
+  assert.equal(response.status, 200);
+  assert.equal(response.endCount, 1);
+});
+
+test("a first Node write failure propagates and returns the source", async () => {
+  const response = new FakeResponse();
+  response.write = () => {
+    throw new Error("first write failed");
+  };
+  let returned = false;
+  await assert.rejects(
+    pipeEvents(response, createRun("first-write"), () =>
+      (async function* () {
+        try {
+          yield makeEvent(AgentEventType.RunStarted);
+        } finally {
+          returned = true;
+        }
+      })(),
+    ),
+    /first write failed/,
+  );
+  assert.equal(returned, true);
+  assert.equal(response.endCount, 1);
+});

@@ -100,3 +100,31 @@ test("native pending tasks hydrate even without object state values", async () =
   assert.equal(seed.interrupt.interruptId, "pending");
   assert.equal(await new Agentdock(graph).getMessages("t"), null);
 });
+
+test.each([
+  null,
+  {},
+  { values: {}, next: "bad" },
+  { values: {}, tasks: false },
+])(
+  "validates checkpoint shape before treating a thread as missing: %j",
+  async (snapshot) => {
+    const graph = createGraph({});
+    graph.getState = async () => snapshot;
+    const runtime = new Agentdock(graph);
+    await assert.rejects(runtime.getMessages("t"), /invalid/);
+    await assert.rejects(runtime.getResumeState("t"), /invalid/);
+  },
+);
+
+test("resume-state projection reports invalid native interrupt payloads", async () => {
+  const graph = createGraph({});
+  graph.getState = async () => ({
+    values: {},
+    tasks: [{ interrupts: [{ id: "i", value: undefined }] }],
+  });
+  await assert.rejects(
+    new Agentdock(graph).getResumeState("t"),
+    /could not be projected/,
+  );
+});

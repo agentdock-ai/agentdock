@@ -67,7 +67,6 @@ test("observation respects native hidden tags and ignores orphan events", () => 
   observer.handleToolError(new Error("x"), "hidden");
   observer.handleToolEvent("x", "missing");
   assert.deepEqual(observer.drain(), []);
-  assert.equal(observer.observedTools, false);
 });
 test("root task identities follow native steps and ignore subgraph task IDs", () => {
   const observer = new ToolObserver();
@@ -97,21 +96,21 @@ test("native lifecycle payload is retained without changing IDs or checkpoints",
   observer.handleInterrupt(event);
   assert.equal(observer.interruption, event);
 });
-test("a legacy raw mapper rejects ambiguous parallel correlation", () => {
+test("tool events without execution identities are rejected", () => {
   const mapper = new WireEventMapper(new EventContext("run", 0));
-  for (const q of ["A", "B"])
-    mapper.map("tools", {
-      event: "on_tool_start",
-      name: "lookup",
-      input: { q },
-    });
   assert.throws(
     () =>
       mapper.map("tools", {
-        event: "on_tool_end",
+        event: "on_tool_start",
         name: "lookup",
-        output: "B",
+        input: {},
       }),
     /native execution ID/,
   );
+});
+
+test("observer uses a display name when the native callback omits runName", () => {
+  const observer = new ToolObserver();
+  observer.handleToolStart({}, "{}", "execution", undefined, [], {});
+  assert.equal(observer.drain()[0].value.name, "tool");
 });

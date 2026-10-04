@@ -5,11 +5,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import {
-  Agentdock,
-  withAgentEventState,
-  validateToolApprovalResume,
-} from "../../src/index.js";
+import { Agentdock, validateToolApprovalResume } from "../../src/index.js";
 import {
   Command,
   END,
@@ -27,18 +23,15 @@ import {
   createToolCallArgumentChunks,
 } from "../helpers/stream-fixtures.mjs";
 
-test("composed event state works with createAgent and a general StateGraph", async () => {
+test("ordinary state schemas work with createAgent and a general StateGraph", async () => {
   const agent = createAgent({
     model: createScriptedChatModel({ response: "ok" }),
     tools: [],
     checkpointer: createMemoryCheckpoint(),
-    stateSchema: withAgentEventState({}),
   });
   assert.equal(typeof agent.stream, "function");
 
-  const combined = new StateSchema(
-    withAgentEventState({ value: z.string().default("") }).shape,
-  );
+  const combined = new StateSchema({ value: z.string().default("") });
   const graph = new StateGraph(combined)
     .addNode("step", () => ({ value: "done" }))
     .addEdge(START, "step")
@@ -68,7 +61,7 @@ test("invocation identity and native interrupt survive resume with a fresh runti
   const paused = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(paused.values.agentEventState, { logicalSequence: 0 });
+  assert.equal(Object.hasOwn(paused.values, "agentEventState"), false);
   assert.equal(
     paused.tasks[0].interrupts[0].id,
     startEvents.at(-1).interrupt.interruptId,
@@ -103,9 +96,10 @@ test("invocation identity and native interrupt survive resume with a fresh runti
   const completedCheckpoint = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(completedCheckpoint.values.agentEventState, {
-    logicalSequence: 0,
-  });
+  assert.equal(
+    Object.hasOwn(completedCheckpoint.values, "agentEventState"),
+    false,
+  );
   assert.deepEqual(completedCheckpoint.next, []);
 
   const finalState = [...startEvents, ...resumeEvents].reduce(
@@ -143,7 +137,7 @@ test("native interrupt checkpoint is durable before the interrupt event is yield
   const checkpoint = await graph.getState({
     configurable: { thread_id: threadId },
   });
-  assert.deepEqual(checkpoint.values.agentEventState, { logicalSequence: 0 });
+  assert.equal(Object.hasOwn(checkpoint.values, "agentEventState"), false);
   assert.equal(
     checkpoint.tasks[0].interrupts[0].id,
     interrupt.interrupt.interruptId,
@@ -197,7 +191,6 @@ test("independent starts on one thread receive new event run identities", async 
     }),
     tools: [],
     checkpointer: new MemorySaver(),
-    stateSchema: withAgentEventState({}),
   }).graph;
   const runtime = new Agentdock(graph, {
     interruptFormat: "langchain-hitl",
@@ -232,7 +225,6 @@ test("one runtime keeps concurrent run state isolated", async () => {
     }),
     tools: [],
     checkpointer: new MemorySaver(),
-    stateSchema: withAgentEventState({}),
   }).graph;
   const runtime = new Agentdock(graph, {
     interruptFormat: "langchain-hitl",
@@ -264,7 +256,6 @@ test("resume requires native pending execution", async () => {
   const graph = new StateGraph(
     new StateSchema({
       value: z.string().default(""),
-      ...withAgentEventState({}).shape,
     }),
   )
     .addNode("step", () => ({ value: "done" }))
@@ -318,7 +309,6 @@ async function createApprovalAgent() {
     tools: [send],
     contextSchema: z.object({ userId: z.string() }),
     checkpointer: createMemoryCheckpoint(),
-    stateSchema: withAgentEventState({}),
     middleware: [humanInTheLoopMiddleware({ interruptOn: { send: true } })],
   });
   return { sent, contexts, graph, threadId: "serving-approval-thread" };

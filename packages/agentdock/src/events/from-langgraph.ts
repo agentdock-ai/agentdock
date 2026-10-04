@@ -1,11 +1,7 @@
-import { isCommand } from "@langchain/langgraph";
-import {
-  isBaseMessage,
-  isBaseMessageChunk,
-  isToolMessage,
-} from "@langchain/core/messages";
+import { isBaseMessage, isBaseMessageChunk } from "@langchain/core/messages";
 import {
   AgentEventType,
+  assertAgentInterrupt,
   cloneContentParts,
   cloneJsonObject,
   cloneJsonValue,
@@ -15,12 +11,17 @@ import {
   type AgentInterrupt,
   type AgentUsage,
   type ContentPart,
-  type JsonObject,
-  type JsonValue,
   type ToolCallRecord,
   type ToolErrorRecord,
   type ToolResultRecord,
 } from "@agentdock-ai/contracts";
+import {
+  toProgressContent,
+  toToolOutput,
+  toContentParts,
+  toJsonObject,
+  toUsage,
+} from "./native-payload.js";
 import type { EventContext } from "./event-context.js";
 import { isRecord } from "../utils/is-record.js";
 
@@ -31,7 +32,6 @@ interface OpenMessage {
   namespace: readonly string[];
 }
 
-interface ActiveTool extends ToolCallRecord {}
 interface PartialToolCall {
   id?: string;
   name: string;
@@ -40,13 +40,11 @@ interface PartialToolCall {
 
 export class WireEventMapper {
   private readonly openMessages = new Map<string, OpenMessage>();
-  private readonly activeTools = new Map<string, ActiveTool>();
-  private readonly unnamedTools = new Map<string, string[]>();
+  private readonly activeTools = new Map<string, ToolCallRecord>();
   private readonly seenMessages = new Set<string>();
   private currentNamespace: readonly string[];
   private lastContent: ContentPart[] = [];
   private readonly usages = new Map<string, AgentUsage>();
-  private readonly fallbackMessageIds = new Map<string, string>();
   private readonly partialToolCalls = new Map<string, PartialToolCall>();
 
   constructor(
@@ -80,7 +78,7 @@ export class WireEventMapper {
       case "updates":
         return this.mapUpdate(rawChunk);
       default:
-        return [];
+        throw new Error("Unsupported event mapping mode.");
     }
   }
 
@@ -109,7 +107,7 @@ export class WireEventMapper {
     if (!Array.isArray(rawChunk) || rawChunk.length !== 2) {
       throw new Error("LangGraph emitted an unsupported message chunk.");
     }
-    const [rawMessage, metadata] = rawChunk;
+    const [rawMessage] = rawChunk;
     if (!isRecord(rawMessage)) {
       throw new Error("LangGraph emitted an invalid message chunk.");
     }
@@ -121,16 +119,9 @@ export class WireEventMapper {
     let role: OpenMessage["role"] = "assistant";
     if (nativeRole === "human" || nativeRole === "user") role = "user";
     else if (nativeRole === "tool") role = "tool";
-    const fallbackKey = JSON.stringify(metadata ?? {});
-    const fallbackId =
-      this.fallbackMessageIds.get(fallbackKey) ??
-      `${this.context.runId}:message:${crypto.randomUUID()}`;
-    this.fallbackMessageIds.set(fallbackKey, fallbackId);
-    const nativeMessageId =
-      typeof rawMessage.id === "string" && rawMessage.id.length > 0
-        ? rawMessage.id
-        : fallbackId;
-    const messageId = this.scopeId(nativeMessageId);
+    if (typeof rawMessage.id !== "string" || !rawMessage.id)
+      throw new Error("Message events require a native message ID.");
+    const messageId = this.scopeId(rawMessage.id);
     if (this.seenMessages.has(messageId)) return [];
     this.collectToolCallChunks(messageId, rawMessage);
     const events: AgentEvent[] = [];
@@ -190,37 +181,20 @@ export class WireEventMapper {
       throw new Error("LangGraph emitted an unsupported tool chunk.");
     }
     const toolName = typeof rawChunk.name === "string" ? rawChunk.name : "tool";
-    const suppliedId =
-      typeof rawChunk.toolCallId === "string" && rawChunk.toolCallId.length > 0
-        ? this.scopeId(rawChunk.toolCallId)
-        : undefined;
+    if (typeof rawChunk.toolCallId !== "string" || !rawChunk.toolCallId)
+      throw new Error("Tool events require a native execution ID.");
+    const toolCallId = this.scopeId(rawChunk.toolCallId);
 
     if (rawChunk.event === "on_tool_start") {
-      const toolCallId =
-        suppliedId ?? `${this.context.runId}:tool:${crypto.randomUUID()}`;
       const toolCall: ToolCallRecord = {
         toolCallId,
         name: toolName,
         input: toJsonObject(rawChunk.input),
       };
       this.activeTools.set(toolCallId, toolCall);
-      if (!suppliedId) {
-        const ids = this.unnamedTools.get(toolName) ?? [];
-        ids.push(toolCallId);
-        this.unnamedTools.set(toolName, ids);
-      }
       return [this.emit({ type: AgentEventType.ToolCalled, toolCall })];
     }
 
-    const isTerminalToolEvent =
-      rawChunk.event === "on_tool_end" || rawChunk.event === "on_tool_error";
-    const toolCallId =
-      suppliedId ?? this.findUnnamedTool(toolName, isTerminalToolEvent);
-    if (!toolCallId) {
-      throw new Error(
-        "LangGraph emitted a tool event without a matching call.",
-      );
-    }
     const toolCall = this.activeTools.get(toolCallId);
     if (!toolCall) {
       throw new Error("LangGraph emitted a tool event for an unknown call.");
@@ -242,12 +216,7 @@ export class WireEventMapper {
           type: AgentEventType.ToolCompleted,
           result: {
             ...toolCall,
-            ...toToolOutput(
-              rawChunk.output,
-              typeof rawChunk.toolCallId === "string"
-                ? rawChunk.toolCallId
-                : toolCallId,
-            ),
+            ...toToolOutput(rawChunk.output, rawChunk.toolCallId),
           } satisfies ToolResultRecord,
         }),
       ];
@@ -291,79 +260,68 @@ export class WireEventMapper {
     }
     const interrupts = rawChunk.__interrupt__;
     if (!Array.isArray(interrupts) || interrupts.length === 0) return events;
-    return [
-      ...events,
-      ...interrupts.flatMap((first) => this.mapInterrupt(first)),
-    ];
+    for (const raw of interrupts) {
+      const interrupt = this.projectInterrupt(raw);
+      events.push(
+        ...this.completeMessages(),
+        this.emit({ type: AgentEventType.InterruptRequired, interrupt }),
+      );
+    }
+    return events;
   }
 
-  private mapInterrupt(first: unknown): AgentEvent[] {
+  projectInterrupt(first: unknown): AgentInterrupt {
     if (!isRecord(first) || typeof first.id !== "string") {
       throw new Error("LangGraph emitted an interrupt without an ID.");
     }
     const interruptId = first.id;
     const value = isRecord(first.value) ? first.value : {};
-    const rawActions =
-      this.interruptFormat === "langchain-hitl" &&
-      Array.isArray(value.actionRequests)
-        ? value.actionRequests
-        : [];
-    const isToolApproval =
-      this.interruptFormat === "langchain-hitl" &&
-      Array.isArray(value.reviewConfigs);
-    const actions = rawActions.flatMap((rawAction, index) => {
-      if (!isRecord(rawAction)) return [];
-      const explicitToolCallId =
-        typeof rawAction.toolCallId === "string"
-          ? rawAction.toolCallId
-          : undefined;
-      const actionInput = rawAction.args ?? rawAction.input ?? {};
-      const toolCallId =
-        explicitToolCallId ??
-        (isToolApproval
-          ? this.findInterruptedToolCall(
-              typeof rawAction.name === "string" ? rawAction.name : "action",
-              actionInput,
-            )?.id
-          : undefined);
-      if (isToolApproval && !toolCallId) {
-        throw new Error(
-          "LangGraph interrupt could not be matched to a streamed tool call.",
-        );
-      }
-      return [
-        {
-          id: toolCallId
-            ? this.scopeId(toolCallId)
-            : `${interruptId}:action:${index}`,
-          name: typeof rawAction.name === "string" ? rawAction.name : "action",
-          input: cloneJsonValue(actionInput, "Interrupt action input"),
-          ...(toolCallId ? { toolCallId: this.scopeId(toolCallId) } : {}),
-        },
-      ];
-    });
-    // The tool-approval path above rejects actions without a matching call ID;
-    // this assertion records that discriminated guarantee for the union.
     let prompt = "Approval required.";
     if (typeof first.value === "string") prompt = first.value;
     else if (typeof value.prompt === "string") prompt = value.prompt;
-    const interrupt: AgentInterrupt = {
+    const payload = cloneJsonValue(first.value, "Interrupt payload");
+    let interrupt: AgentInterrupt = {
       interruptId,
-      kind: isToolApproval ? "tool-approval" : "custom",
+      kind: "custom",
       prompt,
-      payload: cloneJsonValue(first.value, "Interrupt payload"),
-      actions,
-    } as AgentInterrupt;
+      payload,
+      actions: [],
+    };
+    if (this.interruptFormat === "langchain-hitl" && "reviewConfigs" in value) {
+      if (
+        !Array.isArray(value.reviewConfigs) ||
+        !Array.isArray(value.actionRequests)
+      )
+        throw new Error(
+          "LangChain approval requires actionRequests and reviewConfigs arrays.",
+        );
+      const actions = value.actionRequests.map((action) => {
+        if (!isRecord(action) || typeof action.name !== "string")
+          throw new Error("LangChain approval contains an invalid action.");
+        const input = cloneJsonObject(action.args, "Interrupt action args");
+        const call = this.findInterruptedToolCall(action.name, input);
+        if (!call?.id)
+          throw new Error(
+            "LangGraph interrupt could not be matched to a streamed tool call.",
+          );
+        const toolCallId = this.scopeId(call.id);
+        return { id: toolCallId, name: action.name, input, toolCallId };
+      });
+      interrupt = {
+        interruptId,
+        kind: "tool-approval",
+        prompt,
+        payload,
+        actions,
+      };
+    }
     if (first.response_schema !== undefined)
       interrupt.responseSchema = cloneJsonValue(
         first.response_schema,
         "Interrupt response schema",
       );
-    const completedMessages = this.completeMessages();
-    completedMessages.push(
-      this.emit({ type: AgentEventType.InterruptRequired, interrupt }),
-    );
-    return completedMessages;
+    assertAgentInterrupt(interrupt);
+    return interrupt;
   }
 
   seedMessages(values: unknown): void {
@@ -414,15 +372,6 @@ export class WireEventMapper {
         : usage;
     this.usages.set(messageId, total);
     return total;
-  }
-
-  private findUnnamedTool(name: string, consume: boolean): string | undefined {
-    const ids = this.unnamedTools.get(name);
-    if (ids && ids.length > 1)
-      throw new Error("Parallel tool events require a native execution ID.");
-    const id = consume ? ids?.shift() : ids?.[0];
-    if (consume && ids?.length === 0) this.unnamedTools.delete(name);
-    return id;
   }
 
   private collectToolCallChunks(
@@ -494,147 +443,6 @@ function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function toProgressContent(value: unknown): ContentPart[] {
-  if (typeof value === "string") return [{ type: "text", text: value }];
-  return [
-    { type: "custom", name: "tool-progress", data: cloneJsonValue(value) },
-  ];
-}
-
-function toToolOutput(
-  value: unknown,
-  toolCallId: string,
-): { output: JsonValue; isError?: boolean } {
-  if (isCommand(value)) {
-    const update: unknown = value.update;
-    let messages: unknown[] = [];
-    if (isRecord(update) && Array.isArray(update.messages))
-      messages = update.messages;
-    else if (Array.isArray(update)) {
-      for (const entry of update) {
-        if (
-          Array.isArray(entry) &&
-          entry[0] === "messages" &&
-          Array.isArray(entry[1])
-        )
-          messages.push(...entry[1]);
-      }
-    }
-    value =
-      messages.find(
-        (message) =>
-          isToolMessage(message) && message.tool_call_id === toolCallId,
-      ) ?? null;
-  }
-  const output = isRecord(value) && "content" in value ? value.content : value;
-  return {
-    output: cloneJsonValue(output, "Tool output"),
-    ...(isToolMessage(value) && value.status === "error"
-      ? { isError: true }
-      : {}),
-  };
-}
-
-function toContentParts(value: unknown): ContentPart[] {
-  if (typeof value === "string")
-    return value ? [{ type: "text", text: value }] : [];
-  if (!Array.isArray(value)) {
-    return value == null
-      ? []
-      : [
-          {
-            type: "custom",
-            name: "model-content",
-            data: cloneJsonValue(value),
-          },
-        ];
-  }
-  return value.flatMap((item): ContentPart[] => {
-    if (!isRecord(item)) {
-      return [
-        { type: "custom", name: "model-content", data: cloneJsonValue(item) },
-      ];
-    }
-    if (item.type === "text" && typeof item.text === "string") {
-      return [{ type: "text", text: item.text }];
-    }
-    if (
-      (item.type === "reasoning" || item.type === "thinking") &&
-      (typeof item.text === "string" ||
-        typeof item.reasoning === "string" ||
-        typeof item.thinking === "string")
-    ) {
-      let text = String(item.thinking);
-      if (typeof item.text === "string") text = item.text;
-      else if (typeof item.reasoning === "string") text = item.reasoning;
-      return [{ type: "reasoning", text }];
-    }
-    if (
-      item.type === "image" ||
-      item.type === "audio" ||
-      item.type === "video" ||
-      item.type === "file"
-    ) {
-      const media: Record<string, unknown> = { type: item.type };
-      if (typeof item.url === "string") media.url = item.url;
-      else if (typeof item.data === "string") media.data = item.data;
-      else if (typeof item.base64 === "string") media.data = item.base64;
-      else if (typeof item.fileId === "string") media.fileId = item.fileId;
-      else if (typeof item.file_id === "string") media.fileId = item.file_id;
-      else
-        return [
-          { type: "custom", name: "model-content", data: cloneJsonValue(item) },
-        ];
-      const mimeType = item.mimeType ?? item.mime_type;
-      if (typeof mimeType === "string") media.mimeType = mimeType;
-      const name = item.name ?? item.filename;
-      if (item.type === "file" && typeof name === "string") media.name = name;
-      return cloneContentParts([media], "Model content");
-    }
-    return [
-      { type: "custom", name: "model-content", data: cloneJsonValue(item) },
-    ];
-  });
-}
-
-function toJsonObject(value: unknown): JsonObject {
-  if (value === undefined) return {};
-  if (typeof value === "string") {
-    try {
-      return cloneJsonObject(JSON.parse(value), "Tool input");
-    } catch {
-      throw new Error(
-        "LangGraph emitted tool input that is not a JSON object.",
-      );
-    }
-  }
-  return cloneJsonObject(value, "Tool input");
-}
-
-function toUsage(value: unknown): AgentUsage | undefined {
-  if (!isRecord(value)) return undefined;
-  const usage: AgentUsage = {};
-  if (typeof value.input_tokens === "number")
-    usage.inputTokens = value.input_tokens;
-  if (typeof value.output_tokens === "number")
-    usage.outputTokens = value.output_tokens;
-  if (typeof value.total_tokens === "number")
-    usage.totalTokens = value.total_tokens;
-  if (
-    isRecord(value.output_token_details) &&
-    typeof value.output_token_details.reasoning === "number"
-  )
-    usage.reasoningTokens = value.output_token_details.reasoning;
-  else if (typeof value.reasoning_tokens === "number")
-    usage.reasoningTokens = value.reasoning_tokens;
-  if (
-    isRecord(value.input_token_details) &&
-    typeof value.input_token_details.cache_read === "number"
-  )
-    usage.cachedInputTokens = value.input_token_details.cache_read;
-  return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
 function appendContent(content: ContentPart[], part: ContentPart): void {

@@ -672,9 +672,15 @@ describe("Agentdock contracts", () => {
     };
 
     const cloned = cloneAgentEvent(event);
-    expect(cloned.interrupt.actions[0]).toMatchObject({
-      id: "tool-call-1",
-      toolCallId: "tool-call-1",
+    expect(cloned).toMatchObject({
+      interrupt: {
+        actions: [
+          {
+            id: "tool-call-1",
+            toolCallId: "tool-call-1",
+          },
+        ],
+      },
     });
   });
 
@@ -777,7 +783,7 @@ describe("Agentdock contracts", () => {
           },
         ],
       },
-    } as const;
+    } satisfies AgentEvent;
     const requiredState = reduceAgentEvent(
       reduceAgentEvent(createAgentReducerState(), started),
       requiredEvent,

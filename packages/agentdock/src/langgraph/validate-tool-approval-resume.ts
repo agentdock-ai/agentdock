@@ -2,7 +2,7 @@ import type { AgentInterrupt } from "@agentdock-ai/contracts";
 import { isRecord } from "../utils/is-record.js";
 
 /** Validate the opt-in HITL response envelope; middleware owns permissions. */
-export function validateResume(
+export function validateToolApprovalResume(
   value: unknown,
   pending: readonly AgentInterrupt[],
 ): void {

@@ -16,6 +16,7 @@ export type CreateResumeStateResult =
 
 /** Native task interrupts are the execution authority; this helper never writes. */
 interface PendingNativeInterrupt {
+  id: string;
   raw: unknown;
   snapshot: ThreadSnapshot;
   occurrence?: number;
@@ -30,15 +31,16 @@ function pendingNative(snapshot: ThreadSnapshot): PendingNativeInterrupt[] {
     for (const raw of task.interrupts ?? []) {
       if (!isRecord(raw) || typeof raw.id !== "string")
         throw new Error("Checkpoint contains an invalid native interrupt.");
-      if (!pending.some((item) => isRecord(item.raw) && item.raw.id === raw.id))
-        pending.push({ raw, snapshot, occurrence: task.resumeCount });
+      if (!pending.some((item) => item.id === raw.id))
+        pending.push({
+          id: raw.id,
+          raw,
+          snapshot,
+          occurrence: task.resumeCount,
+        });
     }
   }
   return pending;
-}
-
-export function nativeInterrupts(snapshot: ThreadSnapshot): unknown[] {
-  return pendingNative(snapshot).map((item) => item.raw);
 }
 
 export function mapSnapshotInterrupts(
@@ -55,15 +57,10 @@ export function mapSnapshotInterrupts(
       interruptFormat,
     );
     mapper.seedMessages(pending.snapshot.values);
-    for (const event of mapper.map("updates", {
-      __interrupt__: [pending.raw],
-    })) {
-      if (event.type === "interrupt.required") {
-        if (pending.occurrence !== undefined)
-          event.interrupt.occurrence = pending.occurrence;
-        interrupts.set(event.interrupt.interruptId, event.interrupt);
-      }
-    }
+    const interrupt = mapper.projectInterrupt(pending.raw);
+    if (pending.occurrence !== undefined)
+      interrupt.occurrence = pending.occurrence;
+    interrupts.set(interrupt.interruptId, interrupt);
   }
   return [...interrupts.values()];
 }
@@ -76,6 +73,7 @@ export function createResumeState(
   if (typeof threadId !== "string" || !threadId.trim())
     throw new Error("threadId must be a non-empty string.");
   try {
+    assertThreadSnapshot(snapshot);
     const interrupts = mapSnapshotInterrupts(snapshot, interruptFormat);
     const pausedNodes = [...(snapshot.next ?? [])];
     if (interrupts.length === 0 && pausedNodes.length === 0)

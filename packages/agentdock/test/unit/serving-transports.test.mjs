@@ -7,7 +7,7 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { withAgentEventState, Agentdock } from "../../src/index.js";
+import { Agentdock } from "../../src/index.js";
 import { EventContext } from "../../src/events/event-context.js";
 import { createSseResponse } from "../../src/transports/web/to-response.js";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
@@ -94,12 +94,7 @@ test("stream forwards LangGraph config and keeps the server thread ID authoritat
     tenantId: "tenant-1",
     thread_id: "server-thread-1",
   });
-  assert.deepEqual(options.streamMode, [
-    "messages",
-    "tools",
-    "updates",
-    "tasks",
-  ]);
+  assert.deepEqual(options.streamMode, ["messages", "updates", "tasks"]);
   assert.equal(options.recursionLimit, undefined);
   assert.ok(options.signal instanceof AbortSignal);
 });
@@ -600,7 +595,6 @@ function createApprovalGraph() {
       responses: ["", "done"],
     }),
     tools: [send],
-    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
     middleware: [humanInTheLoopMiddleware({ interruptOn: { send: true } })],
   }).graph;
@@ -635,7 +629,6 @@ function createCooperativeAgent() {
       responses: [""],
     }),
     tools: [wait],
-    stateSchema: withAgentEventState({}),
     checkpointer: new MemorySaver(),
   }).graph;
 

@@ -338,3 +338,145 @@ test("opaque resume is not inspected without an application validator", async ()
   });
   assert.equal(events.at(-1).type, "run.completed");
 });
+
+test.each([
+  { context: null },
+  { context: [] },
+  { config: false },
+  { config: [] },
+  { config: { configurable: [] } },
+  { config: { configurable: null } },
+  ...["encoding", "streamMode", "signal", "context", "recursionLimit"].map(
+    (key) => ({ config: { [key]: undefined } }),
+  ),
+])(
+  "rejects invalid or serving-owned run options before executing: %j",
+  async (options) => {
+    const current = graph();
+    await assert.rejects(() =>
+      collect(
+        runtime(current).stream({ threadId: "t", input: {}, ...options }),
+      ),
+    );
+    assert.equal(current.calls.length, 0);
+  },
+);
+
+test("tool callbacks wake a blocked native read without extra graph pulls", async () => {
+  const current = graph();
+  let finish;
+  let observer;
+  let nextCalls = 0;
+  let returns = 0;
+  current.stream = async (_input, options) => {
+    assert.deepEqual(options.streamMode, ["messages", "updates", "tasks"]);
+    observer = options.callbacks.at(-1);
+    return {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            nextCalls++;
+            return new Promise((resolve) => {
+              finish = resolve;
+            });
+          },
+          async return() {
+            returns++;
+            finish({ done: true });
+            return { done: true };
+          },
+        };
+      },
+    };
+  };
+  const source = runtime(current).stream({ threadId: "t", input: {} });
+  await source.next();
+  const pending = source.next();
+  await new Promise((resolve) => setImmediate(resolve));
+  observer.handleToolStart({}, "{}", "execution", undefined, [], {}, "lookup");
+  assert.equal((await pending).value.type, "tool.called");
+  const progress = source.next();
+  observer.handleToolEvent("working", "execution");
+  assert.equal((await progress).value.type, "tool.progress");
+  assert.equal(nextCalls, 1);
+  await source.return();
+  assert.equal(returns, 1);
+});
+
+test("tool failure callbacks are projected before a native read rejects", async () => {
+  const current = graph();
+  current.stream = async (_input, options) => {
+    const observer = options.callbacks.at(-1);
+    return {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            observer.handleToolStart(
+              {},
+              "{}",
+              "execution",
+              undefined,
+              [],
+              {},
+              "lookup",
+            );
+            observer.handleToolError(
+              new Error("private tool failure"),
+              "execution",
+            );
+            throw new Error("private graph failure");
+          },
+        };
+      },
+    };
+  };
+  const events = await collect(
+    runtime(current).stream({ threadId: "t", input: {} }),
+  );
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["run.started", "tool.called", "tool.failed", "run.failed"],
+  );
+  assert.equal(events.at(-1).code, "graph_error");
+  assert.doesNotMatch(JSON.stringify(events), /private/);
+});
+
+test("invalid native task interrupt records fail instead of disappearing", async () => {
+  const current = graph({
+    chunks: [["tasks", { result: {}, interrupts: [null, { value: "bad" }] }]],
+  });
+  const events = await collect(
+    runtime(current).stream({ threadId: "t", input: {} }),
+  );
+  assert.equal(events.at(-1).type, "run.failed");
+  assert.equal(events.at(-1).code, "mapper_error");
+});
+
+test.each([null, false, "run"])("rejects non-object runs: %j", async (run) => {
+  await assert.rejects(
+    () => collect(runtime(graph()).stream(run)),
+    /must be an object/,
+  );
+});
+
+test.each([
+  ["tasks", { result: {}, interrupts: false }],
+  ["tasks", { result: {} }],
+  ["tasks", { result: {}, interrupts: [{ value: "bad" }] }],
+  ["tasks", { result: {}, interrupts: [{ id: "", value: "bad" }] }],
+  ["updates", { __interrupt__: [null] }],
+  ["updates", { __interrupt__: [{ value: "bad" }] }],
+])("native %s control records validate their shape", async (mode, value) => {
+  const events = await collect(
+    runtime(graph({ chunks: [[mode, value]] })).stream({
+      threadId: "t",
+      input: {},
+    }),
+  );
+  assert.equal(
+    events.at(-1).type,
+    value.interrupts === undefined && mode === "tasks"
+      ? "run.completed"
+      : "run.failed",
+  );
+});

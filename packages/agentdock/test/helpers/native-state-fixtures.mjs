@@ -12,7 +12,6 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { withAgentEventState } from "../../src/index.js";
 
 export const threadConfig = (threadId, options = {}) => ({
   ...options,
@@ -34,17 +33,6 @@ export function workflowInput(schema) {
     answers: [],
     total: 0,
   };
-  if (schema === "legacy")
-    input.agentEventState = {
-      runId: "stale-run",
-      logicalSequence: 999,
-      pendingInterrupt: {
-        kind: "custom",
-        interruptId: "stale-id",
-        prompt: "Stale question",
-        actions: [],
-      },
-    };
   if (schema === "application-field")
     input.agentEventState = {
       businessLabel: "application-owned",
@@ -73,9 +61,7 @@ export function createSchemaWorkflow(saver, schema, effects = []) {
       fields.agentEventState = z
         .object({ businessLabel: z.string(), entries: z.array(z.number()) })
         .strict();
-    state = new StateSchema(
-      schema === "legacy" ? withAgentEventState(fields).shape : fields,
-    );
+    state = new StateSchema(fields);
   }
   const keys = Object.keys(workflowInput(schema)).sort();
   return new StateGraph(state)

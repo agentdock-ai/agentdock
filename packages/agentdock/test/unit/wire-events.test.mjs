@@ -15,6 +15,7 @@ test("supported message and tool chunks reduce as canonical AgentEvents", async 
       "messages",
       [
         {
+          id: "answer-message",
           content: [
             { type: "text", text: "answer" },
             { type: "reasoning", text: "because" },
@@ -26,19 +27,36 @@ test("supported message and tool chunks reduce as canonical AgentEvents", async 
             input_tokens: 3,
             output_tokens: 2,
             total_tokens: 5,
-            reasoning_tokens: 1,
+            output_token_details: { reasoning: 1 },
           },
         },
         { langgraph_node: "agent" },
       ],
     ],
     ["messages", [{ id: "empty-message", content: "" }, {}]],
-    ["tools", { event: "on_tool_start", name: "read", input: '{"path":"a"}' }],
-    ["tools", { event: "on_tool_event", name: "read", data: "reading" }],
+    [
+      "tools",
+      {
+        event: "on_tool_start",
+        toolCallId: "read-call",
+        name: "read",
+        input: '{"path":"a"}',
+      },
+    ],
+    [
+      "tools",
+      {
+        event: "on_tool_event",
+        toolCallId: "read-call",
+        name: "read",
+        data: "reading",
+      },
+    ],
     [
       "tools",
       {
         event: "on_tool_end",
+        toolCallId: "read-call",
         name: "read",
         output: { content: [{ type: "text", text: "file" }] },
       },
@@ -148,45 +166,16 @@ test("tool calls keep correlation IDs across concurrent progress and completion"
   assert.equal(state.toolProgress[0].toolCallId, "call-b");
 });
 
-test("fallback message and tool IDs remain unique across resumed mappers", () => {
-  const runId = "resumed-run";
-  const firstContext = new EventContext(runId, 0);
-  const firstMapper = new WireEventMapper(firstContext);
-  const firstMessage = firstMapper
-    .map("messages", [{ content: "first" }, {}])
-    .find((event) => event.type === AgentEventType.MessageStarted).messageId;
-  const firstTool = firstMapper.map("tools", {
-    event: "on_tool_start",
-    name: "read",
-    input: {},
-  })[0].toolCall.toolCallId;
-
-  const resumedContext = new EventContext(runId, 7);
-  const resumedMapper = new WireEventMapper(resumedContext);
-  const resumedMessage = resumedMapper
-    .map("messages", [{ content: "second" }, {}])
-    .find((event) => event.type === AgentEventType.MessageStarted).messageId;
-  const resumedTool = resumedMapper.map("tools", {
-    event: "on_tool_start",
-    name: "read",
-    input: {},
-  })[0].toolCall.toolCallId;
-
-  assert.match(firstMessage, /^resumed-run:message:/);
-  assert.match(resumedMessage, /^resumed-run:message:/);
-  assert.match(
-    firstMessage,
-    /^resumed-run:message:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  );
-  assert.notEqual(firstMessage, resumedMessage);
-  assert.match(firstTool, /^resumed-run:tool:/);
-  assert.match(resumedTool, /^resumed-run:tool:/);
-  assert.match(
-    firstTool,
-    /^resumed-run:tool:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  );
-  assert.notEqual(firstTool, resumedTool);
-});
+test.each([undefined, "", 1])(
+  "rejects messages without native identity: %j",
+  (id) => {
+    const mapper = new WireEventMapper(new EventContext("run", 0));
+    assert.throws(
+      () => mapper.map("messages", [{ id, content: "answer" }, {}]),
+      /native message ID/,
+    );
+  },
+);
 
 test("LangGraph-provided message and tool-call IDs remain unchanged", () => {
   const mapper = new WireEventMapper(new EventContext("provided-ids", 0));
@@ -207,24 +196,6 @@ test("LangGraph-provided message and tool-call IDs remain unchanged", () => {
     "langgraph-message-1",
   );
   assert.equal(toolEvents[0].toolCall.toolCallId, "langgraph-tool-1");
-});
-
-test("fallback tool IDs stay correlated through terminal tool events", () => {
-  const mapper = new WireEventMapper(new EventContext("fallback-tool", 0));
-  const [started] = mapper.map("tools", {
-    event: "on_tool_start",
-    name: "read",
-    input: { path: "a" },
-  });
-  const [completed] = mapper.map("tools", {
-    event: "on_tool_end",
-    name: "read",
-    output: "contents",
-  });
-
-  assert.equal(started.type, AgentEventType.ToolCalled);
-  assert.equal(completed.type, AgentEventType.ToolCompleted);
-  assert.equal(started.toolCall.toolCallId, completed.result.toolCallId);
 });
 
 test("approval interrupts match a streamed partial tool call when IDs are omitted", () => {

@@ -58,7 +58,7 @@ Load conversation history separately with `runtime.getMessages(threadId)`.
 
 Each invocation gets a fresh `runId` with `logicalSequence` starting at 1. A client
 can apply continuation events to its existing reducer state or a hydrated seed.
-See the [protocol migration guide](./MIGRATION.md) for client changes.
+Serving and consumers use the single protocol exported by `@agentdock-ai/contracts`.
 
 ## Call Agentdock from your route controller
 

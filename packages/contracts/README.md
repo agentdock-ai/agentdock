@@ -79,9 +79,8 @@ authorization, and thread identity remain the serving application's responsibili
   Reuse with different data and older out-of-order events are rejected. Adjacent
   text and reasoning deltas are coalesced; message history remains application-owned.
 
-Protocol v2 events are rejected. Upgrade serving and consumers together and use
-`createAgentReducerState()` instead of constructing a reducer seed by hand. See
-[the migration guide](https://github.com/agentdock-ai/agentdock/blob/main/MIGRATION.md).
+Only `AGENT_EVENT_PROTOCOL_VERSION` is accepted. Initialize reducer state with
+`createAgentReducerState()` instead of constructing a seed by hand.
 
 This package contains data contracts and JSON-safe helpers; model, graph,
 checkpoint, and HTTP implementations belong to the application and its chosen

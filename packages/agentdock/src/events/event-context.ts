@@ -41,8 +41,4 @@ export class EventContext {
     this.currentPhaseId = crypto.randomUUID();
     this.phaseSequence = 0;
   }
-
-  get lastLogicalSequence(): number {
-    return this.logicalSequence;
-  }
 }

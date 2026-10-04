@@ -3,7 +3,8 @@ import {
   AgentEventType,
   type AgentEvent,
 } from "@agentdock-ai/contracts";
-import { createAbortScope } from "../../signals/compose-abort-signals.js";
+import { closeIterator } from "../../utils/close-iterator.js";
+import { createAbortScope } from "../../signals/abort-scope.js";
 import { encodeSseEvent, SSE_HEADERS } from "../sse.js";
 import type { NodeSseResponse, Run } from "../../serving/types.js";
 
@@ -23,9 +24,8 @@ export async function pipeEvents<
     ...run,
     signal: abortScope.signal,
   };
-  const iterator = source(streamRun)[Symbol.asyncIterator]();
+  let iterator: AsyncIterator<AgentEvent> | undefined;
   let headersSent = false;
-  let ended = false;
   let terminalSent = false;
   let disconnected = response.destroyed;
   let lastEvent: AgentEvent | undefined;
@@ -41,7 +41,6 @@ export async function pipeEvents<
   const writeEvent = async (event: AgentEvent): Promise<boolean> => {
     if (disconnected || response.destroyed || response.writableEnded)
       return false;
-    if (terminalSent) return false;
     const writable = response.write(encodeSseEvent(event));
     lastEvent = event;
     if (isTerminalEvent(event)) terminalSent = true;
@@ -51,12 +50,13 @@ export async function pipeEvents<
   };
 
   try {
+    iterator = source(streamRun)[Symbol.asyncIterator]();
     // Let validation and resume-state lookup fail before committing HTTP 200.
     const first = await iterator.next();
     if (disconnected || response.destroyed) return;
     response.writeHead(200, { ...SSE_HEADERS });
     headersSent = true;
-    if (!first.done && !(await writeEvent(first.value))) return;
+    if (first.done || !(await writeEvent(first.value))) return;
 
     while (!disconnected && !terminalSent) {
       const next = await iterator.next();
@@ -68,11 +68,12 @@ export async function pipeEvents<
       !headersSent ||
       disconnected ||
       response.destroyed ||
-      response.writableEnded
+      response.writableEnded ||
+      !lastEvent
     ) {
       throw error;
     }
-    if (!terminalSent && lastEvent) {
+    if (!terminalSent) {
       const failure = transportFailureEvent(lastEvent);
       await writeEvent(failure);
     }
@@ -82,16 +83,12 @@ export async function pipeEvents<
     }
     response.off("close", onClose);
     abortScope.dispose();
-    if (
-      !ended &&
-      headersSent &&
-      !response.destroyed &&
-      !response.writableEnded
-    ) {
-      ended = true;
-      response.end();
+    try {
+      if (headersSent && !response.destroyed && !response.writableEnded)
+        response.end();
+    } finally {
+      await closeIterator(iterator);
     }
-    if (iterator.return) await iterator.return().catch(() => undefined);
   }
 }
 

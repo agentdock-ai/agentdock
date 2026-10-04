@@ -82,11 +82,23 @@ test("message completion retains its native task namespace while identities use 
   assert.equal(startedA.messageId, `${JSON.stringify(scope)}:a`);
 });
 
-test("fallback IDs stay stable within a stream and distinct across node metadata", () => {
+test("native IDs retain correlation across chunks and node metadata", () => {
   const current = mapper();
-  const start = message(current, { content: "A" }, { langgraph_node: "a" });
-  const delta = message(current, { content: "B" }, { langgraph_node: "a" });
-  const other = message(current, { content: "C" }, { langgraph_node: "b" });
+  const start = message(
+    current,
+    { id: "a", content: "A" },
+    { langgraph_node: "a" },
+  );
+  const delta = message(
+    current,
+    { id: "a", content: "B" },
+    { langgraph_node: "a" },
+  );
+  const other = message(
+    current,
+    { id: "b", content: "C" },
+    { langgraph_node: "b" },
+  );
   assert.equal(start[0].messageId, delta[0].messageId);
   assert.notEqual(start[0].messageId, other[0].messageId);
   assert.equal(current.completeMessages()[0].content[0].text, "AB");
@@ -398,4 +410,253 @@ test.each([
   ["updates", { __interrupt__: [{}] }],
 ])("rejects malformed %s chunks", (mode, value) => {
   assert.throws(() => mapper().map(mode, value));
+});
+
+test("cached updates complete open messages exactly once without counting usage again", () => {
+  const current = mapper();
+  message(current, {
+    id: "m",
+    content: "partial",
+    usage_metadata: { output_tokens: 1 },
+  });
+  const update = {
+    __metadata__: { cached: true },
+    node: {
+      messages: [
+        null,
+        { id: "m", content: "final", usage_metadata: { output_tokens: 99 } },
+      ],
+    },
+  };
+  assert.deepEqual(
+    current.map("updates", update).map((event) => event.type),
+    ["message.completed"],
+  );
+  assert.deepEqual(current.content, [{ type: "text", text: "final" }]);
+  assert.deepEqual(current.usage, { outputTokens: 1 });
+  assert.deepEqual(current.map("updates", update), []);
+  assert.deepEqual(message(current, { id: "m", content: "duplicate" }), []);
+});
+
+test("empty cached messages emit neither message nor usage events", () => {
+  const current = mapper();
+  assert.deepEqual(
+    current.map("updates", {
+      __metadata__: { cached: true },
+      node: {
+        messages: [
+          { id: "m", content: "", usage_metadata: { output_tokens: 10 } },
+        ],
+      },
+    }),
+    [],
+  );
+  assert.equal(current.usage, undefined);
+});
+
+test.each([
+  [null, []],
+  [undefined, []],
+  [
+    { nested: [1] },
+    [{ type: "custom", name: "model-content", data: { nested: [1] } }],
+  ],
+  [
+    [{ type: "reasoning", text: "thought" }],
+    [{ type: "reasoning", text: "thought" }],
+  ],
+  [
+    [{ type: "file", url: "url", mimeType: "text/plain", name: "file.txt" }],
+    [{ type: "file", url: "url", mimeType: "text/plain", name: "file.txt" }],
+  ],
+])("projects model content: %j", (content, expected) => {
+  const current = mapper();
+  message(current, { id: "m", content });
+  current.completeMessages();
+  assert.deepEqual(current.content, expected);
+});
+
+test.each([
+  {
+    usage_metadata: {
+      input_tokens: 2,
+      output_token_details: { reasoning: 1 },
+      input_token_details: { cache_read: 1 },
+    },
+  },
+  { usage_metadata: {} },
+  {
+    usage_metadata: {
+      input_tokens: "2",
+      output_tokens: "1",
+      total_tokens: "3",
+      output_token_details: { reasoning: "1" },
+      input_token_details: { cache_read: "1" },
+    },
+  },
+])("only projects numeric native usage: %j", (extra) => {
+  const current = mapper();
+  message(current, { id: "m", content: "x", ...extra });
+  assert.deepEqual(
+    current.usage,
+    extra.usage_metadata.input_tokens === 2
+      ? { inputTokens: 2, reasoningTokens: 1, cachedInputTokens: 1 }
+      : undefined,
+  );
+});
+
+test.each([undefined, '{"q":1}', { q: 1 }])(
+  "validates tool inputs: %j",
+  (input) => {
+    const [event] = mapper().map("tools", {
+      event: "on_tool_start",
+      toolCallId: "c",
+      input,
+    });
+    assert.deepEqual(event.toolCall.input, input === undefined ? {} : { q: 1 });
+  },
+);
+
+test.each(["bad JSON", "[]", "null", false])(
+  "rejects invalid tool inputs: %j",
+  (input) => {
+    assert.throws(
+      () =>
+        mapper().map("tools", {
+          event: "on_tool_start",
+          toolCallId: "c",
+          input,
+        }),
+      /JSON object/,
+    );
+  },
+);
+
+test("unsupported tool events and mapping modes fail explicitly", () => {
+  const current = mapper();
+  current.map("tools", { event: "on_tool_start", toolCallId: "c", input: {} });
+  assert.throws(
+    () => current.map("tools", { event: "on_unknown", toolCallId: "c" }),
+    /unsupported tool event/,
+  );
+  assert.throws(() => current.map("values", {}), /mapping mode/);
+});
+
+test.each([
+  { reviewConfigs: [] },
+  { reviewConfigs: false, actionRequests: [] },
+  { reviewConfigs: [], actionRequests: [null] },
+  { reviewConfigs: [], actionRequests: [{ name: "lookup", input: {} }] },
+  { reviewConfigs: [], actionRequests: [{ name: 1, args: {} }] },
+])("rejects malformed LangChain approval actions: %j", (value) => {
+  assert.throws(() =>
+    mapper().map("updates", { __interrupt__: [{ id: "i", value }] }),
+  );
+});
+
+test("opaque projection retains HITL-shaped data without interpreting actions", () => {
+  const current = new WireEventMapper(new EventContext("run", 0));
+  const value = {
+    actionRequests: [{ name: "lookup", args: {} }],
+    reviewConfigs: [],
+  };
+  const [event] = current.map("updates", {
+    __interrupt__: [{ id: "i", value }],
+  });
+  assert.equal(event.interrupt.kind, "custom");
+  assert.deepEqual(event.interrupt.actions, []);
+  assert.deepEqual(event.interrupt.payload, value);
+});
+
+test("interrupt correlation ignores malformed and incomplete fragments and compares nested args", () => {
+  const current = mapper();
+  current.seedMessages({
+    messages: [
+      null,
+      { tool_calls: [] },
+      {
+        tool_calls: [
+          null,
+          { id: 1, name: "lookup" },
+          { id: "c", name: "lookup", args: { nested: { b: 2, a: [1] } } },
+        ],
+      },
+    ],
+  });
+  const [event] = current.map(
+    "updates",
+    approval("i", [{ name: "lookup", args: { nested: { a: [1], b: 2 } } }]),
+  );
+  assert.equal(event.interrupt.actions[0].toolCallId, "c");
+  message(current, {
+    id: "m",
+    content: "",
+    tool_call_chunks: [
+      null,
+      { args: { q: "hello" }, index: 1 },
+      { id: "broken", name: "lookup", args: "{", index: 0 },
+    ],
+  });
+  assert.throws(
+    () => current.map("updates", approval()),
+    /could not be matched/,
+  );
+});
+
+test("Command tuple updates select only the result for the native tool call", () => {
+  const current = mapper();
+  current.map("tools", { event: "on_tool_start", toolCallId: "c", input: {} });
+  const [event] = current.map("tools", {
+    event: "on_tool_end",
+    toolCallId: "c",
+    output: new Command({
+      update: [
+        ["other", []],
+        [
+          "messages",
+          [
+            new ToolMessage({ tool_call_id: "other", content: "other" }),
+            new ToolMessage({ tool_call_id: "c", content: "correct" }),
+          ],
+        ],
+      ],
+    }),
+  });
+  assert.equal(event.result.output, "correct");
+});
+
+test("checkpoint seeding skips trailing messages without tool calls", () => {
+  const current = mapper();
+  current.seedMessages({
+    messages: [
+      {
+        id: "m",
+        tool_calls: [{ id: "c", name: "lookup", args: { q: "hello" } }],
+      },
+      null,
+      {},
+      { tool_calls: [] },
+    ],
+  });
+  assert.equal(
+    current.projectInterrupt(approval().__interrupt__[0]).actions[0].toolCallId,
+    "c",
+  );
+});
+
+test("partial call matching skips other names and argument values", () => {
+  const current = mapper();
+  message(current, {
+    id: "m",
+    content: "",
+    tool_call_chunks: [
+      { id: "other-name", name: "other", args: "{}" },
+      { id: "other-args", name: "lookup", args: '{"q":"wrong"}' },
+      { id: "correct", name: "lookup", args: '{"q":"hello"}' },
+    ],
+  });
+  assert.equal(
+    current.projectInterrupt(approval().__interrupt__[0]).actions[0].toolCallId,
+    "correct",
+  );
 });

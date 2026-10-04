@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@agentdock-ai/contracts";
-import { createAbortScope } from "../../signals/compose-abort-signals.js";
+import { closeIterator } from "../../utils/close-iterator.js";
+import { createAbortScope } from "../../signals/abort-scope.js";
 import { encodeSseEvent, SSE_HEADERS } from "../sse.js";
 import type { Run } from "../../serving/types.js";
 
@@ -16,24 +17,25 @@ export async function createSseResponse<
     ...run,
     signal: abortScope.signal,
   };
-  const iterator = source(streamRun)[Symbol.asyncIterator]();
+  let iterator: AsyncIterator<AgentEvent> | undefined;
   let first: IteratorResult<AgentEvent>;
   try {
+    iterator = source(streamRun)[Symbol.asyncIterator]();
     // Validate the run and resume checkpoint before returning a committed 200.
     first = await iterator.next();
   } catch (error) {
     abortScope.abort(error);
     abortScope.dispose();
-    if (iterator.return) await iterator.return().catch(() => undefined);
+    await closeIterator(iterator);
     throw error;
   }
 
+  const streamIterator = iterator;
   const encoder = new TextEncoder();
   let firstPending = !first.done;
   let closed = false;
   const body = new ReadableStream<Uint8Array>({
     async pull(streamController) {
-      if (closed) return;
       if (first.done) {
         closed = true;
         abortScope.dispose();
@@ -41,7 +43,8 @@ export async function createSseResponse<
         return;
       }
       try {
-        const next = firstPending ? first : await iterator.next();
+        const next = firstPending ? first : await streamIterator.next();
+        if (closed) return;
         firstPending = false;
         if (next.done) {
           closed = true;
@@ -51,19 +54,19 @@ export async function createSseResponse<
         }
         streamController.enqueue(encoder.encode(encodeSseEvent(next.value)));
       } catch (error) {
+        if (closed) return;
         closed = true;
         abortScope.abort(error);
         abortScope.dispose();
-        if (iterator.return) await iterator.return().catch(() => undefined);
+        await closeIterator(streamIterator);
         streamController.error(error);
       }
     },
     async cancel(reason) {
-      if (closed) return;
       closed = true;
       abortScope.abort(reason);
       abortScope.dispose();
-      if (iterator.return) await iterator.return().catch(() => undefined);
+      await closeIterator(streamIterator);
     },
   });
   return new Response(body, { status: 200, headers: SSE_HEADERS });

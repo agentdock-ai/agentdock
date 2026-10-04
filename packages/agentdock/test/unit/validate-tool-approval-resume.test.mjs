@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { validateResume } from "../../src/langgraph/validate-resume.js";
+import { validateToolApprovalResume } from "../../src/langgraph/validate-tool-approval-resume.js";
 
 const approval = (id, allowed = ["approve", "edit", "reject"]) => ({
   interruptId: id,
@@ -28,33 +28,40 @@ test.each([
     ],
   },
 ])("rejects malformed decisions before graph invocation: %j", (value) => {
-  assert.throws(() => validateResume(value, [approval("i")]));
+  assert.throws(() => validateToolApprovalResume(value, [approval("i")]));
 });
 
 test("validates shape while leaving decision permissions to native middleware", () => {
-  validateResume(response, [approval("i", ["approve"])]);
-  validateResume({ i: response }, [approval("i", ["approve"])]);
-  validateResume({ decisions: [{ type: "reject" }] }, [
+  validateToolApprovalResume(response, [approval("i", ["approve"])]);
+  validateToolApprovalResume({ i: response }, [approval("i", ["approve"])]);
+  validateToolApprovalResume({ decisions: [{ type: "reject" }] }, [
     approval("i", ["approve"]),
   ]);
 });
 
 test("validates only addressed parallel approvals, requiring at least one native ID", () => {
   const pending = [approval("a"), approval("b")];
-  validateResume({ a: response }, pending);
-  validateResume({ a: response, b: response }, pending);
-  assert.throws(() => validateResume(response, pending), /target/);
-  assert.throws(() => validateResume(null, pending), /target/);
-  assert.throws(() => validateResume({ other: response }, pending), /target/);
+  validateToolApprovalResume({ a: response }, pending);
+  validateToolApprovalResume({ a: response, b: response }, pending);
+  assert.throws(() => validateToolApprovalResume(response, pending), /target/);
+  assert.throws(() => validateToolApprovalResume(null, pending), /target/);
   assert.throws(
-    () => validateResume({ a: response, b: { decisions: [] } }, pending),
+    () => validateToolApprovalResume({ other: response }, pending),
+    /target/,
+  );
+  assert.throws(
+    () =>
+      validateToolApprovalResume(
+        { a: response, b: { decisions: [] } },
+        pending,
+      ),
     /each pending/,
   );
 });
 
 test("custom interrupt resume values remain opaque", () => {
   for (const value of [null, false, [1, 2], { answer: "yes" }])
-    validateResume(value, [
+    validateToolApprovalResume(value, [
       { interruptId: "c", kind: "custom", prompt: "Choose", actions: [] },
     ]);
 });

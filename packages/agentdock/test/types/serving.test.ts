@@ -1,8 +1,8 @@
 import { Command, END, START, StateGraph } from "@langchain/langgraph";
 import { z } from "zod";
-import { withAgentEventState, Agentdock } from "../../src/index.js";
+import { Agentdock } from "../../src/index.js";
 
-const schema = withAgentEventState({ value: z.string().default("") });
+const schema = z.object({ value: z.string().default("") });
 const composedSchema = schema;
 const graph = new StateGraph({
   state: schema,
@@ -40,9 +40,6 @@ void resume;
 void response;
 void composedSchema;
 void resumeResult;
-
-// @ts-expect-error Agentdock owns this field in composed state schemas.
-withAgentEventState({ agentEventState: z.string() });
 
 // @ts-expect-error Start input retains the graph's state type.
 runtime.stream({ threadId: "type-test-thread", input: { value: 42 } });

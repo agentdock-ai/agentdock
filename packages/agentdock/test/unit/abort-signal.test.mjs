@@ -1,28 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import {
-  composeAbortSignals,
-  createAbortScope,
-} from "../../src/signals/compose-abort-signals.js";
+import { createAbortScope } from "../../src/signals/abort-scope.js";
 
-test("composed signals preserve the first abort reason and detach all listeners", () => {
+test("parent and owner cancellation preserve the first reason and detach listeners", () => {
   const first = new TrackedAbortSignal();
-  const second = new TrackedAbortSignal();
-  const composed = composeAbortSignals(first, second);
+  const composed = createAbortScope(first);
   const reason = new Error("request closed");
 
   assert.equal(first.addCount, 1);
-  assert.equal(second.addCount, 1);
   first.abort(reason);
-  second.abort(new Error("later abort"));
+  composed.abort(new Error("later abort"));
 
   assert.equal(composed.signal.aborted, true);
   assert.equal(composed.signal.reason, reason);
   assert.equal(first.removeCount, 1);
-  assert.equal(second.removeCount, 1);
   composed.dispose();
   assert.equal(first.removeCount, 1);
-  assert.equal(second.removeCount, 1);
 });
 
 test("pre-aborted inputs abort the composed signal without installing listeners", () => {
@@ -30,7 +23,7 @@ test("pre-aborted inputs abort the composed signal without installing listeners"
   const reason = new Error("already cancelled");
   source.abort(reason);
 
-  const composed = composeAbortSignals(source);
+  const composed = createAbortScope(source);
 
   assert.equal(composed.signal.aborted, true);
   assert.equal(composed.signal.reason, reason);
@@ -40,7 +33,7 @@ test("pre-aborted inputs abort the composed signal without installing listeners"
 
 test("disposing before abort is idempotent and removes listeners", () => {
   const source = new TrackedAbortSignal();
-  const composed = composeAbortSignals(source);
+  const composed = createAbortScope(source);
 
   composed.dispose();
   composed.dispose();
@@ -65,8 +58,8 @@ test("an owned abort scope propagates its reason and detaches parent listeners",
   assert.equal(parent.removeCount, 1);
 });
 
-test("empty signal composition remains usable", () => {
-  const composed = composeAbortSignals(undefined, undefined);
+test("an abort scope without a parent remains usable", () => {
+  const composed = createAbortScope();
   assert.equal(composed.signal.aborted, false);
   composed.dispose();
 });
