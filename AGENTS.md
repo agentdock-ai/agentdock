@@ -1,8 +1,7 @@
 # Agentdock Core Instructions
 
-- Agentdock is a thin TypeScript serving adapter for compiled LangGraph graphs. Its goal is to make a graph straightforward to expose over HTTP/SSE with reliable cancellation, backpressure, event mapping, and cleanup.
-- Keep LangGraph and LangChain as execution authorities. They own agent loops, tools, models, checkpoints, interrupts, and resume behavior. The application owns request parsing, authentication, authorization, identity, secrets, side effects, and saver lifecycle.
-- Keep Agentdock limited to serving, the compatibility event mapper, and small serving utilities. Prebuilt agents, recipes, graph/workflow engines, provider or saver wrappers, session storage, authorization, and UI features are out of scope.
-- `AGENTDOCK_SCOPE.md` defines product boundaries. Follow it when evaluating changes; do not add framework functionality that LangGraph or LangChain already provides.
-- Read and follow `CODE_STANDARDS.md` strictly for all code changes.
-- Work in the core repository only. Do not push, publish, release, or deploy unless the user explicitly asks.
+- Agentdock is a thin TypeScript adapter serving compiled LangGraph graphs through event streams, Node HTTP/SSE, and Web Responses. It owns event mapping, cancellation, backpressure, transport cleanup, and read-only checkpoint control-state projection.
+- LangGraph/LangChain own execution, tools, models, retries, checkpoints, interrupts, and resume behavior. Applications own request parsing, auth, identity, context, secrets, side effects, and checkpointer lifecycle. Graph schemas stay application-owned; serving must not add state fields or write event bookkeeping to checkpoints.
+- Keep shared JSON contracts, validation, and event reduction in `@agentdock-ai/contracts`; keep framework and HTTP dependencies out. Map tool lifecycle through the native callback observer and execution identity.
+- Limit this repository to serving and small utilities. No prebuilt agents, workflow engines, provider/saver wrappers, session storage, authorization, UI features, alternate protocols, or deprecated serving APIs.
+- Follow `CODE_STANDARDS.md` for code changes. Work in this repository; do not push, publish, release, or deploy unless explicitly asked.

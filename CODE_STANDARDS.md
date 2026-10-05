@@ -83,5 +83,5 @@
 - The contracts package must not depend on LangChain, LangGraph, database drivers, or Node.js runtime APIs.
 - Keep function-bearing runtime types, workflow types, and provider-specific types inside their owning package.
 - Contracts must be JSON-compatible and versioned when they cross a transport boundary.
-- The `agentdock` package may re-export contracts for compatibility, but contracts remain the preferred dependency for frontend and transport packages.
+- Import contracts directly from `@agentdock-ai/contracts`; do not re-export them through the serving package.
 - Do not duplicate shared public type definitions across packages.
