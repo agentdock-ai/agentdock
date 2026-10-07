@@ -4,14 +4,191 @@ import {
   createAgentReducerState,
   type AgentEvent,
   type AgentReducerState,
+  type AgentInterrupt,
+  type JsonValue,
+  assertConversationThread,
+  cloneConversationHistory,
 } from "@agentdock-ai/contracts";
 import {
   ConversationService,
+  createInMemoryConversationStore,
+  ConversationRecords,
   type ConversationFileStorage,
 } from "../src/index.js";
+import type { Run } from "@agentdock-ai/agentdock";
 import { createConversationHttpHandler } from "../src/http.js";
 
 describe("ConversationService", () => {
+  it.each([1, 2, 3, 4, 5, 6])(
+    "recovers an admission failure at write %s without running the graph",
+    async (failAt) => {
+      class FailingAdmissionStore extends InMemoryStore {
+        armed = false;
+        writes = 0;
+        override async put(...args: Parameters<InMemoryStore["put"]>) {
+          if (this.armed && ++this.writes === failAt) {
+            this.armed = false;
+            throw new Error("temporary admission outage");
+          }
+          return super.put(...args);
+        }
+      }
+      const store = new FailingAdmissionStore();
+      let executions = 0;
+      const service = createService({
+        store,
+        stream: async function* () {
+          executions++;
+          yield* completedStream();
+        },
+      });
+      const thread = await service.createThread("alice");
+      store.armed = true;
+      await expect(
+        collect(
+          service.start("alice", {
+            operationId: "failed",
+            threadId: thread.id,
+            prompt: "first",
+            attachments: [],
+          }),
+        ),
+      ).rejects.toThrow("temporary admission outage");
+      expect(executions).toBe(0);
+      const history = await service.getHistory("alice", thread.id);
+      expect(history.actions.canStart).toBe(true);
+      expect(
+        history.messages.every((message) => message.outcome === "complete"),
+      ).toBe(true);
+      expect(
+        (
+          await new ConversationRecords(store, "alice").getOperation(
+            thread.id,
+            "failed",
+          )
+        )?.outcome,
+      ).toBe("error");
+      await collect(
+        service.start("alice", {
+          operationId: "retry",
+          threadId: thread.id,
+          prompt: "second",
+          attachments: [],
+        }),
+      );
+      expect(executions).toBe(1);
+      expect(
+        (await service.getHistory("alice", thread.id)).messages.at(-1)?.content,
+      ).toEqual([{ type: "text", text: "Hello back" }]);
+    },
+  );
+
+  it("retries file cleanup after a transient adapter failure", async () => {
+    const files = new Map<string, Uint8Array>();
+    let calls = 0;
+    const store = new InMemoryStore();
+    const service = new ConversationService({
+      store,
+      prepareInput: ({ prompt }) => prompt,
+      runtime: { stream: completedStream, getResumeState: async () => null },
+      fileStorage: {
+        async put({ id, bytes }) {
+          files.set(id, bytes);
+          return id;
+        },
+        async get(id) {
+          return files.get(id) ?? null;
+        },
+        async delete(id) {
+          if (++calls === 1) throw new Error("temporary storage outage");
+          files.delete(id);
+        },
+      },
+    });
+    const thread = await service.createThread("alice");
+    const attachment = await service.uploadAttachment("alice", thread.id, {
+      name: "image.png",
+      mimeType: "image/png",
+      bytes: Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    });
+    await expect(
+      service.deleteAttachment("alice", thread.id, attachment.id),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(
+      await new ConversationRecords(store, "alice").getAttachment(
+        thread.id,
+        attachment.id,
+      ),
+    ).not.toBeNull();
+    await service.deleteAttachment("alice", thread.id, attachment.id);
+    expect(calls).toBe(2);
+    expect(files.size).toBe(0);
+    expect(
+      await new ConversationRecords(store, "alice").getAttachment(
+        thread.id,
+        attachment.id,
+      ),
+    ).toBeNull();
+    await service.deleteAttachment("alice", thread.id, attachment.id);
+    expect(calls).toBe(2);
+  });
+
+  it("retries reference cleanup after bytes were already deleted", async () => {
+    const files = new Map<string, Uint8Array>();
+    let calls = 0;
+    const store = new InMemoryStore();
+    const remove = store.delete.bind(store);
+    let failures = 1;
+    store.delete = async (...args) => {
+      if (failures-- > 0) throw new Error("temporary reference outage");
+      return remove(...args);
+    };
+    const service = new ConversationService({
+      store,
+      prepareInput: ({ prompt }) => prompt,
+      runtime: { stream: completedStream, getResumeState: async () => null },
+      fileStorage: {
+        async put({ id, bytes }) {
+          files.set(id, bytes);
+          return id;
+        },
+        async get(id) {
+          return files.get(id) ?? null;
+        },
+        async delete(id) {
+          calls++;
+          files.delete(id);
+        },
+      },
+    });
+    const thread = await service.createThread("alice");
+    const attachment = await service.uploadAttachment("alice", thread.id, {
+      name: "image.png",
+      mimeType: "image/png",
+      bytes: Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    });
+    await expect(
+      service.deleteAttachment("alice", thread.id, attachment.id),
+    ).rejects.toThrow("temporary reference outage");
+    expect(
+      await new ConversationRecords(store, "alice").getAttachment(
+        thread.id,
+        attachment.id,
+      ),
+    ).not.toBeNull();
+    await service.deleteAttachment("alice", thread.id, attachment.id);
+    expect(calls).toBe(2);
+    expect(files.size).toBe(0);
+    expect(
+      await new ConversationRecords(store, "alice").getAttachment(
+        thread.id,
+        attachment.id,
+      ),
+    ).toBeNull();
+    await service.deleteAttachment("alice", thread.id, attachment.id);
+    expect(calls).toBe(2);
+  });
+
   it("excludes starts and competing renames throughout asynchronous title writes", async () => {
     const store = new InMemoryStore();
     const put = store.put.bind(store);
@@ -91,7 +268,15 @@ describe("ConversationService", () => {
       request("/conversations", "POST", { title: "HTTP thread" }),
     );
     expect(created.status).toBe(201);
-    const thread = (await created.json()).thread;
+    const createdBody = await created.json();
+    if (
+      typeof createdBody !== "object" ||
+      createdBody === null ||
+      !("thread" in createdBody)
+    )
+      throw new Error("Missing thread response");
+    assertConversationThread(createdBody.thread);
+    const thread = createdBody.thread;
     expect((await handler(request("/conversations"))).status).toBe(200);
     expect(
       (
@@ -103,7 +288,9 @@ describe("ConversationService", () => {
     const historyResponse = await handler(
       request(`/conversations/${thread.id}/history`),
     );
-    expect((await historyResponse.json()).thread.title).toBe("Renamed");
+    expect(
+      cloneConversationHistory(await historyResponse.json()).thread.title,
+    ).toBe("Renamed");
 
     const start = await handler(
       request(`/conversations/${thread.id}/start`, "POST", {
@@ -132,9 +319,9 @@ describe("ConversationService", () => {
       }),
     );
     expect(mismatch.status).toBe(400);
-    expect((await mismatch.json()).message).toBe(
-      "threadId must match the URL.",
-    );
+    expect(await mismatch.json()).toMatchObject({
+      message: "threadId must match the URL.",
+    });
   });
 
   it("persists each published event before returning it and restores the transcript", async () => {
@@ -145,7 +332,6 @@ describe("ConversationService", () => {
       service.start("alice", {
         operationId: "operation-1",
         threadId: thread.id,
-        turnId: "turn-1",
         prompt: "Hello",
         attachments: [],
       }),
@@ -187,7 +373,7 @@ describe("ConversationService", () => {
       },
     };
     const service = new ConversationService({
-      store: new InMemoryStore(),
+      store: createInMemoryConversationStore(),
       fileStorage,
       prepareInput: ({ prompt }) => prompt,
       runtime: {
@@ -240,7 +426,6 @@ describe("ConversationService", () => {
       for await (const item of service.start("alice", {
         operationId: "stop-me",
         threadId: thread.id,
-        turnId: "turn-1",
         prompt: "Stop before a token",
         attachments: [],
       })) {
@@ -269,11 +454,11 @@ describe("ConversationService", () => {
         key: string,
         value: Record<string, unknown>,
         index?: false | string[],
-        options?: { ttl?: number },
+        _options?: { ttl?: number },
       ) {
         if (this.failTerminal && value.status === "settled")
           throw new Error("simulated operation write failure");
-        return super.put(namespace, key, value, index, options);
+        return super.put(namespace, key, value, index);
       }
     }
     const store = new FailingStore();
@@ -326,7 +511,6 @@ describe("ConversationService", () => {
       service.start("alice", {
         operationId: "same-id",
         threadId: thread.id,
-        turnId: "turn-1",
         prompt: "one",
         attachments: [],
       }),
@@ -336,7 +520,6 @@ describe("ConversationService", () => {
         service.start("alice", {
           operationId: "same-id",
           threadId: thread.id,
-          turnId: "turn-1",
           prompt: "different",
           attachments: [],
         }),
@@ -487,7 +670,7 @@ describe("ConversationService", () => {
   });
 
   it("submits ordered native approval decisions only for the current interrupt", async () => {
-    const interrupt = {
+    const interrupt: AgentInterrupt = {
       kind: "tool-approval" as const,
       interruptId: "approval-1",
       prompt: "Approve these actions",
@@ -507,7 +690,7 @@ describe("ConversationService", () => {
       ],
     };
     let nativeState: AgentReducerState | null = null;
-    const decisions = [
+    const decisions: JsonValue[] = [
       { type: "approve" },
       {
         type: "edit",
@@ -751,8 +934,7 @@ describe("ConversationService", () => {
     ).rejects.toMatchObject({ status: 503 });
   });
 
-  it("uses the original turn for approval and rejects stale continuation identity", async () => {
-    // The existing multi-action native fixture below asserts the shared turn too.
+  it("assigns separate logical turns to sequential prompts", async () => {
     const service = createService();
     const thread = await service.createThread("alice");
     await collect(
@@ -796,7 +978,7 @@ describe("ConversationService", () => {
 
   it("keeps uncertain native execution quarantined when cancellation is not acknowledged", async () => {
     const service = new ConversationService({
-      store: new InMemoryStore(),
+      store: createInMemoryConversationStore(),
       settlementTimeoutMs: 20,
       prepareInput: ({ prompt }) => prompt,
       runtime: {
@@ -914,8 +1096,8 @@ describe("ConversationService", () => {
       turnId: "turn",
       status: "running" as const,
       runId: "run",
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-01T00:00:00Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
       publishedPosition: 0,
     };
     saved.lastOperation = operation;
@@ -974,15 +1156,14 @@ describe("ConversationService", () => {
 function createService(
   input: {
     store?: InMemoryStore;
-    stream?: (run: {
-      threadId: string;
-      signal?: AbortSignal;
-    }) => AsyncIterable<AgentEvent>;
+    stream?: (
+      run: Run<string, Record<string, unknown>>,
+    ) => AsyncIterable<AgentEvent>;
     resumeState?: () => AgentReducerState | null;
   } = {},
 ) {
   return new ConversationService({
-    store: input.store ?? new InMemoryStore(),
+    store: createInMemoryConversationStore(input.store ?? new InMemoryStore()),
     prepareInput: ({ prompt }) => prompt,
     runtime: {
       stream: (run) => (input.stream ? input.stream(run) : completedStream()),
@@ -1034,8 +1215,8 @@ function event(
   } as AgentEvent;
 }
 
-async function collect(events: AsyncIterable<unknown>): Promise<unknown[]> {
-  const values: unknown[] = [];
+async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
+  const values: T[] = [];
   for await (const event of events) values.push(event);
   return values;
 }

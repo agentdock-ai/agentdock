@@ -88,8 +88,11 @@ try {
   );
   await writeFile(
     resolve(project, "src/index.ts"),
-    `import { ConversationService, createConversationHttpHandler } from "@agentdock-ai/conversations";
+    `import { ConversationService, createConversationHttpHandler, createInMemoryConversationStore, createPostgresConversationStore } from "@agentdock-ai/conversations";
 import { cloneConversationHistory } from "@agentdock-ai/contracts";
+const store = createInMemoryConversationStore();
+const database = { query: async (_sql: string, _values?: unknown[]) => ({ rows: [] }) };
+void createPostgresConversationStore(store, database, "public");
 void [ConversationService, createConversationHttpHandler, cloneConversationHistory];
 `,
   );
@@ -100,7 +103,7 @@ void [ConversationService, createConversationHttpHandler, cloneConversationHisto
     [
       "--input-type=module",
       "-e",
-      'import assert from "node:assert/strict";const mod=await import("@agentdock-ai/conversations");assert.equal(typeof mod.ConversationService,"function");assert.equal(typeof mod.createConversationHttpHandler,"function");',
+      'import assert from "node:assert/strict";const mod=await import("@agentdock-ai/conversations");assert.equal(typeof mod.ConversationService,"function");assert.equal(typeof mod.createConversationHttpHandler,"function");assert.equal(typeof mod.createPostgresConversationStore,"function");assert.equal(typeof mod.createInMemoryConversationStore().searchThreads,"function");',
     ],
     project,
   );

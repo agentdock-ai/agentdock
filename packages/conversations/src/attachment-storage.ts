@@ -5,6 +5,7 @@ export interface ConversationFileStorage {
     bytes: Uint8Array;
   }): Promise<string>;
   get(reference: string): Promise<Uint8Array | null>;
+  /** Idempotent: deleting an absent object must succeed so metadata cleanup can be retried. */
   delete(reference: string): Promise<void>;
 }
 

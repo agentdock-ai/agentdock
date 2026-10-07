@@ -1,19 +1,18 @@
 import { createHash } from "node:crypto";
-import type {
-  BaseStore,
-  Item,
-  SearchItem,
-} from "@langchain/langgraph-checkpoint";
+import type { BaseStore, Item } from "@langchain/langgraph-checkpoint";
 import {
   assertConversationMessage,
+  assertConversationThread,
   type ConversationMessage,
   type ConversationThread,
 } from "@agentdock-ai/contracts";
 
-export type ConversationStore = Pick<
-  BaseStore,
-  "get" | "search" | "delete" | "batch"
-> & {
+export type ConversationStore = Pick<BaseStore, "get" | "delete" | "batch"> & {
+  searchThreads?(
+    namespace: string[],
+    limit: number,
+    offset: number,
+  ): Promise<Item[]>;
   put(
     namespace: string[],
     key: string,
@@ -72,36 +71,45 @@ export class ConversationRecords {
   async getThread(id: string): Promise<ThreadRecord | null> {
     const item = await this.store.get(this.threadCatalog(), key(id));
     if (!item) return null;
-    const record = parseThread(item, this.ownerHash);
+    const record = parseThread(item.value, this.ownerHash);
     if (record.id !== id) throw new Error("Conversation thread ID is corrupt.");
     return record;
   }
 
   async putThread(thread: ThreadRecord): Promise<void> {
-    thread.revision += 1;
+    const revision = thread.revision + 1;
     await this.store.put(
       this.threadCatalog(),
       key(thread.id),
-      thread as unknown as Record<string, unknown>,
+      { ...parseThread({ ...thread, revision }, this.ownerHash) },
+      false,
     );
+    thread.revision = revision;
   }
 
   async listThreads(limit: number, offset: number): Promise<ThreadRecord[]> {
-    const items = await this.store.search(this.threadCatalog(), {
-      limit: limit + 1,
+    if (!this.store.searchThreads)
+      throw new Error(
+        "Thread listing requires an ordered conversation Store adapter.",
+      );
+    const items = await this.store.searchThreads(
+      this.threadCatalog(),
+      limit + 1,
       offset,
-    });
-    return items.map((item) => parseThread(item, this.ownerHash));
+    );
+    return items.map((item) => parseThread(item.value, this.ownerHash));
   }
 
   async putMessage(
     threadId: string,
     message: ConversationMessage,
   ): Promise<void> {
+    assertConversationMessage(message);
     await this.store.put(
       [...this.threadData(threadId), "messages"],
       positionKey(message.position),
-      message as unknown as Record<string, unknown>,
+      structuredClone({ ...message }),
+      false,
     );
   }
 
@@ -124,7 +132,9 @@ export class ConversationRecords {
     );
     if (items.some((item) => item === null))
       throw new Error("Durable transcript positions are missing.");
-    const page = items.flatMap((item) => (item ? [parseMessage(item)] : []));
+    const page = items.flatMap((item) =>
+      item ? [parseMessage(item.value)] : [],
+    );
     return page.sort((left, right) => left.position - right.position);
   }
 
@@ -136,7 +146,7 @@ export class ConversationRecords {
       [...this.threadData(threadId), "operations"],
       key(id),
     );
-    return item ? parseOperation(item) : null;
+    return item ? parseOperation(item.value) : null;
   }
 
   async putOperation(
@@ -146,7 +156,7 @@ export class ConversationRecords {
     await this.store.put(
       [...this.threadData(threadId), "operations"],
       key(operation.id),
-      operation as unknown as Record<string, unknown>,
+      { ...parseOperation(operation) },
       false,
       operation.status === "settled" ? { ttl: 10_080 } : undefined,
     );
@@ -159,7 +169,8 @@ export class ConversationRecords {
     await this.store.put(
       [...this.threadData(threadId), "attachments"],
       key(attachment.id),
-      attachment as unknown as Record<string, unknown>,
+      { ...parseAttachment(attachment) },
+      false,
     );
   }
 
@@ -172,22 +183,14 @@ export class ConversationRecords {
       key(id),
     );
     if (!item) return null;
-    const value = item.value;
+    const record = parseAttachment(item.value);
     if (
-      !isRecord(value) ||
-      value.id !== id ||
-      value.threadId !== threadId ||
-      value.ownerHash !== this.ownerHash ||
-      typeof value.name !== "string" ||
-      !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
-        String(value.mimeType),
-      ) ||
-      !Number.isSafeInteger(value.size) ||
-      typeof value.storageRef !== "string" ||
-      typeof value.createdAt !== "string"
+      record.id !== id ||
+      record.threadId !== threadId ||
+      record.ownerHash !== this.ownerHash
     )
-      throw new Error("Stored conversation attachment is invalid.");
-    return structuredClone(value) as unknown as AttachmentRecord;
+      throw new Error("Stored conversation attachment ownership is invalid.");
+    return record;
   }
 
   async deleteAttachment(threadId: string, id: string): Promise<void> {
@@ -214,55 +217,123 @@ function positionKey(position: number): string {
   return String(position).padStart(16, "0");
 }
 
-function parseThread(item: Item | SearchItem, ownerHash: string): ThreadRecord {
-  const value = item.value;
+function parseThread(value: unknown, ownerHash: string): ThreadRecord {
+  assertConversationThread(value);
   if (
     !isRecord(value) ||
     value.ownerHash !== ownerHash ||
-    typeof value.id !== "string" ||
-    typeof value.title !== "string" ||
-    typeof value.createdAt !== "string" ||
-    typeof value.updatedAt !== "string" ||
-    !Number.isSafeInteger(value.nextPosition) ||
-    !Number.isSafeInteger(value.revision) ||
-    !Number.isSafeInteger(value.nextTurn) ||
-    (value.nextPosition as number) < 0 ||
-    (value.nextTurn as number) < 0
+    !isTimestamp(value.createdAt) ||
+    !isTimestamp(value.updatedAt) ||
+    !isCounter(value.nextPosition) ||
+    !isCounter(value.nextTurn) ||
+    !isCounter(value.revision)
   )
     throw new Error("Stored conversation thread is invalid.");
-  if (value.lastOperation !== null)
-    parseOperation({
-      ...item,
-      value: value.lastOperation as Record<string, unknown>,
-    });
-  return structuredClone(value) as unknown as ThreadRecord;
+  return {
+    id: value.id,
+    title: value.title,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    ownerHash,
+    nextPosition: value.nextPosition,
+    nextTurn: value.nextTurn,
+    revision: value.revision,
+    lastOperation:
+      value.lastOperation === null ? null : parseOperation(value.lastOperation),
+  };
 }
 
-function parseMessage(item: Item | SearchItem): ConversationMessage {
-  assertConversationMessage(item.value);
-  return structuredClone(item.value) as unknown as ConversationMessage;
+function parseMessage(value: unknown): ConversationMessage {
+  assertConversationMessage(value);
+  return structuredClone(value);
 }
 
-function parseOperation(item: Item | SearchItem): OperationRecord {
-  const value = item.value;
+function parseOperation(value: unknown): OperationRecord {
   if (
     !isRecord(value) ||
-    typeof value.id !== "string" ||
-    !["start", "continue", "approval"].includes(String(value.action)) ||
-    typeof value.requestHash !== "string" ||
-    typeof value.turnId !== "string" ||
-    !["accepted", "running", "paused", "settled", "uncertain"].includes(
-      String(value.status),
-    ) ||
-    (value.runId !== null && typeof value.runId !== "string") ||
-    typeof value.createdAt !== "string" ||
-    typeof value.updatedAt !== "string" ||
-    !Number.isSafeInteger(value.publishedPosition)
+    !isId(value.id) ||
+    (value.action !== "start" &&
+      value.action !== "continue" &&
+      value.action !== "approval") ||
+    !isId(value.requestHash) ||
+    !isId(value.turnId) ||
+    (value.status !== "accepted" &&
+      value.status !== "running" &&
+      value.status !== "paused" &&
+      value.status !== "settled" &&
+      value.status !== "uncertain") ||
+    (value.runId !== null && !isId(value.runId)) ||
+    !isTimestamp(value.createdAt) ||
+    !isTimestamp(value.updatedAt) ||
+    !isCounter(value.publishedPosition) ||
+    (value.outcome !== undefined &&
+      value.outcome !== "complete" &&
+      value.outcome !== "stopped" &&
+      value.outcome !== "error")
   )
     throw new Error("Stored conversation operation is invalid.");
-  return structuredClone(value) as unknown as OperationRecord;
+  return {
+    id: value.id,
+    action: value.action,
+    requestHash: value.requestHash,
+    turnId: value.turnId,
+    status: value.status,
+    runId: value.runId,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    publishedPosition: value.publishedPosition,
+    ...(value.outcome === undefined ? {} : { outcome: value.outcome }),
+  };
+}
+
+function parseAttachment(value: unknown): AttachmentRecord {
+  if (
+    !isRecord(value) ||
+    !isId(value.id) ||
+    !isId(value.threadId) ||
+    !isId(value.ownerHash) ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    (value.mimeType !== "image/png" &&
+      value.mimeType !== "image/jpeg" &&
+      value.mimeType !== "image/gif" &&
+      value.mimeType !== "image/webp") ||
+    !isCounter(value.size) ||
+    value.size === 0 ||
+    typeof value.storageRef !== "string" ||
+    value.storageRef.length === 0 ||
+    !isTimestamp(value.createdAt)
+  )
+    throw new Error("Stored conversation attachment is invalid.");
+  return {
+    id: value.id,
+    threadId: value.threadId,
+    ownerHash: value.ownerHash,
+    name: value.name,
+    mimeType: value.mimeType,
+    size: value.size,
+    storageRef: value.storageRef,
+    createdAt: value.createdAt,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200;
+}
+
+function isCounter(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+// Canonical UTC timestamps keep catalog ordering identical in Memory and SQL.
+function isTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  );
 }

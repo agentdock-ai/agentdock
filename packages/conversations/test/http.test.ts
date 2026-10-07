@@ -1,14 +1,15 @@
 import { expect, it } from "vitest";
-import { InMemoryStore } from "@langchain/langgraph-checkpoint";
+import { cloneConversationAttachment } from "@agentdock-ai/contracts";
 import {
   ConversationService,
+  createInMemoryConversationStore,
   createConversationHttpHandler,
 } from "../src/index.js";
 
 it("validates multipart requests and enforces ownership, bytes, references and deletion", async () => {
   const files = new Map<string, Uint8Array>();
   const service = new ConversationService({
-    store: new InMemoryStore(),
+    store: createInMemoryConversationStore(),
     prepareInput: ({ prompt }) => prompt,
     runtime: { getResumeState: async () => null, async *stream() {} },
     fileStorage: {
@@ -61,8 +62,9 @@ it("validates multipart requests and enforces ownership, bytes, references and d
     new Request(root, { method: "POST", body: form }),
   );
   expect(response.status).toBe(201);
-  const saved = await response.json();
-  expect(saved.content.url).toBe(saved.url);
+  const body = await response.json();
+  const saved = cloneConversationAttachment(body);
+  expect(body).toMatchObject({ content: { url: saved.url } });
   actor = "other";
   expect((await handler(new Request(`http://test${saved.url}`))).status).toBe(
     404,
@@ -93,7 +95,7 @@ it("validates multipart requests and enforces ownership, bytes, references and d
 
 it("fails closed on unavailable storage and validates route/body boundaries", async () => {
   const service = new ConversationService({
-    store: new InMemoryStore(),
+    store: createInMemoryConversationStore(),
     prepareInput: ({ prompt }) => prompt,
     runtime: { async *stream() {}, getResumeState: async () => null },
   });

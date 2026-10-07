@@ -23,11 +23,12 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "yarn clean && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run --config vitest.config.ts",
     "test:packed": "node scripts/verify-packed-consumer.mjs",
     "test:coverage": "vitest run --coverage --config vitest.config.ts",
-    "prepack": "yarn build"
+    "prepack": "yarn build",
+    "test:db": "vitest run test/store.postgres.test.ts --config vitest.config.ts"
   },
   "dependencies": {
     "@agentdock-ai/agentdock": "0.2.0",
@@ -41,6 +42,9 @@
     "@types/node": "^26.1.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
-    "@vitest/coverage-v8": "^4.1.11"
+    "@vitest/coverage-v8": "^4.1.11",
+    "@langchain/langgraph-checkpoint-postgres": "^1.0.5",
+    "pg": "^8.23.0",
+    "@types/pg": "^8.0.0"
   }
 }

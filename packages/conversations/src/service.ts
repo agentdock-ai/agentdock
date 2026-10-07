@@ -1,10 +1,19 @@
-import { randomUUID, createHash } from "node:crypto";
-import { messagesForEvent, mapDisplayEvent, isTerminal } from "./transcript.js";
+import { ConversationAttachments } from "./attachments.js";
+import {
+  conversationError,
+  requireThread,
+  positiveInteger,
+  validateTitle,
+  validateDecisions,
+  decodeCursor,
+  encodeCursor,
+  hashRequest,
+} from "./service-utils.js";
+import { randomUUID } from "node:crypto";
+import { OperationPersistence, runOperation } from "./operation.js";
 import { managedStream } from "./managed-stream.js";
 import {
-  AgentEventType,
   createAgentReducerState,
-  reduceAgentEvent,
   type AgentEvent,
   type AgentReducerState,
   type ConversationActions,
@@ -20,10 +29,8 @@ import {
   type ConversationThreadPage,
 } from "@agentdock-ai/contracts";
 import type { Run } from "@agentdock-ai/agentdock";
-import type { AgentInterrupt } from "@agentdock-ai/contracts";
 import {
   ConversationRecords,
-  type AttachmentRecord,
   type ConversationStore,
   type OperationRecord,
   type ThreadRecord,
@@ -66,6 +73,7 @@ interface ActiveOperation {
 }
 
 export class ConversationService<Input> {
+  private readonly attachments: ConversationAttachments;
   private readonly active = new Map<string, ActiveOperation>();
   private readonly renaming = new Set<string>();
   private closing = false;
@@ -90,6 +98,11 @@ export class ConversationService<Input> {
       options.maxAttachmentBytes ?? 5 * 1024 * 1024,
       "maxAttachmentBytes",
       25 * 1024 * 1024,
+    );
+    this.attachments = new ConversationAttachments(
+      options.store,
+      options.fileStorage,
+      this.maxAttachmentBytes,
     );
   }
 
@@ -126,13 +139,7 @@ export class ConversationService<Input> {
     const offset = decodeCursor(cursor);
     const records = this.records(actorId);
     const page = await records.listThreads(this.pageSize, offset);
-    const threads = page
-      .slice(0, this.pageSize)
-      .sort(
-        (left, right) =>
-          right.updatedAt.localeCompare(left.updatedAt) ||
-          left.id.localeCompare(right.id),
-      );
+    const threads = page.slice(0, this.pageSize);
     const hasMore = page.length > this.pageSize;
     return {
       protocolVersion: 1,
@@ -155,7 +162,7 @@ export class ConversationService<Input> {
       );
     this.renaming.add(key);
     try {
-      const thread = await this.requireThread(records, threadId);
+      const thread = await requireThread(records, threadId);
       thread.title = validateTitle(title);
       thread.updatedAt = new Date().toISOString();
       await records.putThread(thread);
@@ -165,104 +172,26 @@ export class ConversationService<Input> {
     }
   }
 
-  async uploadAttachment(
+  uploadAttachment(
     actorId: string,
     threadId: string,
     upload: ConversationUpload,
   ): Promise<ConversationAttachment> {
-    if (!this.options.fileStorage)
-      throw conversationError(503, "Attachment storage is not configured.");
-    const records = this.records(actorId);
-    await this.requireThread(records, threadId);
-    const name = validateAttachmentName(upload.name);
-    const mimeType = sniffImage(upload.bytes);
-    if (!mimeType || mimeType !== upload.mimeType)
-      throw conversationError(
-        415,
-        "Upload a valid PNG, JPEG, GIF, or WebP image.",
-      );
-    if (
-      upload.bytes.byteLength < 1 ||
-      upload.bytes.byteLength > this.maxAttachmentBytes
-    )
-      throw conversationError(
-        413,
-        "Image is empty or exceeds the configured size limit.",
-      );
-    const id = randomUUID();
-    const storageRef = await this.options.fileStorage.put({
-      id,
-      mimeType,
-      bytes: upload.bytes,
-    });
-    const record: AttachmentRecord = {
-      id,
-      threadId,
-      ownerHash: records.ownerHash,
-      name,
-      mimeType,
-      size: upload.bytes.byteLength,
-      storageRef,
-      createdAt: new Date().toISOString(),
-    };
-    try {
-      await records.putAttachment(threadId, record);
-    } catch (error) {
-      try {
-        await this.options.fileStorage.delete(storageRef);
-      } catch {
-        throw conversationError(
-          503,
-          "Attachment reference persistence failed and orphan cleanup also failed.",
-        );
-      }
-      throw conversationError(503, "Attachment reference persistence failed.");
-    }
-    return publicAttachment(record);
+    return this.attachments.upload(actorId, threadId, upload);
   }
-
-  async readAttachment(
+  readAttachment(
     actorId: string,
     threadId: string,
     attachmentId: string,
   ): Promise<{ attachment: ConversationAttachment; bytes: Uint8Array }> {
-    if (!this.options.fileStorage)
-      throw conversationError(503, "Attachment storage is not configured.");
-    const records = this.records(actorId);
-    await this.requireThread(records, threadId);
-    const record = await records.getAttachment(threadId, attachmentId);
-    if (!record) throw conversationError(404, "Attachment was not found.");
-    const bytes = await this.options.fileStorage.get(record.storageRef);
-    if (!bytes)
-      throw conversationError(404, "Attachment bytes are unavailable.");
-    if (bytes.byteLength !== record.size)
-      throw conversationError(
-        503,
-        "Stored attachment failed its integrity check.",
-      );
-    return { attachment: publicAttachment(record), bytes };
+    return this.attachments.read(actorId, threadId, attachmentId);
   }
-
-  async deleteAttachment(
+  deleteAttachment(
     actorId: string,
     threadId: string,
     attachmentId: string,
   ): Promise<void> {
-    if (!this.options.fileStorage)
-      throw conversationError(503, "Attachment storage is not configured.");
-    const records = this.records(actorId);
-    await this.requireThread(records, threadId);
-    const record = await records.getAttachment(threadId, attachmentId);
-    if (!record) return;
-    await records.deleteAttachment(threadId, attachmentId);
-    try {
-      await this.options.fileStorage.delete(record.storageRef);
-    } catch {
-      throw conversationError(
-        503,
-        "Attachment reference was removed, but byte cleanup failed.",
-      );
-    }
+    return this.attachments.delete(actorId, threadId, attachmentId);
   }
 
   async getHistory(
@@ -280,15 +209,13 @@ export class ConversationService<Input> {
     attempt: number,
   ): Promise<ConversationHistory> {
     const records = this.records(actorId);
-    const thread = await this.requireThread(records, threadId);
-    const beforePosition = cursor
-      ? decodePositionCursor(cursor)
-      : thread.nextPosition;
+    const thread = await requireThread(records, threadId);
+    const beforePosition = cursor ? decodeCursor(cursor) : thread.nextPosition;
     const [page, nativeState] = await Promise.all([
       records.listMessages(threadId, this.pageSize + 1, beforePosition),
       this.options.runtime.getResumeState(threadId),
     ]);
-    const latest = await this.requireThread(records, threadId);
+    const latest = await requireThread(records, threadId);
     if (latest.revision !== thread.revision) {
       if (attempt >= 3)
         throw conversationError(
@@ -352,7 +279,7 @@ export class ConversationService<Input> {
         ),
       nextCursor:
         page.length > this.pageSize
-          ? encodePositionCursor(page.slice(-this.pageSize)[0]!.position)
+          ? encodeCursor(page.slice(-this.pageSize)[0]!.position)
           : null,
       snapshotId: `${thread.updatedAt}:${thread.nextPosition}`,
       execution:
@@ -381,7 +308,7 @@ export class ConversationService<Input> {
           request.threadId,
         );
         const current = (
-          await this.requireThread(this.records(actorId), request.threadId)
+          await requireThread(this.records(actorId), request.threadId)
         ).lastOperation;
         if (
           current &&
@@ -434,7 +361,7 @@ export class ConversationService<Input> {
             "No native static continuation is pending.",
           );
         const records = this.records(actorId);
-        const previous = (await this.requireThread(records, request.threadId))
+        const previous = (await requireThread(records, request.threadId))
           .lastOperation;
         if (
           !previous ||
@@ -479,7 +406,7 @@ export class ConversationService<Input> {
           );
         validateDecisions(interrupt, request.decisions);
         const previous = (
-          await this.requireThread(this.records(actorId), request.threadId)
+          await requireThread(this.records(actorId), request.threadId)
         ).lastOperation;
         if (!previous)
           throw conversationError(
@@ -501,7 +428,7 @@ export class ConversationService<Input> {
 
   async stop(actorId: string, request: ConversationStopRequest): Promise<void> {
     const records = this.records(actorId);
-    await this.requireThread(records, request.threadId);
+    await requireThread(records, request.threadId);
     const active = this.active.get(
       this.activeKey(records.ownerHash, request.threadId),
     );
@@ -620,22 +547,16 @@ export class ConversationService<Input> {
     };
     this.active.set(activeKey, active);
     let executionStarted = false;
+    let admission:
+      { thread: ThreadRecord; operation: OperationRecord } | undefined;
     try {
       if (controller.signal.aborted)
         throw conversationError(
           409,
           "Operation request was cancelled before admission.",
         );
-      const thread = await this.requireThread(records, threadId);
-      const requestHash = hash(
-        JSON.stringify(request, (_key, value) => {
-          if (value && typeof value === "object" && !Array.isArray(value))
-            return Object.fromEntries(
-              Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
-            );
-          return value;
-        }),
-      );
+      const thread = await requireThread(records, threadId);
+      const requestHash = hashRequest(request);
       const prior = await records.getOperation(threadId, operationId);
       if (prior) {
         if (prior.requestHash !== requestHash || prior.action !== action)
@@ -669,7 +590,7 @@ export class ConversationService<Input> {
       };
       const inputAttachments =
         action === "start"
-          ? await this.loadInputAttachments(
+          ? await this.attachments.load(
               actorId,
               threadId,
               (request as ConversationStartRequest).attachments,
@@ -690,6 +611,7 @@ export class ConversationService<Input> {
       operation.turnId = prepared.turnId;
       turnId = prepared.turnId;
       thread.lastOperation = operation;
+      admission = { thread, operation };
       await records.putThread(thread);
       await records.putOperation(threadId, operation);
       let promptMessage: ConversationMessage | null = null;
@@ -724,156 +646,74 @@ export class ConversationService<Input> {
       operation.status = "running";
       operation.updatedAt = new Date().toISOString();
       await records.putOperation(threadId, operation);
-      const iterator = this.options.runtime.stream(run)[Symbol.asyncIterator]();
-      executionStarted = true;
-      let reducer =
+      const reducer =
         action === "start"
           ? createAgentReducerState()
           : ((await this.options.runtime.getResumeState(threadId)) ??
             createAgentReducerState());
-      const messages = new Map<string, ConversationMessage>();
-      if (promptMessage) messages.set(promptMessage.id, promptMessage);
-      let terminal = false;
-      let durable = true;
-      let failure: unknown;
-      try {
-        while (true) {
-          const next = await nextWithSettlementDeadline(
-            iterator,
-            controller.signal,
-            this.settlementTimeoutMs,
-          );
-          if (next.done) break;
-          const event = mapDisplayEvent(next.value, displayUrls);
-          reducer = reduceAgentEvent(reducer, event);
-          operation.runId = event.runId;
-          operation.updatedAt = new Date().toISOString();
-          if (isTerminal(event) || event.type === AgentEventType.RunPaused) {
-            terminal = true;
-            operation.status =
-              event.type === AgentEventType.RunPaused ? "paused" : "settled";
-            if (isTerminal(event))
-              operation.outcome =
-                event.type === AgentEventType.RunCompleted
-                  ? "complete"
-                  : event.type === AgentEventType.RunFailed
-                    ? "error"
-                    : "stopped";
-          } else if (event.type === AgentEventType.InterruptRequired) {
-            operation.status = "paused";
-          }
-          const changed = messagesForEvent(
-            event,
-            reducer,
-            messages,
-            thread,
-            operation,
-          );
-          for (const message of changed)
-            await records.putMessage(threadId, message);
-          operation.publishedPosition = thread.nextPosition;
-          if (event.type === AgentEventType.RunStarted && event.runId)
-            operation.runId = event.runId;
-          thread.lastOperation = operation;
-          thread.updatedAt = new Date().toISOString();
-          await records.putOperation(threadId, operation);
-          await records.putThread(thread);
-          await publish({
+      const writer = new OperationPersistence(
+        records,
+        thread,
+        operation,
+        reducer,
+        displayUrls,
+        promptMessage,
+      );
+      // Once the native runtime is invoked, a failure may involve real side effects.
+      executionStarted = true;
+      const iterator = this.options.runtime.stream(run)[Symbol.asyncIterator]();
+      const result = await runOperation(
+        iterator,
+        writer,
+        (event) =>
+          publish({
             protocolVersion: 1,
             operationId,
             threadId,
             event,
-          });
-        }
-        if (!terminal) {
-          operation.status = "uncertain";
-          operation.updatedAt = new Date().toISOString();
-          await records.putOperation(threadId, operation);
-          durable = false;
-          failure = new Error("Execution ended without a terminal event.");
-        }
-      } catch (error) {
-        failure = error;
-        controller.abort();
-        try {
-          durable =
-            error instanceof SettlementTimeout
-              ? false
-              : await this.drain(
-                  iterator,
-                  records,
-                  threadId,
-                  thread,
-                  operation,
-                  reducer,
-                  messages,
-                  displayUrls,
-                );
-        } catch (settlementError) {
-          failure = settlementError;
-          durable = false;
-        }
-        if (!durable) {
-          operation.status = "uncertain";
-          operation.updatedAt = new Date().toISOString();
-          try {
-            await records.putOperation(threadId, operation);
-          } catch {
-            // The original failure remains the public persistence result.
-          }
-        }
-      } finally {
-        if (!terminal && failure === undefined) {
-          controller.abort();
-          try {
-            durable = await this.drain(
-              iterator,
-              records,
-              threadId,
-              thread,
-              operation,
-              reducer,
-              messages,
-              displayUrls,
-            );
-          } catch (error) {
-            failure = error;
-            durable = false;
-          }
-          if (!durable) {
-            operation.status = "uncertain";
-            operation.updatedAt = new Date().toISOString();
-            try {
-              await records.putOperation(threadId, operation);
-            } catch {
-              /* retain uncertain ownership */
-            }
-          }
-        }
-        thread.updatedAt = new Date().toISOString();
-        try {
-          if (durable) {
-            await records.putThread(thread);
-            this.active.delete(activeKey);
-          }
-        } catch (error) {
-          durable = false;
-          failure = error;
-        }
-        settle({
-          durable,
-          ...(failure === undefined ? {} : { error: failure }),
-        });
-      }
-      if (!durable || failure !== undefined)
+          }),
+        controller,
+        this.settlementTimeoutMs,
+      );
+      if (result.durable) this.active.delete(activeKey);
+      settle(result);
+      if (!result.durable || result.error !== undefined)
         throw Object.assign(
           conversationError(
             503,
             "Conversation persistence or execution settlement failed.",
           ),
-          { cause: failure },
+          { cause: result.error },
         );
     } catch (error) {
+      if (!executionStarted && admission) {
+        const { thread, operation } = admission;
+        operation.status = "settled";
+        operation.outcome = "error";
+        operation.updatedAt = new Date().toISOString();
+        // Publish only positions whose message writes were confirmed.
+        thread.nextPosition = operation.publishedPosition;
+        thread.lastOperation = operation;
+        try {
+          await records.putOperation(threadId, operation);
+          await records.putThread(thread);
+        } catch (recoveryError) {
+          throw Object.assign(
+            conversationError(
+              503,
+              "Admission recovery failed; reload history before retrying.",
+            ),
+            {
+              cause: error,
+              recoveryError,
+            },
+          );
+        } finally {
+          if (this.active.get(activeKey) === active)
+            this.active.delete(activeKey);
+          settle({ durable: false, error });
+        }
+      }
       if (!executionStarted && this.active.get(activeKey) === active)
         this.active.delete(activeKey);
       settle({ durable: false, error });
@@ -881,152 +721,12 @@ export class ConversationService<Input> {
     }
   }
 
-  private async drain(
-    iterator: AsyncIterator<AgentEvent>,
-    records: ConversationRecords,
-    threadId: string,
-    thread: ThreadRecord,
-    operation: OperationRecord,
-    reducer: AgentReducerState,
-    messages: Map<string, ConversationMessage>,
-    displayUrls: Map<string, string>,
-  ): Promise<boolean> {
-    const deadline = Date.now() + this.settlementTimeoutMs;
-    let state = reducer;
-    while (Date.now() < deadline) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const next = await Promise.race([
-        iterator.next(),
-        new Promise<null>((resolve) => {
-          timer = setTimeout(
-            () => resolve(null),
-            Math.max(0, deadline - Date.now()),
-          );
-        }),
-      ]).finally(() => clearTimeout(timer));
-      if (next === null) return false;
-      if (next.done) return false;
-      const event = mapDisplayEvent(next.value, displayUrls);
-      state = reduceAgentEvent(state, event);
-      const changed = messagesForEvent(
-        event,
-        state,
-        messages,
-        thread,
-        operation,
-      );
-      for (const message of changed)
-        await records.putMessage(threadId, message);
-      operation.publishedPosition = thread.nextPosition;
-      operation.runId = next.value.runId;
-      operation.updatedAt = new Date().toISOString();
-      if (next.value.type === AgentEventType.RunPaused) {
-        operation.status = "paused";
-      } else if (isTerminal(next.value)) {
-        operation.status = "settled";
-        operation.outcome =
-          next.value.type === AgentEventType.RunCompleted
-            ? "complete"
-            : next.value.type === AgentEventType.RunFailed
-              ? "error"
-              : "stopped";
-      }
-      await records.putOperation(threadId, operation);
-      if (
-        next.value.type === AgentEventType.RunPaused ||
-        isTerminal(next.value)
-      )
-        return true;
-    }
-    throw new Error(
-      "Conversation execution did not settle before the deadline.",
-    );
-  }
-
   private records(actorId: string) {
     return new ConversationRecords(this.options.store, actorId);
   }
 
-  private async loadInputAttachments(
-    actorId: string,
-    threadId: string,
-    ids: readonly string[],
-  ): Promise<ConversationInputAttachment[]> {
-    if (ids.length === 0) return [];
-    if (!this.options.fileStorage)
-      throw conversationError(503, "Attachment storage is not configured.");
-    const records = this.records(actorId);
-    await this.requireThread(records, threadId);
-    const unique = [...new Set(ids)];
-    if (unique.length !== ids.length)
-      throw conversationError(
-        400,
-        "An attachment was selected more than once.",
-      );
-    const loaded: ConversationInputAttachment[] = [];
-    for (const id of unique) {
-      const record = await records.getAttachment(threadId, id);
-      if (!record)
-        throw conversationError(
-          400,
-          "An attachment is missing or belongs to another thread.",
-        );
-      const bytes = await this.options.fileStorage.get(record.storageRef);
-      if (!bytes || bytes.byteLength !== record.size)
-        throw conversationError(
-          503,
-          "An attachment is unavailable or failed its integrity check.",
-        );
-      loaded.push({ ...publicAttachment(record), bytes });
-    }
-    return loaded;
-  }
-
-  private async requireThread(
-    records: ConversationRecords,
-    id: string,
-  ): Promise<ThreadRecord> {
-    if (typeof id !== "string" || !id.trim())
-      throw conversationError(400, "threadId is required.");
-    const thread = await records.getThread(id);
-    if (!thread) throw conversationError(404, "Conversation was not found.");
-    return thread;
-  }
-
   private activeKey(ownerHash: string, threadId: string): string {
     return `${ownerHash}:${threadId}`;
-  }
-}
-
-function validateDecisions(
-  interrupt: AgentInterrupt,
-  decisions: ConversationApprovalRequest["decisions"],
-): void {
-  if (decisions.length !== interrupt.actions.length)
-    throw conversationError(
-      400,
-      "Supply one native decision for each pending action.",
-    );
-  for (const decision of decisions) {
-    if (
-      typeof decision !== "object" ||
-      decision === null ||
-      Array.isArray(decision)
-    )
-      throw conversationError(
-        400,
-        "Each approval decision must be a native decision object.",
-      );
-    const type = (decision as Record<string, unknown>).type;
-    if (
-      !(["approve", "reject", "edit"] as const).includes(
-        type as "approve" | "reject" | "edit",
-      )
-    )
-      throw conversationError(
-        400,
-        "Decision type must be approve, reject, or edit.",
-      );
   }
 }
 
@@ -1037,126 +737,4 @@ function publicThread(thread: ThreadRecord): ConversationThread {
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
   };
-}
-
-function publicAttachment(record: AttachmentRecord): ConversationAttachment {
-  return {
-    id: record.id,
-    threadId: record.threadId,
-    name: record.name,
-    mimeType: record.mimeType,
-    size: record.size,
-    url: `/conversations/${encodeURIComponent(record.threadId)}/attachments/${encodeURIComponent(record.id)}`,
-    createdAt: record.createdAt,
-  };
-}
-
-function sniffImage(bytes: Uint8Array): AttachmentRecord["mimeType"] | null {
-  const data = Buffer.from(bytes);
-  if (
-    data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-  )
-    return "image/png";
-  if (data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255)
-    return "image/jpeg";
-  if (["GIF87a", "GIF89a"].includes(data.toString("ascii", 0, 6)))
-    return "image/gif";
-  if (
-    data.length >= 12 &&
-    data.toString("ascii", 0, 4) === "RIFF" &&
-    data.toString("ascii", 8, 12) === "WEBP"
-  )
-    return "image/webp";
-  return null;
-}
-
-function validateAttachmentName(name: string): string {
-  if (typeof name !== "string" || name.trim().length === 0)
-    throw conversationError(400, "Attachment name is required.");
-  return name.trim().slice(0, 240);
-}
-
-function validateTitle(title: string): string {
-  if (typeof title !== "string")
-    throw conversationError(400, "title must be a string.");
-  const normalized = title.trim();
-  if (!normalized || normalized.length > 200)
-    throw conversationError(400, "title must contain 1 to 200 characters.");
-  return normalized;
-}
-
-function positiveInteger(value: number, name: string, maximum: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > maximum)
-    throw new Error(`${name} must be an integer between 1 and ${maximum}.`);
-  return value;
-}
-
-function decodeCursor(cursor?: string | null): number {
-  if (!cursor) return 0;
-  let value: unknown;
-  try {
-    value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-  } catch {
-    throw conversationError(400, "Pagination cursor is invalid.");
-  }
-  if (!Number.isSafeInteger(value) || (value as number) < 0)
-    throw conversationError(400, "Pagination cursor is invalid.");
-  return value as number;
-}
-
-function encodeCursor(offset: number): string {
-  return Buffer.from(JSON.stringify(offset)).toString("base64url");
-}
-
-function decodePositionCursor(cursor: string): number {
-  const value = decodeCursor(cursor);
-  return value;
-}
-
-function encodePositionCursor(beforePosition: number): string {
-  return encodeCursor(beforePosition);
-}
-
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function conversationError(
-  status: number,
-  message: string,
-): Error & { status: number } {
-  return Object.assign(new Error(message), { status });
-}
-
-class SettlementTimeout extends Error {}
-
-async function nextWithSettlementDeadline<T>(
-  iterator: AsyncIterator<T>,
-  signal: AbortSignal,
-  timeoutMs: number,
-): Promise<IteratorResult<T>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let rejectDeadline!: (error: Error) => void;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    rejectDeadline = reject;
-  });
-  const aborted = () => {
-    timer = setTimeout(
-      () =>
-        rejectDeadline(
-          new SettlementTimeout(
-            "Native execution did not acknowledge cancellation.",
-          ),
-        ),
-      timeoutMs,
-    );
-  };
-  signal.addEventListener("abort", aborted, { once: true });
-  if (signal.aborted) aborted();
-  try {
-    return await Promise.race([iterator.next(), deadline]);
-  } finally {
-    clearTimeout(timer);
-    signal.removeEventListener("abort", aborted);
-  }
 }

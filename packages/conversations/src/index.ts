@@ -12,6 +12,10 @@ export type {
   ConversationUpload,
 } from "./attachment-storage.js";
 export { ConversationRecords } from "./store.js";
+export {
+  createInMemoryConversationStore,
+  createPostgresConversationStore,
+} from "./store-adapters.js";
 export type {
   ConversationStore,
   ThreadRecord,
