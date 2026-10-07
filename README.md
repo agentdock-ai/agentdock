@@ -12,6 +12,11 @@ The `Agentdock` class adapts a compiled LangGraph graph to the Agentdock event
 contract and handles SSE backpressure, client disconnects, and response cleanup.
 Your application owns routes and calls Agentdock from its route controllers.
 
+For optional durable conversation threads, transcripts, and UI synchronization
+on top of a configured LangGraph Store, see
+[`@agentdock-ai/conversations`](./packages/conversations/README.md). The serving
+package remains usable without conversation persistence.
+
 LangGraph and LangChain own agent execution, tools, models, checkpoints,
 interrupts, and resume. Your application owns request parsing, authentication,
 authorization, trusted thread IDs, side effects, and checkpointer lifecycle.

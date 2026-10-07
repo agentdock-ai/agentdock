@@ -9,11 +9,11 @@
   "scripts": {
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "yarn build:contracts && yarn build:agentdock && yarn typecheck:contracts && yarn typecheck:agentdock && yarn workspace agentdock-react-agent-example typecheck",
-    "test": "yarn workspace @agentdock-ai/contracts test && yarn workspace @agentdock-ai/agentdock test",
+    "typecheck": "yarn build:contracts && yarn build:agentdock && yarn build:conversations && yarn typecheck:contracts && yarn typecheck:agentdock && yarn typecheck:conversations && yarn workspace agentdock-react-agent-example typecheck",
+    "test": "yarn workspace @agentdock-ai/contracts test && yarn workspace @agentdock-ai/agentdock test && yarn workspace @agentdock-ai/conversations test",
     "test:e2e": "yarn workspace @agentdock-ai/agentdock test:e2e",
-    "test:coverage": "yarn workspace @agentdock-ai/contracts test:coverage && yarn workspace @agentdock-ai/agentdock test:coverage",
-    "build": "yarn build:contracts && yarn build:agentdock",
+    "test:coverage": "yarn workspace @agentdock-ai/contracts test:coverage && yarn workspace @agentdock-ai/agentdock test:coverage && yarn workspace @agentdock-ai/conversations test:coverage",
+    "build": "yarn build:contracts && yarn build:agentdock && yarn build:conversations",
     "ci": "yarn format:check && yarn typecheck && yarn build && yarn test && yarn test:coverage",
     "changeset": "changeset",
     "version-packages": "changeset version",
@@ -22,6 +22,8 @@
     "typecheck:agentdock": "yarn workspace @agentdock-ai/agentdock typecheck",
     "build:contracts": "yarn workspace @agentdock-ai/contracts build",
     "build:agentdock": "yarn workspace @agentdock-ai/agentdock build",
+    "typecheck:conversations": "yarn workspace @agentdock-ai/conversations typecheck",
+    "build:conversations": "yarn workspace @agentdock-ai/conversations build",
     "example:serve": "yarn workspace agentdock-react-agent-example start"
   },
   "devDependencies": {
