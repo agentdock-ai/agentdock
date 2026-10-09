@@ -34,6 +34,16 @@ const handle = createConversationHttpHandler({
 });
 ```
 
+The handler serves its OpenAPI document at `GET /openapi.json` and interactive
+Swagger UI at `GET /docs`, alongside the conversation routes below. The docs
+describe this package's HTTP API only; host application routes are not included.
+Swagger UI loads its static assets from jsDelivr, so the browser needs internet
+access to render `/docs`.
+
+Forward requests for `/openapi.json`, `/docs`, and `/conversations/...` to the
+handler. In an Express server, mount the Node adapter at the application root
+so all three paths reach it. The starter demonstrates this setup.
+
 The host mounts the Fetch-compatible handler and owns authentication, authorization, Store/checkpointer lifecycle, graph compilation, file storage, and business side effects. Start and approval bodies are validated against `@agentdock-ai/contracts`; the actor is always supplied by `resolveActor`, never accepted from JSON.
 
 Thread listing requires an explicit `searchThreads(namespace, limit, offset)` capability that orders by canonical UTC `updatedAt` descending, then ID ascending, **before** pagination. `createPostgresConversationStore` supplies a bounded SQL query and a catalog index on the native PostgresStore table; call it after native Store setup, with the same schema and a host-owned query client. The host owns credentials, connections and index installation permissions. It does not add conversation tables or change checkpoints. Other backends can supply the same capability rather than silently sorting a partial generic Store page.

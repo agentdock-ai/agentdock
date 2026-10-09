@@ -4,6 +4,7 @@ import {
   assertConversationStartRequest,
   assertConversationStopRequest,
 } from "@agentdock-ai/contracts";
+import { openApiDocument, swaggerUiHtml } from "./openapi.js";
 import { type ConversationService } from "./service.js";
 
 export interface ConversationHttpOptions<Input> {
@@ -26,7 +27,6 @@ export function createConversationHttpHandler<Input>(
 
   return async (request) => {
     try {
-      const actorId = await options.resolveActor(request);
       const url = new URL(request.url);
       const parts = url.pathname
         .split("/")
@@ -38,6 +38,15 @@ export function createConversationHttpHandler<Input>(
             throw httpError(400, "Request path is invalid.");
           }
         });
+      if (request.method === "GET" && parts.length === 1) {
+        if (parts[0] === "openapi.json") return json(openApiDocument);
+        if (parts[0] === "docs")
+          return new Response(swaggerUiHtml, {
+            headers: { "content-type": "text/html; charset=utf-8" },
+          });
+      }
+
+      const actorId = await options.resolveActor(request);
       if (parts[0] !== "conversations")
         return json({ code: "not_found", message: "Route not found." }, 404);
       if (parts.length === 1 && request.method === "GET") {
