@@ -102,17 +102,23 @@ The graph and middleware own approval policy and execution. Generic interruption
 stay opaque, including payloads with keys such as `reviewConfigs`. Native
 `responseSchema` metadata is preserved as `interrupt.responseSchema`.
 
-For LangChain HITL presentation, explicitly select its display format. Request
-validation belongs to the application; an optional hook runs before graph execution
-or SSE headers. The supplied helper checks the response envelope and action count;
-it does not enforce permissions. Choose it when your application's current policy
-uses the pending batch unchanged:
+`Agentdock.OPAQUE` is the default: interrupts remain generic and their native
+payloads are passed through. Use `Agentdock.HITL` to recognize LangChain
+`humanInTheLoopMiddleware` approvals and expose their actions as tool approvals
+for a review UI. This changes their display projection, not LangGraph execution
+or approval permissions. The equivalent strings (`"opaque"` and
+`"langchain-hitl"`) remain supported.
+
+Request validation belongs to the application; an optional hook runs before graph
+execution or SSE headers. The supplied helper checks the response envelope and
+action count; it does not enforce permissions. Choose it when your application's
+current policy uses the pending batch unchanged:
 
 ```ts
 import { Agentdock, validateToolApprovalResume } from "@agentdock-ai/agentdock";
 
 const runtime = new Agentdock(graph, {
-  interruptFormat: "langchain-hitl",
+  interruptFormat: Agentdock.HITL,
   validateResume: validateToolApprovalResume,
 });
 ```
