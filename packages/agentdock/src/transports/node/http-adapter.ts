@@ -40,6 +40,8 @@ export class NodeHttpAdapter {
     response: ServerResponse,
     url: string | URL = request.url ?? "/",
   ): Promise<void> {
+    if (response.destroyed || (request.destroyed && !request.complete)) return;
+
     const controller = new AbortController();
     const onRequestClose = () => {
       if (!request.complete)
@@ -136,11 +138,12 @@ function setResponseHeaders(response: ServerResponse, headers: Headers): void {
       response.setHeader(name, value);
   }
   const cookies = headers.getSetCookie();
-  if (cookies.length > 0) response.setHeader("set-cookie", cookies);
+  if (cookies.length > 0 && !excluded.has("set-cookie"))
+    response.setHeader("set-cookie", cookies);
 }
 
 function getExcludedHeaders(
-  connection: string | string[] | undefined,
+  connection: string | string[] | null | undefined,
 ): Set<string> {
   const excluded = new Set(hopByHopHeaders);
   const values = Array.isArray(connection) ? connection : [connection];

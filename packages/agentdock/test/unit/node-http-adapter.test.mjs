@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
-import { get } from "node:http";
-import { createServer } from "node:http";
+import { Readable, Writable } from "node:stream";
 import { test } from "vitest";
 import { NodeHttpAdapter } from "../../src/transports/node/http-adapter.js";
 
-test("bridges request and response streams and preserves multiple cookies", async ({
-  skip,
-}) => {
+test("bridges request and response streams and preserves multiple cookies", async () => {
   let observedRequest;
   const adapter = new NodeHttpAdapter(async (request) => {
     observedRequest = {
@@ -28,35 +25,34 @@ test("bridges request and response streams and preserves multiple cookies", asyn
       { status: 201, headers },
     );
   });
-  const server = createAdapterServer(adapter);
-  const baseUrl = await listen(server, skip);
+  const request = createIncoming({
+    method: "POST",
+    url: "/conversations?cursor=next",
+    headers: { "content-type": "text/plain" },
+    body: "request body",
+  });
+  const response = new MemoryResponse();
 
-  try {
-    const response = await fetch(`${baseUrl}/conversations?cursor=next`, {
-      method: "POST",
-      body: "request body",
-      headers: { "content-type": "text/plain" },
-    });
+  await adapter.handle(request, response);
 
-    assert.equal(response.status, 201);
-    assert.equal(await response.text(), "streamed response");
-    assert.deepEqual(response.headers.getSetCookie(), [
-      "first=one; Path=/",
-      "second=two; Path=/",
-    ]);
-    assert.deepEqual(observedRequest, {
-      method: "POST",
-      url: `${baseUrl}/conversations?cursor=next`,
-      body: "request body",
-    });
-  } finally {
-    await close(server);
-  }
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.body(), "streamed response");
+  assert.deepEqual(
+    response.chunks.map((chunk) => chunk.toString()),
+    ["streamed ", "response"],
+  );
+  assert.deepEqual(response.getHeader("set-cookie"), [
+    "first=one; Path=/",
+    "second=two; Path=/",
+  ]);
+  assert.deepEqual(observedRequest, {
+    method: "POST",
+    url: "http://localhost/conversations?cursor=next",
+    body: "request body",
+  });
 });
 
-test("filters hop-by-hop headers and headers nominated by Connection", async ({
-  skip,
-}) => {
+test("filters hop-by-hop headers and headers nominated by Connection", async () => {
   let requestHeaders;
   const adapter = new NodeHttpAdapter(async (request) => {
     requestHeaders = request.headers;
@@ -68,34 +64,26 @@ test("filters hop-by-hop headers and headers nominated by Connection", async ({
       },
     });
   });
-  const server = createServer((request, response) => {
-    void adapter.handle(request, response).catch((error) => {
-      response.destroy(error);
-    });
+  const request = createIncoming({
+    headers: {
+      connection: "x-request-private",
+      "x-request-private": "secret",
+      "x-end-to-end": "visible",
+    },
   });
-  const baseUrl = await listen(server, skip);
+  const response = new MemoryResponse();
 
-  try {
-    const response = await fetch(baseUrl, {
-      headers: {
-        connection: "x-request-private",
-        "x-request-private": "secret",
-        "x-end-to-end": "visible",
-      },
-    });
+  await adapter.handle(request, response);
 
-    assert.equal(requestHeaders.has("connection"), false);
-    assert.equal(requestHeaders.has("x-request-private"), false);
-    assert.equal(requestHeaders.get("x-end-to-end"), "visible");
-    assert.equal(response.headers.has("connection"), false);
-    assert.equal(response.headers.has("x-response-private"), false);
-    assert.equal(response.headers.get("x-end-to-end"), "visible");
-  } finally {
-    await close(server);
-  }
+  assert.equal(requestHeaders.has("connection"), false);
+  assert.equal(requestHeaders.has("x-request-private"), false);
+  assert.equal(requestHeaders.get("x-end-to-end"), "visible");
+  assert.equal(response.getHeader("connection"), undefined);
+  assert.equal(response.getHeader("x-response-private"), undefined);
+  assert.equal(response.getHeader("x-end-to-end"), "visible");
 });
 
-test("cancels the Fetch response body for a HEAD request", async ({ skip }) => {
+test("cancels the Fetch response body for a HEAD request", async () => {
   let cancelled = false;
   const adapter = new NodeHttpAdapter(
     () =>
@@ -107,34 +95,26 @@ test("cancels the Fetch response body for a HEAD request", async ({ skip }) => {
         }),
       ),
   );
-  const server = createAdapterServer(adapter);
-  const baseUrl = await listen(server, skip);
+  const request = createIncoming({ method: "HEAD" });
+  const response = new MemoryResponse();
 
-  try {
-    const response = await fetch(baseUrl, { method: "HEAD" });
+  await adapter.handle(request, response);
 
-    assert.equal(response.status, 200);
-    assert.equal(await response.text(), "");
-    assert.equal(cancelled, true);
-  } finally {
-    await close(server);
-  }
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body(), "");
+  assert.equal(cancelled, true);
 });
 
-test("aborts the Fetch request when the client disconnects", async ({
-  skip,
-}) => {
-  let markStarted;
+test("aborts the Fetch request when the client disconnects", async () => {
+  let requestSignal;
   let markAborted;
-  const started = new Promise((resolve) => {
-    markStarted = resolve;
-  });
   const aborted = new Promise((resolve) => {
     markAborted = resolve;
   });
   const adapter = new NodeHttpAdapter(
     (request) =>
       new Promise((resolve, reject) => {
+        requestSignal = request.signal;
         request.signal.addEventListener(
           "abort",
           () => {
@@ -143,54 +123,83 @@ test("aborts the Fetch request when the client disconnects", async ({
           },
           { once: true },
         );
-        markStarted();
       }),
   );
-  const server = createAdapterServer(adapter);
-  const baseUrl = await listen(server, skip);
-  const clientRequest = get(baseUrl);
+  const request = createIncoming();
+  const response = new MemoryResponse();
+  const handling = adapter.handle(request, response);
 
-  try {
-    await started;
-    clientRequest.destroy();
-    const reason = await Promise.race([
-      aborted,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Abort was not propagated")), 1_000),
-      ),
-    ]);
-    assert.equal(reason.message, "Client disconnected.");
-  } finally {
-    clientRequest.destroy();
-    await close(server);
-  }
+  response.destroy();
+  await handling;
+
+  assert.equal(requestSignal.aborted, true);
+  assert.equal((await aborted).message, "Client disconnected.");
+  assert.equal(request.listenerCount("close"), 0);
+  assert.equal(response.listenerCount("close"), 0);
 });
 
-function createAdapterServer(adapter) {
-  return createServer((request, response) => {
-    void adapter.handle(request, response).catch((error) => {
-      if (!response.headersSent) response.statusCode = 500;
-      response.end(error.message);
-    });
+test("does not invoke the Fetch handler after a transport is already closed", async () => {
+  let handlerCalled = false;
+  const adapter = new NodeHttpAdapter(() => {
+    handlerCalled = true;
+    return new Response("unexpected");
   });
+  const request = createIncoming();
+  const response = new MemoryResponse();
+  response.destroy();
+
+  await adapter.handle(request, response);
+
+  assert.equal(handlerCalled, false);
+});
+
+test("propagates handler errors and removes transport listeners", async () => {
+  const adapter = new NodeHttpAdapter(() => {
+    throw new Error("handler failed");
+  });
+  const request = createIncoming();
+  const response = new MemoryResponse();
+
+  await assert.rejects(adapter.handle(request, response), /handler failed/);
+
+  assert.equal(request.listenerCount("close"), 0);
+  assert.equal(response.listenerCount("close"), 0);
+});
+
+function createIncoming({
+  method = "GET",
+  url = "/",
+  headers = {},
+  body = "",
+} = {}) {
+  const request = Readable.from(body ? [Buffer.from(body)] : []);
+  request.method = method;
+  request.url = url;
+  request.headers = headers;
+  request.complete = true;
+  return request;
 }
 
-async function listen(server, skip) {
-  try {
-    await new Promise((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-  } catch (error) {
-    if (error?.code === "EPERM")
-      skip("The environment blocks loopback sockets.");
-    throw error;
+class MemoryResponse extends Writable {
+  statusCode = 200;
+  statusMessage;
+  headers = new Map();
+  chunks = [];
+
+  _write(chunk, encoding, callback) {
+    this.chunks.push(Buffer.from(chunk));
+    callback();
   }
-  return `http://127.0.0.1:${server.address().port}`;
-}
 
-async function close(server) {
-  await new Promise((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  setHeader(name, value) {
+    this.headers.set(name.toLowerCase(), value);
+  }
+
+  getHeader(name) {
+    return this.headers.get(name.toLowerCase());
+  }
+
+  body() {
+    return Buffer.concat(this.chunks).toString();
+  }
 }
