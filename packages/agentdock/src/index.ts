@@ -1,5 +1,5 @@
 export { Agentdock } from "./agentdock.js";
-export type { AgentdockOptions } from "./agentdock.js";
+export type { AgentdockOptions, InterruptFormat } from "./agentdock.js";
 export type {
   AgentRuntime,
   GraphContext,

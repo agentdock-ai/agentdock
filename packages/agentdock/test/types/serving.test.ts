@@ -88,5 +88,8 @@ runtime.stream({
 });
 runtime.stream({ threadId: "t", input: null });
 new Agentdock(graph, { interruptFormat: "langchain-hitl" });
+new Agentdock(graph, { interruptFormat: "opaque" });
+new Agentdock(graph, { interruptFormat: Agentdock.OPAQUE });
+new Agentdock(graph, { interruptFormat: Agentdock.HITL });
 // @ts-expect-error Only supported interrupt display formats are accepted.
 new Agentdock(graph, { interruptFormat: "automatic" });

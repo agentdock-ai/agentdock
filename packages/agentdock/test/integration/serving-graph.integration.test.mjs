@@ -40,10 +40,27 @@ test("ordinary state schemas work with createAgent and a general StateGraph", as
   assert.equal(typeof graph.stream, "function");
 });
 
+test("the raw opaque format keeps LangChain HITL payloads generic", async () => {
+  const { graph, threadId } = await createApprovalAgent();
+  const events = await collect(
+    new Agentdock(graph, { interruptFormat: "opaque" }).stream({
+      input: { messages: [{ role: "user", content: "send hello" }] },
+      threadId,
+      context: { userId: "user-42" },
+    }),
+  );
+  const required = events.find(
+    (event) => event.type === AgentEventType.InterruptRequired,
+  );
+
+  assert.equal(required.interrupt.kind, "custom");
+  assert.equal("reviewConfigs" in required.interrupt.payload, true);
+});
+
 test("invocation identity and native interrupt survive resume with a fresh runtime", async () => {
   const { sent, contexts, graph, threadId } = await createApprovalAgent();
   const startRuntime = new Agentdock(graph, {
-    interruptFormat: "langchain-hitl",
+    interruptFormat: Agentdock.HITL,
     validateResume: validateToolApprovalResume,
   });
   const startEvents = await collect(

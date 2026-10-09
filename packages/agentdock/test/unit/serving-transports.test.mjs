@@ -25,6 +25,11 @@ const MESSAGE_CHUNK = [
   [{ id: "assistant-message", content: "hello" }, { langgraph_node: "agent" }],
 ];
 
+test("Agentdock exposes stable interrupt format constants", () => {
+  assert.equal(Agentdock.OPAQUE, "opaque");
+  assert.equal(Agentdock.HITL, "langchain-hitl");
+});
+
 test("Node pipe writes SSE headers and waits for drain before its next event", async () => {
   const graph = createGraph({ chunks: [MESSAGE_CHUNK] });
   const runtime = new Agentdock(graph);

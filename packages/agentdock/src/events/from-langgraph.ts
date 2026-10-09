@@ -23,6 +23,7 @@ import {
   toUsage,
 } from "./native-payload.js";
 import type { EventContext } from "./event-context.js";
+import type { InterruptFormat } from "../agentdock.js";
 import { isRecord } from "../utils/is-record.js";
 
 interface OpenMessage {
@@ -50,7 +51,7 @@ export class WireEventMapper {
   constructor(
     private readonly context: EventContext,
     private readonly namespace: readonly string[] = [],
-    private readonly interruptFormat: "opaque" | "langchain-hitl" = "opaque",
+    private readonly interruptFormat: InterruptFormat = "opaque",
   ) {
     this.currentNamespace = namespace;
   }

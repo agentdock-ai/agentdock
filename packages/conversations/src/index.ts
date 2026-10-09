@@ -16,6 +16,9 @@ export {
   createInMemoryConversationStore,
   createPostgresConversationStore,
 } from "./store-adapters.js";
+export type { PostgresQueryClient } from "./store-adapters.js";
+export { createPostgresConversationFileStorage } from "./postgres-file-storage.js";
+export type { PostgresConversationFileStorageOptions } from "./postgres-file-storage.js";
 export type {
   ConversationStore,
   ThreadRecord,

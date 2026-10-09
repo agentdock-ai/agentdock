@@ -17,11 +17,13 @@ import type {
   ServableCompiledGraph,
 } from "./serving/types.js";
 
+export type InterruptFormat = typeof Agentdock.OPAQUE | typeof Agentdock.HITL;
+
 export interface AgentdockOptions {
   /** Optional override; otherwise LangGraph resolves its configured limit. */
   recursionLimit?: number;
   /** Explicit display format for native LangChain HITL middleware. Defaults to opaque. */
-  interruptFormat?: "opaque" | "langchain-hitl";
+  interruptFormat?: InterruptFormat;
   /** Application-owned preflight validation, before execution or SSE headers. */
   validateResume?: RunStreamOptions["validateResume"];
   /** Server-side diagnostics; errors sent to clients remain sanitized. */
@@ -32,9 +34,12 @@ export interface AgentdockOptions {
 export class Agentdock<
   Graph extends ServableCompiledGraph,
 > implements AgentRuntime<GraphInput<Graph>, GraphContext<Graph>> {
+  static readonly OPAQUE = "opaque";
+  static readonly HITL = "langchain-hitl";
+
   private readonly runStream: RunStream;
   private readonly graph: Graph;
-  private readonly interruptFormat: "opaque" | "langchain-hitl";
+  private readonly interruptFormat: InterruptFormat;
 
   constructor(graph: Graph, options: AgentdockOptions = {}) {
     const recursionLimit = options.recursionLimit;
@@ -46,12 +51,12 @@ export class Agentdock<
     }
     if (
       options.interruptFormat !== undefined &&
-      options.interruptFormat !== "opaque" &&
-      options.interruptFormat !== "langchain-hitl"
+      options.interruptFormat !== Agentdock.OPAQUE &&
+      options.interruptFormat !== Agentdock.HITL
     )
       throw new Error("interruptFormat must be opaque or langchain-hitl.");
     this.graph = graph;
-    this.interruptFormat = options.interruptFormat ?? "opaque";
+    this.interruptFormat = options.interruptFormat ?? Agentdock.OPAQUE;
     this.runStream = new RunStream(graph, {
       recursionLimit,
       interruptFormat: this.interruptFormat,

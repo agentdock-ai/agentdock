@@ -6,6 +6,7 @@ import {
 } from "@agentdock-ai/contracts";
 import { WireEventMapper } from "../events/from-langgraph.js";
 import { EventContext } from "../events/event-context.js";
+import type { InterruptFormat } from "../agentdock.js";
 import { isRecord } from "../utils/is-record.js";
 import { assertThreadSnapshot, type ThreadSnapshot } from "./thread-read.js";
 
@@ -45,7 +46,7 @@ function pendingNative(snapshot: ThreadSnapshot): PendingNativeInterrupt[] {
 
 export function mapSnapshotInterrupts(
   snapshot: ThreadSnapshot,
-  interruptFormat: "opaque" | "langchain-hitl" = "opaque",
+  interruptFormat: InterruptFormat = "opaque",
 ): AgentInterrupt[] {
   const interrupts = new Map<string, AgentInterrupt>();
   for (const pending of pendingNative(snapshot)) {
@@ -68,7 +69,7 @@ export function mapSnapshotInterrupts(
 export function createResumeState(
   snapshot: ThreadSnapshot,
   threadId: string,
-  interruptFormat: "opaque" | "langchain-hitl" = "opaque",
+  interruptFormat: InterruptFormat = "opaque",
 ): CreateResumeStateResult {
   if (typeof threadId !== "string" || !threadId.trim())
     throw new Error("threadId must be a non-empty string.");

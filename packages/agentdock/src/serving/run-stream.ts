@@ -34,12 +34,13 @@ import {
 } from "../langgraph/control-projection.js";
 import { isRecord } from "../utils/is-record.js";
 import type { ThreadSnapshot } from "../langgraph/thread-read.js";
+import type { InterruptFormat } from "../agentdock.js";
 import type { Run, ServableCompiledGraph } from "./types.js";
 
 export type RunFailureStage = "graph" | "mapper" | "checkpoint";
 export interface RunStreamOptions {
   recursionLimit?: number;
-  interruptFormat?: "opaque" | "langchain-hitl";
+  interruptFormat?: InterruptFormat;
   validateResume?: (
     value: unknown,
     pending: readonly AgentInterrupt[],

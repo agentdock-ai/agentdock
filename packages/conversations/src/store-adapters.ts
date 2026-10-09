@@ -1,7 +1,7 @@
 import { InMemoryStore, type Item } from "@langchain/langgraph-checkpoint";
 import type { ConversationStore } from "./store.js";
 
-interface CatalogDatabase {
+export interface PostgresQueryClient {
   query(
     sql: string,
     values?: unknown[],
@@ -28,7 +28,7 @@ export function createInMemoryConversationStore(
 /** Call after the host has set up its LangGraph PostgresStore. */
 export async function createPostgresConversationStore(
   store: ConversationStore,
-  database: CatalogDatabase,
+  database: PostgresQueryClient,
   schema = "public",
 ): Promise<ConversationStore> {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema))

@@ -8,6 +8,7 @@ The current release profile is one execution-owning backend process. A shared Po
 import {
   ConversationService,
   createConversationHttpHandler,
+  createPostgresConversationFileStorage,
   createPostgresConversationStore,
 } from "@agentdock-ai/conversations";
 
@@ -17,9 +18,11 @@ const store = await createPostgresConversationStore(
   pool,
   "agentdock_store",
 );
+const fileStorage = await createPostgresConversationFileStorage(pool);
 const conversations = new ConversationService({
   runtime: agentdock, // compiled graph/checkpointer already configured
   store, // ordered catalog adapter over the application-owned Store
+  fileStorage,
   prepareInput: ({ prompt }) => ({
     messages: [{ role: "user", content: prompt }],
   }),
@@ -43,7 +46,7 @@ Settled operation receipts are retained for seven days with Store TTL support. A
 
 Records are validated and saved as independent snapshots, so mutating a caller object cannot alter persisted state without a confirmed write. A failed thread write does not advance the caller's revision. Known failures before native execution are settled as errors and allow a fresh operation ID once storage recovers. Failed recovery still returns an error; native execution failures remain subject to uncertainty and are never automatically replayed.
 
-File bytes use the host's `ConversationFileStorage` adapter, including S3 or another object store if desired. Deletion confirms byte cleanup before removing its reference. The adapter's `delete` must be idempotent: deleting an absent object succeeds, allowing retry after a metadata deletion failure. Upload persistence failures attempt byte cleanup and report cleanup failure rather than claiming success.
+File bytes use the host's `ConversationFileStorage` adapter, including S3 or another object store if desired. `createPostgresConversationFileStorage` provides a PostgreSQL implementation over the host's query client; it creates a `public.agentdock_conversation_files` table by default. Pass `schema` and `table` options to select another SQL identifier. Deletion confirms byte cleanup before removing its reference. The adapter's `delete` must be idempotent: deleting an absent object succeeds, allowing retry after a metadata deletion failure. Upload persistence failures attempt byte cleanup and report cleanup failure rather than claiming success.
 
 A producer owns execution and persistence independently of the HTTP consumer. Stop and shutdown wait for bounded durable settlement; failed settlement returns an error and uncertain native work remains reserved. After process loss, unfinished saved operations become uncertain rather than being automatically rerun. History uses a thread revision check and bounded retry when writes overlap. Catalog pages are live offset pages: refresh and deduplicate by thread ID; they are not snapshot pagination under concurrent changes.
 
