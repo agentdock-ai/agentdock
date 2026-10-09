@@ -16,6 +16,13 @@ export function messagesForEvent(
   operation: OperationRecord,
 ): ConversationMessage[] {
   const changed: ConversationMessage[] = [];
+  const activityMessage = toolActivityMessage(
+    event,
+    messages,
+    thread,
+    operation,
+  );
+  if (activityMessage) changed.push(activityMessage);
   for (const item of state.messages) {
     const previous = messages.get(item.messageId);
     if (
@@ -78,6 +85,66 @@ export function messagesForEvent(
     }
   }
   return changed;
+}
+
+function toolActivityMessage(
+  event: AgentEvent,
+  messages: Map<string, ConversationMessage>,
+  thread: ThreadRecord,
+  operation: OperationRecord,
+): ConversationMessage | undefined {
+  if (
+    event.type !== AgentEventType.ToolCalled &&
+    event.type !== AgentEventType.ToolCompleted &&
+    event.type !== AgentEventType.ToolFailed
+  )
+    return undefined;
+
+  const toolCall =
+    event.type === AgentEventType.ToolCalled
+      ? event.toolCall
+      : event.type === AgentEventType.ToolCompleted
+        ? event.result
+        : event.error;
+  const id = `tool:${thread.id}:${toolCall.toolCallId}`;
+  const previous = messages.get(id);
+  const callPart: ContentPart = { type: "tool-call", toolCall };
+  const content = previous?.content.some(
+    (part) =>
+      part.type === "tool-call" &&
+      part.toolCall.toolCallId === toolCall.toolCallId,
+  )
+    ? [...previous.content]
+    : [...(previous?.content ?? []), callPart];
+
+  if (event.type === AgentEventType.ToolCompleted) {
+    content.push({ type: "tool-result", result: event.result });
+  } else if (event.type === AgentEventType.ToolFailed) {
+    content.push({
+      type: "tool-result",
+      result: {
+        toolCallId: event.error.toolCallId,
+        name: event.error.name,
+        input: event.error.input,
+        output: event.error.error,
+        isError: true,
+      },
+    });
+  }
+
+  const message: ConversationMessage = {
+    id,
+    turnId: operation.turnId,
+    operationId: operation.id,
+    position: previous?.position ?? thread.nextPosition++,
+    role: "assistant",
+    content,
+    outcome:
+      event.type === AgentEventType.ToolCalled ? "streaming" : "complete",
+    createdAt: previous?.createdAt ?? new Date().toISOString(),
+  };
+  messages.set(id, message);
+  return message;
 }
 
 function cloneContent(parts: ContentPart[]): ContentPart[] {
