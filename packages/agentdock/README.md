@@ -168,6 +168,19 @@ replace the original failure.
 `runtime.toResponse(run)` returns a Web `Response` backed by a cancelable
 `ReadableStream` for Web-standard servers.
 
+`NodeHttpAdapter` bridges Node's `IncomingMessage` and `ServerResponse` to any
+Fetch-compatible handler. It converts request and response streams, preserves
+streaming, and aborts the handler when the client disconnects. Use it in a route
+controller when the handler already speaks the Fetch `Request`/`Response` API.
+Pass the routed URL when a framework strips a mounted route prefix:
+
+```ts
+import { NodeHttpAdapter } from "@agentdock-ai/agentdock";
+
+const adapter = new NodeHttpAdapter(fetchHandler);
+await adapter.handle(incomingMessage, serverResponse, requestUrl);
+```
+
 Your framework owns routes, request validation, and authorization. Route
 controllers call `runtime.pipe(response, run)` for Node-style responses,
 `runtime.toResponse(run)` for Web-standard handlers, or `runtime.stream(run)`
