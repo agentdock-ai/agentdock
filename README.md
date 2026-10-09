@@ -81,9 +81,12 @@ await runtime.pipe(response, {
 
 To resume an interrupted graph, use the same authorized thread ID and pass the
 resume value expected by the graph or middleware. Generic interruptions remain
-opaque. For LangChain tool approval UI, select `interruptFormat: "langchain-hitl"`
-when constructing `Agentdock`. An optional application `validateResume` hook runs
-before invocation or SSE headers; native middleware owns decision permissions:
+opaque by default (`Agentdock.OPAQUE`). For LangChain tool approval UI, select
+`interruptFormat: Agentdock.HITL`; this presents native HITL approvals as tool
+approvals without changing native execution. The equivalent strings
+(`"opaque"` and `"langchain-hitl"`) remain supported. An optional application
+`validateResume` hook runs before invocation or SSE headers; native middleware
+owns decision permissions:
 
 ```ts
 await runtime.pipe(response, {
