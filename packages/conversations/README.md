@@ -1,6 +1,32 @@
-# @agentdock-ai/conversations
+<div align="center">
+  <p><img src="https://raw.githubusercontent.com/agentdock-ai/agentdock/main/logo.png" alt="Agentdock" width="300" /></p>
+  <h1>@agentdock-ai/conversations</h1>
+  <p>Optional, durable thread and transcript storage for Agentdock applications.</p>
+  <p>
+    <a href="https://www.npmjs.com/package/@agentdock-ai/conversations"><img alt="npm version" src="https://img.shields.io/npm/v/%40agentdock-ai%2Fconversations?label=release&color=6959DF" /></a>
+    <a href="https://github.com/agentdock-ai/agentdock/blob/main/LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827" /></a>
+    <img alt="Node.js 22+" src="https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white" />
+    <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-first-3178C6?logo=typescript&logoColor=white" />
+  </p>
+</div>
 
 Optional Node-side conversation persistence for Agentdock. It stores thread catalog records, ordered display messages, operation receipts, and attachment references in the LangGraph Store supplied by the application. It does not change checkpoints or run workflow nodes itself.
+
+## Install
+
+Install the conversation package and LangGraph checkpoint types used by the
+application:
+
+```bash
+npm install @agentdock-ai/conversations @langchain/langgraph-checkpoint
+```
+
+For the PostgreSQL adapters shown below, also install the PostgreSQL Store and
+database client used by the host application:
+
+```bash
+npm install @langchain/langgraph-checkpoint-postgres pg
+```
 
 The current release profile is one execution-owning backend process. A shared PostgresStore does not make concurrent workers safe: admission and cancellation are coordinated only inside the `ConversationService` instance.
 
@@ -35,8 +61,8 @@ const handle = createConversationHttpHandler({
 ```
 
 The handler serves its OpenAPI document at `GET /openapi.json` and interactive
-Swagger UI at `GET /docs`, alongside the conversation routes below. The docs
-describe this package's HTTP API only; host application routes are not included.
+Swagger UI at `GET /docs`. The OpenAPI document lists this package's HTTP routes;
+host application routes are not included.
 Swagger UI loads its static assets from jsDelivr, so the browser needs internet
 access to render `/docs`.
 

@@ -4,6 +4,7 @@ import type {
   ServerResponse,
 } from "node:http";
 import { Readable } from "node:stream";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 
 const hopByHopHeaders = new Set([
@@ -109,7 +110,13 @@ export class NodeHttpAdapter {
       return;
     }
 
-    await pipeline(Readable.fromWeb(webResponse.body), response, { signal });
+    await pipeline(
+      Readable.fromWeb(
+        webResponse.body as NodeWebReadableStream<Uint8Array<ArrayBuffer>>,
+      ),
+      response,
+      { signal },
+    );
   }
 }
 

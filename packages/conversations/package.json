@@ -1,6 +1,6 @@
 {
   "name": "@agentdock-ai/conversations",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Durable LangGraph conversation records and Agentdock synchronization",
   "type": "module",
   "license": "MIT",

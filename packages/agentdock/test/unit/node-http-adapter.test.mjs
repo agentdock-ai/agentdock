@@ -22,7 +22,7 @@ test("bridges request and response streams and preserves multiple cookies", asyn
           controller.close();
         },
       }),
-      { status: 201, headers },
+      { status: 201, statusText: "Created", headers },
     );
   });
   const request = createIncoming({
@@ -36,6 +36,7 @@ test("bridges request and response streams and preserves multiple cookies", asyn
   await adapter.handle(request, response);
 
   assert.equal(response.statusCode, 201);
+  assert.equal(response.statusMessage, "Created");
   assert.equal(response.body(), "streamed response");
   assert.deepEqual(
     response.chunks.map((chunk) => chunk.toString()),
@@ -66,9 +67,13 @@ test("filters hop-by-hop headers and headers nominated by Connection", async () 
   });
   const request = createIncoming({
     headers: {
-      connection: "x-request-private",
+      connection: ["x-request-private", ", x-another-private"],
       "x-request-private": "secret",
+      "x-another-private": "secret",
       "x-end-to-end": "visible",
+      "x-multiple": ["first", "second"],
+      "set-cookie": ["first=one", "second=two"],
+      "x-ignored": undefined,
     },
   });
   const response = new MemoryResponse();
@@ -78,6 +83,8 @@ test("filters hop-by-hop headers and headers nominated by Connection", async () 
   assert.equal(requestHeaders.has("connection"), false);
   assert.equal(requestHeaders.has("x-request-private"), false);
   assert.equal(requestHeaders.get("x-end-to-end"), "visible");
+  assert.equal(requestHeaders.get("x-multiple"), "first, second");
+  assert.deepEqual(requestHeaders.getSetCookie(), ["first=one", "second=two"]);
   assert.equal(response.getHeader("connection"), undefined);
   assert.equal(response.getHeader("x-response-private"), undefined);
   assert.equal(response.getHeader("x-end-to-end"), "visible");
@@ -138,6 +145,33 @@ test("aborts the Fetch request when the client disconnects", async () => {
   assert.equal(response.listenerCount("close"), 0);
 });
 
+test("aborts the Fetch request when the incoming request closes early", async () => {
+  let requestSignal;
+  const adapter = new NodeHttpAdapter(
+    (request) =>
+      new Promise((resolve, reject) => {
+        requestSignal = request.signal;
+        request.signal.addEventListener(
+          "abort",
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+      }),
+  );
+  const request = createIncoming({ method: "POST", body: "partial" });
+  request.complete = false;
+  const response = new MemoryResponse();
+  const handling = adapter.handle(request, response);
+
+  request.emit("close");
+  await handling;
+
+  assert.equal(requestSignal.aborted, true);
+  assert.equal(requestSignal.reason.message, "Client closed the request.");
+  assert.equal(request.listenerCount("close"), 0);
+  assert.equal(response.listenerCount("close"), 0);
+});
+
 test("does not invoke the Fetch handler after a transport is already closed", async () => {
   let handlerCalled = false;
   const adapter = new NodeHttpAdapter(() => {
@@ -151,6 +185,33 @@ test("does not invoke the Fetch handler after a transport is already closed", as
   await adapter.handle(request, response);
 
   assert.equal(handlerCalled, false);
+});
+
+test("does not invoke the Fetch handler for an incomplete destroyed request", async () => {
+  let handlerCalled = false;
+  const adapter = new NodeHttpAdapter(() => {
+    handlerCalled = true;
+    return new Response("unexpected");
+  });
+  const request = createIncoming();
+  request.destroy();
+  request.complete = false;
+
+  await adapter.handle(request, new MemoryResponse());
+
+  assert.equal(handlerCalled, false);
+});
+
+test("uses the default URL when the incoming request has no URL", async () => {
+  let observedUrl;
+  const adapter = new NodeHttpAdapter((request) => {
+    observedUrl = request.url;
+    return new Response("ok");
+  });
+
+  await adapter.handle(createIncoming({ url: null }), new MemoryResponse());
+
+  assert.equal(observedUrl, "http://localhost/");
 });
 
 test("propagates handler errors and removes transport listeners", async () => {

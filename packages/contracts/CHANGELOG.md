@@ -4,6 +4,5 @@
 
 ### Minor Changes
 
-- Narrow Agentdock to compiled-graph serving with event continuity, add the
-  LangChain createAgent HTTP example, and document the migration from the former
-  all-in-one runtime and checkpoint/provider packages.
+- Update the event contract and reducer for compiled-graph serving with event
+  continuity and native LangGraph control flow.

@@ -10,4 +10,4 @@ replay. Preserve interleaved tokens, tool roles and errors, Command returns, nes
 graph namespaces, raw fragmented arguments, and complete interrupt payloads.
 Provide opt-in HITL presentation and application preflight validation, and expose
 server-side error diagnostics.
-Consumers must upgrade together; see MIGRATION.md.
+Publish matching event definitions and runtime behavior for protocol consumers.
