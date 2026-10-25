@@ -85,8 +85,9 @@ opaque by default (`Agentdock.OPAQUE`). For LangChain tool approval UI, select
 `interruptFormat: Agentdock.HITL`; this presents native HITL approvals as tool
 approvals without changing native execution. The equivalent strings
 (`"opaque"` and `"langchain-hitl"`) remain supported. An optional application
-`validateResume` hook runs before invocation or SSE headers; native middleware
-owns decision permissions:
+`validateResume` hook runs before invocation or SSE headers. HITL presentation
+uses a safe default validator for decision permissions and tool names; a custom
+hook replaces it. Native middleware still owns execution:
 
 ```ts
 await runtime.pipe(response, {
