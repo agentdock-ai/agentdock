@@ -143,3 +143,75 @@ it("fails closed on unavailable storage and validates route/body boundaries", as
     status: 400,
   });
 });
+
+it("rejects history cursors past the transcript end with 400", async () => {
+  const service = new ConversationService({
+    store: createInMemoryConversationStore(),
+    prepareInput: ({ prompt }) => prompt,
+    runtime: { getResumeState: async () => null, async *stream() {} },
+  });
+  const handler = createConversationHttpHandler({
+    service,
+    resolveActor: () => "owner",
+  });
+  const thread = await service.createThread("owner");
+  const cursor = Buffer.from(JSON.stringify(999)).toString("base64url");
+  const response = await handler(
+    new Request(
+      `http://test/conversations/${thread.id}/history?cursor=${cursor}`,
+    ),
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    code: "invalid_request",
+    message: "Pagination cursor is invalid.",
+  });
+});
+
+it.each([
+  ["thread_busy", "thread_busy"],
+  ["approval_expired", "approval_expired"],
+  ["internal_detail", "conflict"],
+  [undefined, "conflict"],
+])(
+  "maps a 409 with core code %s to the API code %s",
+  async (coreCode, apiCode) => {
+    const failure = Object.assign(new Error("Conflict from the core."), {
+      status: 409,
+      ...(coreCode === undefined ? {} : { code: coreCode }),
+    });
+    const service = new ConversationService({
+      store: createInMemoryConversationStore(),
+      prepareInput: ({ prompt }) => prompt,
+      runtime: {
+        getResumeState: async () => null,
+        stream: () => ({
+          [Symbol.asyncIterator]: () => ({
+            next: () => Promise.reject(failure),
+          }),
+        }),
+      },
+    });
+    const handler = createConversationHttpHandler({
+      service,
+      resolveActor: () => "owner",
+    });
+    const thread = await service.createThread("owner");
+    const response = await handler(
+      new Request(`http://test/conversations/${thread.id}/start`, {
+        method: "POST",
+        body: JSON.stringify({
+          threadId: thread.id,
+          operationId: crypto.randomUUID(),
+          prompt: "Hello",
+          attachments: [],
+        }),
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: apiCode,
+      message: "Conflict from the core.",
+    });
+  },
+);

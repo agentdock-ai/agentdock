@@ -85,16 +85,20 @@ export async function runOperation(
   publish: (event: AgentEvent) => Promise<void>,
   controller: AbortController,
   timeoutMs: number,
+  first?: IteratorResult<AgentEvent>,
 ): Promise<OperationSettlement> {
   let durable = true;
   let failure: unknown;
   try {
     while (true) {
-      const next = await nextWithSettlementDeadline(
-        iterator,
-        controller.signal,
-        timeoutMs,
-      );
+      const next =
+        first ??
+        (await nextWithSettlementDeadline(
+          iterator,
+          controller.signal,
+          timeoutMs,
+        ));
+      first = undefined;
       if (next.done) break;
       await publish(await writer.write(next.value));
     }

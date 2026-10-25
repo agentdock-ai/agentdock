@@ -3,14 +3,18 @@ import {
   assertConversationContinueRequest,
   assertConversationStartRequest,
   assertConversationStopRequest,
+  type ConversationEventEnvelope,
 } from "@agentdock-ai/contracts";
 import { openApiDocument, swaggerUiHtml } from "./openapi.js";
 import { type ConversationService } from "./service.js";
+import { createEventResponse } from "@agentdock-ai/agentdock";
 
 export interface ConversationHttpOptions<Input> {
   service: ConversationService<Input>;
   resolveActor(request: Request): string | Promise<string>;
   maxBodyBytes?: number;
+  /** SSE comment interval. Defaults to 15000; 0 disables. */
+  heartbeatMs?: number;
 }
 
 /** Fetch-compatible Node handler. Authentication and authorization remain host-owned. */
@@ -18,6 +22,9 @@ export function createConversationHttpHandler<Input>(
   options: ConversationHttpOptions<Input>,
 ): (request: Request) => Promise<Response> {
   const maxBodyBytes = options.maxBodyBytes ?? 128 * 1024;
+  const heartbeatMs = options.heartbeatMs ?? 15_000;
+  if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs < 0)
+    throw new Error("heartbeatMs must be a non-negative safe integer.");
   if (
     !Number.isSafeInteger(maxBodyBytes) ||
     maxBodyBytes < 1024 ||
@@ -157,23 +164,36 @@ export function createConversationHttpHandler<Input>(
           throw httpError(400, "threadId must match the URL.");
         if (parts[2] === "start") {
           validateRequest(body, assertConversationStartRequest);
-          return await eventResponse(
-            options.service.start(actorId, body, request.signal),
-            request.signal,
+          return await createEventResponse(
+            (signal) => options.service.start(actorId, body, signal),
+            {
+              signal: request.signal,
+              heartbeatMs,
+              isTerminal: terminalEnvelope,
+            },
           );
         }
         if (parts[2] === "continue") {
           validateRequest(body, assertConversationContinueRequest);
-          return await eventResponse(
-            options.service.continue(actorId, body, request.signal),
-            request.signal,
+          return await createEventResponse(
+            (signal) => options.service.continue(actorId, body, signal),
+            {
+              signal: request.signal,
+              heartbeatMs,
+              isTerminal: terminalEnvelope,
+            },
           );
         }
         if (parts[2] === "approvals") {
           validateRequest(body, assertConversationApprovalRequest);
-          return await eventResponse(
-            options.service.respondToInterrupt(actorId, body, request.signal),
-            request.signal,
+          return await createEventResponse(
+            (signal) =>
+              options.service.respondToInterrupt(actorId, body, signal),
+            {
+              signal: request.signal,
+              heartbeatMs,
+              isTerminal: terminalEnvelope,
+            },
           );
         }
         if (parts[2] === "stop") {
@@ -192,70 +212,28 @@ export function createConversationHttpHandler<Input>(
           : status === 503
             ? "Conversation persistence is unavailable."
             : "Invalid request.";
+      // Keep specific core codes so clients can explain the conflict.
+      const specific =
+        tagged &&
+        typeof error.code === "string" &&
+        passthroughCodes.has(error.code)
+          ? error.code
+          : undefined;
       const code =
-        status === 404
+        specific ??
+        (status === 404
           ? "not_found"
           : status === 409
             ? "conflict"
             : status === 503
               ? "persistence_failed"
-              : "invalid_request";
+              : "invalid_request");
       return json({ code, message }, status);
     }
   };
 }
 
-async function eventResponse(
-  events: AsyncIterable<unknown>,
-  signal: AbortSignal,
-): Promise<Response> {
-  const iterator = events[Symbol.asyncIterator]();
-  // Resolve admission failures before committing an SSE 200 response.
-  let first: IteratorResult<unknown> | undefined = await iterator.next();
-  const encoder = new TextEncoder();
-  let ended = false;
-  const close = () => {
-    if (ended) return;
-    ended = true;
-    void iterator.return?.().catch(() => undefined);
-  };
-  signal.addEventListener("abort", close, { once: true });
-  if (signal.aborted) close();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const next = first ?? (await iterator.next());
-        first = undefined;
-        if (next.done) {
-          ended = true;
-          signal.removeEventListener("abort", close);
-          controller.close();
-          return;
-        }
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(next.value)}\n\n`),
-        );
-      } catch (error) {
-        ended = true;
-        signal.removeEventListener("abort", close);
-        controller.error(error);
-      }
-    },
-    async cancel() {
-      signal.removeEventListener("abort", close);
-      close();
-      await iterator.return?.();
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      "x-accel-buffering": "no",
-    },
-  });
-}
+const passthroughCodes = new Set(["approval_expired", "thread_busy"]);
 
 async function readJson(
   request: Request,
@@ -374,4 +352,12 @@ function validateRequest<T>(
       error instanceof Error ? error.message : "Invalid request.",
     );
   }
+}
+
+function terminalEnvelope(envelope: ConversationEventEnvelope): boolean {
+  return (
+    envelope.event.type === "run.completed" ||
+    envelope.event.type === "run.failed" ||
+    envelope.event.type === "run.cancelled"
+  );
 }

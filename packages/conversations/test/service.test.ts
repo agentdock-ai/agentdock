@@ -695,8 +695,8 @@ describe("ConversationService", () => {
       {
         type: "edit",
         editedAction: {
-          name: "write_file",
-          args: { path: "safe.txt", content: "ok" },
+          name: "run_command",
+          args: { command: "node check.mjs" },
         },
       },
     ];

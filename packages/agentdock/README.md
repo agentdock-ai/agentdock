@@ -105,14 +105,14 @@ stay opaque, including payloads with keys such as `reviewConfigs`. Native
 `Agentdock.OPAQUE` is the default: interrupts remain generic and their native
 payloads are passed through. Use `Agentdock.HITL` to recognize LangChain
 `humanInTheLoopMiddleware` approvals and expose their actions as tool approvals
-for a review UI. This changes their display projection, not LangGraph execution
-or approval permissions. The equivalent strings (`"opaque"` and
+for a review UI. This preserves native execution policy while rejecting invalid
+resume decisions before execution. The equivalent strings (`"opaque"` and
 `"langchain-hitl"`) remain supported.
 
-Request validation belongs to the application; an optional hook runs before graph
-execution or SSE headers. The supplied helper checks the response envelope and
-action count; it does not enforce permissions. Choose it when your application's
-current policy uses the pending batch unchanged:
+Request authorization belongs to the application. HITL presentation defaults to
+`validateToolApprovalResume`, checking the envelope, count, allowed decisions and
+unchanged tool names before execution or SSE headers. A custom `validateResume`
+replaces that preflight. The helper can also be supplied explicitly:
 
 ```ts
 import { Agentdock, validateToolApprovalResume } from "@agentdock-ai/agentdock";
@@ -207,3 +207,22 @@ LangChain/LangGraph or application responsibilities.
 ## License
 
 MIT. See the [repository license](https://github.com/agentdock-ai/agentdock/blob/main/LICENSE).
+
+## Robust streams and approvals
+
+SSE transports send idle comments every 15 seconds (`heartbeatMs: 0` disables).
+Node responses abort readers that remain backpressured for 60 seconds
+(`drainTimeoutMs: 0` disables), reporting `client_stalled` through `onError`.
+
+HITL presentation validates decision shape, action count, allowed decisions and
+tool names by default. `createToolApprovalResumeValidator({ allowToolRename: true })`
+is the explicit rename opt-out. A custom `validateResume` replaces the default;
+compose validators when adding application authorization.
+
+Thread runs share an in-process lease by graph/saver. Supply a distributed
+`threadLock` across server instances, or `"none"` if the host owns serialization.
+`ThreadBusyError` and `ApprovalExpiredError` have status 409;
+`InvalidApprovalDecisionError` has status 400. Set `approvalTtlMs` to enforce age
+using native checkpoint timestamps; expired approvals can still be rejected.
+`onDecision` blocks execution until audit persistence succeeds. Upsert records by
+their stable `id` to tolerate retries; records capture intent, not tool completion.

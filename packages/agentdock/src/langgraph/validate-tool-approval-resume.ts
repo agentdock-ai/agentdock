@@ -1,60 +1,37 @@
 import type { AgentInterrupt } from "@agentdock-ai/contracts";
-import { isRecord } from "../utils/is-record.js";
+import {
+  InvalidApprovalDecisionError,
+  toolApprovalDecisions,
+} from "./tool-approval-decisions.js";
 
-/** Validate the opt-in HITL response envelope; middleware owns permissions. */
-export function validateToolApprovalResume(
+type ValidateResume = (
   value: unknown,
   pending: readonly AgentInterrupt[],
-): void {
-  if (
-    pending.length > 1 &&
-    pending.some((interrupt) => interrupt.kind === "tool-approval") &&
-    (!isRecord(value) ||
-      !pending.some((interrupt) =>
-        Object.prototype.hasOwnProperty.call(value, interrupt.interruptId),
-      ))
-  )
-    throw new Error(
-      "Resume must target a pending interrupt ID when multiple approvals are waiting.",
-    );
-  for (const interrupt of pending) {
-    if (interrupt.kind !== "tool-approval") continue;
-    let response = value;
-    if (
-      isRecord(value) &&
-      Object.prototype.hasOwnProperty.call(value, interrupt.interruptId)
-    ) {
-      response = value[interrupt.interruptId];
-    } else if (pending.length > 1) continue;
-    if (
-      !isRecord(response) ||
-      !Array.isArray(response.decisions) ||
-      response.decisions.length !== interrupt.actions.length
-    )
-      throw new Error(
-        "Resume must contain one decision for each pending approval action.",
-      );
-    for (const decision of response.decisions) {
+) => void;
+
+/** Validate native HITL decisions, preserving tool names unless explicitly allowed. */
+export function createToolApprovalResumeValidator(
+  options: { allowToolRename?: boolean } = {},
+): ValidateResume {
+  const allowToolRename = options.allowToolRename === true;
+  return (value, pending) => {
+    for (const { action, decision } of toolApprovalDecisions(value, pending)) {
       if (
-        !isRecord(decision) ||
-        typeof decision.type !== "string" ||
-        !["approve", "edit", "reject"].includes(decision.type)
+        action.allowedDecisions &&
+        !action.allowedDecisions.includes(decision.type)
       )
-        throw new Error("Resume decision must be approve, edit, or reject.");
-      if (
-        decision.type === "edit" &&
-        (!isRecord(decision.editedAction) ||
-          typeof decision.editedAction.name !== "string" ||
-          !isRecord(decision.editedAction.args))
-      )
-        throw new Error(
-          "An edit decision must contain editedAction.name and editedAction.args.",
+        throw new InvalidApprovalDecisionError(
+          `Decision ${decision.type} is not allowed for ${action.name}.`,
         );
       if (
-        decision.message !== undefined &&
-        typeof decision.message !== "string"
+        decision.type === "edit" &&
+        !allowToolRename &&
+        decision.editedAction.name !== action.name
       )
-        throw new Error("Resume decision.message must be a string.");
+        throw new InvalidApprovalDecisionError(
+          "An edit decision cannot change the tool name.",
+        );
     }
-  }
+  };
 }
+export const validateToolApprovalResume = createToolApprovalResumeValidator();

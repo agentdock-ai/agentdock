@@ -367,8 +367,14 @@ test("current native middleware context owns decision permissions", async () => 
     }),
   );
   assert.equal(start.at(-1).interrupt.kind, "tool-approval");
+  // The host explicitly replaces checkpoint preflight when applying a new native policy.
   const end = await collect(
-    runtime(graph).stream({
+    new Agentdock(graph, {
+      interruptFormat: Agentdock.HITL,
+      validateResume(_value, _pending, context) {
+        assert.ok(context.interruptOn);
+      },
+    }).stream({
       threadId: "policy",
       resume: {
         decisions: [
@@ -800,8 +806,14 @@ test("native context can remove approval requirements without a serving policy v
       input: { messages: [new HumanMessage("hi")] },
     }),
   );
+  // The host explicitly replaces checkpoint preflight when applying a new native policy.
   const end = await collect(
-    runtime(graph).stream({
+    new Agentdock(graph, {
+      interruptFormat: Agentdock.HITL,
+      validateResume(_value, _pending, context) {
+        assert.ok(context.interruptOn);
+      },
+    }).stream({
       threadId: "removed-policy",
       resume: { decisions: [] },
       context: { interruptOn: { lookup: false } },

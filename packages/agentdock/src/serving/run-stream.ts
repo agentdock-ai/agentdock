@@ -32,14 +32,27 @@ import {
   reconcileInterrupts,
   type NativeControlGraph,
 } from "../langgraph/control-projection.js";
+import { assertApprovalsFresh } from "../langgraph/approval-expiry.js";
+import { toolApprovalDecisions } from "../langgraph/tool-approval-decisions.js";
+import {
+  approvalDecisionRecord,
+  type DecisionObserver,
+} from "./approval-decisions.js";
+import { validateToolApprovalResume } from "../langgraph/validate-tool-approval-resume.js";
+import { resolveThreadLock, type ThreadLock } from "./thread-lock.js";
 import { isRecord } from "../utils/is-record.js";
 import type { ThreadSnapshot } from "../langgraph/thread-read.js";
 import type { InterruptFormat } from "../agentdock.js";
 import type { Run, ServableCompiledGraph } from "./types.js";
 
-export type RunFailureStage = "graph" | "mapper" | "checkpoint";
-export interface RunStreamOptions {
+export type RunFailureStage = "graph" | "mapper" | "checkpoint" | "transport";
+export interface RunStreamOptions<
+  TContext extends Record<string, unknown> = Record<string, unknown>,
+> {
+  onDecision?: DecisionObserver<TContext>;
+  threadLock?: "none" | "in-process" | ThreadLock;
   recursionLimit?: number;
+  approvalTtlMs?: number;
   interruptFormat?: InterruptFormat;
   validateResume?: (
     value: unknown,
@@ -48,7 +61,12 @@ export interface RunStreamOptions {
   ) => void | Promise<void>;
   onError?: (
     error: unknown,
-    details: { threadId: string; runId: string; stage: RunFailureStage },
+    details: {
+      threadId: string;
+      runId: string;
+      stage: RunFailureStage;
+      code?: "client_stalled";
+    },
   ) => void;
 }
 interface RuntimeGraph extends NativeControlGraph {
@@ -61,23 +79,38 @@ interface RuntimeGraph extends NativeControlGraph {
 }
 
 /** Serves one native invocation without mutating graph checkpoints. */
-export class RunStream {
+export class RunStream<
+  TContext extends Record<string, unknown> = Record<string, unknown>,
+> {
   private readonly graph: RuntimeGraph;
+  private readonly threadLock?: ThreadLock;
   constructor(
     graph: ServableCompiledGraph,
-    private readonly options: RunStreamOptions,
+    private readonly options: RunStreamOptions<TContext>,
   ) {
     this.graph = graph as unknown as RuntimeGraph;
+    const owner = isRecord(this.graph.checkpointer)
+      ? this.graph.checkpointer
+      : graph;
+    this.threadLock = resolveThreadLock(owner, options.threadLock);
   }
-  stream<TInput, TContext extends Record<string, unknown>>(
-    run: Run<TInput, TContext>,
-  ): AsyncGenerator<AgentEvent> {
-    return this.execute(run);
+  stream<TInput>(run: Run<TInput, TContext>): AsyncGenerator<AgentEvent> {
+    return this.withThreadLock(run);
   }
-  private async *execute<TInput, TContext extends Record<string, unknown>>(
+  private async *withThreadLock<TInput>(
     run: Run<TInput, TContext>,
   ): AsyncGenerator<AgentEvent> {
     this.assertRun(run);
+    const release = await this.threadLock?.acquire(run.threadId);
+    try {
+      yield* this.execute(run);
+    } finally {
+      await release?.();
+    }
+  }
+  private async *execute<TInput>(
+    run: Run<TInput, TContext>,
+  ): AsyncGenerator<AgentEvent> {
     const config: LangGraphRunnableConfig = {
       ...run.config,
       configurable: { ...run.config?.configurable, thread_id: run.threadId },
@@ -98,8 +131,33 @@ export class RunStream {
       throw new Error(
         "Cannot resume this thread: no native pending interrupt or breakpoint.",
       );
-    if (resume !== undefined)
-      await this.options.validateResume?.(resume, pending, run.context);
+    if (resume !== undefined) {
+      const validate =
+        this.options.validateResume ??
+        (this.options.interruptFormat === "langchain-hitl"
+          ? validateToolApprovalResume
+          : undefined);
+      await validate?.(resume, pending, run.context);
+      if (this.options.approvalTtlMs !== undefined)
+        await assertApprovalsFresh(
+          toolApprovalDecisions(resume, pending),
+          before,
+          this.graph,
+          config,
+          this.options.approvalTtlMs,
+        );
+      if (this.options.onDecision || run.onDecision) {
+        for (const entry of toolApprovalDecisions(resume, pending)) {
+          const record = approvalDecisionRecord(
+            entry,
+            run.threadId,
+            run.context,
+          );
+          await this.options.onDecision?.(record);
+          await run.onDecision?.(record);
+        }
+      }
+    }
     if ("continue" in run && pending.length)
       throw new Error("Dynamic interrupts require a resume value.");
     const context = new EventContext(crypto.randomUUID(), 0);
@@ -337,7 +395,7 @@ export class RunStream {
       abortScope.dispose();
     }
   }
-  private assertRun(run: Run<unknown, Record<string, unknown>>): void {
+  private assertRun(run: Run<unknown, TContext>): void {
     if (!run || typeof run !== "object")
       throw new Error("Run must be an object.");
     if (typeof run.threadId !== "string" || !run.threadId.trim())

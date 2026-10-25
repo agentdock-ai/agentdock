@@ -257,6 +257,21 @@ function assertInterrupt(
     }
     if (value.kind === "tool-approval") {
       assertString(action.toolCallId, `${actionPath}.toolCallId`);
+      if (
+        action.allowedDecisions !== undefined &&
+        (!Array.isArray(action.allowedDecisions) ||
+          action.allowedDecisions.some(
+            (decision) =>
+              decision !== "approve" &&
+              decision !== "edit" &&
+              decision !== "reject",
+          ))
+      )
+        throw new Error(
+          `${actionPath}.allowedDecisions must contain approve, edit, or reject.`,
+        );
+      if (action.description !== undefined)
+        assertString(action.description, `${actionPath}.description`);
     }
   });
   if (value.payload !== undefined)

@@ -99,3 +99,9 @@ Agentdock, and conversations, installs them into an isolated Node consumer,
 typechecks the public API, and imports the package entry points. This check
 requires npm registry access. In-memory tests alone do not prove crash
 recovery.
+
+Conversation HTTP streams send idle SSE comments every 15 seconds. Set the handler's
+`heartbeatMs` to `0` to disable them. Mandatory decision receipts persist the
+trusted actor and stable audit ID before native execution. Validation and expiry
+failures occur before SSE headers. Service admission is local to one instance;
+configure a shared runtime thread lock for multi-process deployments.

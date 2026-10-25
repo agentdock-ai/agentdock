@@ -65,6 +65,8 @@
 
 ## Maintenance
 
+- Use Node 24 (`nvm use`), matching the release workflow. After changing Node
+  versions, run `npm rebuild better-sqlite3` before testing native checkpoints.
 - Remove dead code, unused imports, stale configuration, and obsolete dependencies.
 - Keep naming, error messages, and patterns consistent across modules.
 - Make the smallest safe change that solves the current problem.

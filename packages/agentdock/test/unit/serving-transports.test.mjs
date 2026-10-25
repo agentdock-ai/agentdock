@@ -7,11 +7,12 @@ import {
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { Agentdock } from "../../src/index.js";
+import { Agentdock, validateToolApprovalResume } from "../../src/index.js";
 import { EventContext } from "../../src/events/event-context.js";
 import { createSseResponse } from "../../src/transports/web/to-response.js";
+import { ABORT_GRACE_MS } from "../../src/transports/sse.js";
 import { createAgent, humanInTheLoopMiddleware, tool } from "langchain";
-import { MemorySaver } from "@langchain/langgraph";
+import { Command, MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
 import {
   createScriptedChatModel,
@@ -254,6 +255,48 @@ test("a graph that stops cleanly after cancellation emits run.cancelled", async 
   assert.equal(graph.cleanupCount, 1);
 });
 
+test("a host abort delivers run.cancelled through Node pipe", async () => {
+  const graph = createGraph({ waitForAbort: true });
+  const controller = new AbortController();
+  const response = new FakeResponse();
+  const started = Date.now();
+  const piping = new Agentdock(graph).pipe(response, {
+    input: { messages: [{ role: "user", content: "hi" }] },
+    threadId: "node-host-abort",
+    signal: controller.signal,
+  });
+
+  await waitFor(() => graph.waiting);
+  controller.abort(new Error("host stop"));
+  await piping;
+
+  const events = readEvents(response.frames);
+  assert.equal(events.at(-1).type, AgentEventType.RunCancelled);
+  assert.equal(graph.cleanupCount, 1);
+  assert.equal(response.writableEnded, true);
+  assert.ok(Date.now() - started < ABORT_GRACE_MS);
+});
+
+test("a host abort delivers run.cancelled through a Web Response", async () => {
+  const graph = createGraph({ waitForAbort: true });
+  const controller = new AbortController();
+  const started = Date.now();
+  const response = await new Agentdock(graph).toResponse({
+    input: { messages: [{ role: "user", content: "hi" }] },
+    threadId: "web-host-abort",
+    signal: controller.signal,
+  });
+  const body = response.text();
+
+  await waitFor(() => graph.waiting);
+  controller.abort(new Error("host stop"));
+
+  const events = readEvents([await body]);
+  assert.equal(events.at(-1).type, AgentEventType.RunCancelled);
+  assert.equal(graph.cleanupCount, 1);
+  assert.ok(Date.now() - started < ABORT_GRACE_MS);
+});
+
 test("consumer early return aborts the graph and returns its iterator", async () => {
   const graph = createGraph({ waitForAbort: true });
   const iterator = new Agentdock(graph)
@@ -328,6 +371,63 @@ test("invalid runs fail before committing a Node or Web response", async () => {
   assert.equal(response.endCount, 0);
   assert.equal(response.listenerCount("close"), 0);
 });
+
+test.each(["resume", "command"])(
+  "tool rename via %s fails before graph invocation or HTTP headers",
+  async (path) => {
+    const graph = createGraph();
+    graph.getState = async () => ({
+      values: {
+        messages: [
+          {
+            id: "assistant-call",
+            tool_calls: [{ id: "call-lookup", name: "lookup", args: {} }],
+          },
+        ],
+      },
+      next: ["review"],
+      tasks: [
+        {
+          interrupts: [
+            {
+              id: "approval",
+              value: {
+                actionRequests: [{ name: "lookup", args: {} }],
+                reviewConfigs: [{ actionName: "lookup" }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const runtime = new Agentdock(graph, {
+      interruptFormat: Agentdock.HITL,
+      validateResume: validateToolApprovalResume,
+    });
+    const resume = {
+      decisions: [
+        { type: "edit", editedAction: { name: "run_command", args: {} } },
+      ],
+    };
+    const run = { threadId: "rename" };
+    if (path === "resume") run.resume = resume;
+    else run.input = new Command({ resume });
+    const response = new FakeResponse();
+    await assert.rejects(
+      runtime.pipe(response, run),
+      /cannot change the tool name/,
+    );
+    await assert.rejects(
+      runtime.toResponse(run),
+      /cannot change the tool name/,
+    );
+    assert.equal(graph.streamOptions.length, 0);
+    assert.equal(response.status, undefined);
+    assert.deepEqual(response.frames, []);
+    assert.equal(response.endCount, 0);
+    assert.equal(response.listenerCount("close"), 0);
+  },
+);
 
 test("Web stream errors propagate to the reader", async () => {
   let failNext;

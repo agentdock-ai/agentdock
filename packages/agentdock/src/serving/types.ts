@@ -1,3 +1,4 @@
+import type { DecisionObserver } from "./approval-decisions.js";
 import type { AgentEvent } from "@agentdock-ai/contracts";
 import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 
@@ -21,6 +22,8 @@ export type StartRun<TInput, TContext extends Record<string, unknown>> = {
   threadId: string;
   /** Per-invocation graph context; never persisted by Agentdock. */
   context?: TContext;
+  /** Mandatory pre-execution decision persistence for this invocation. */
+  onDecision?: DecisionObserver<TContext>;
   /** LangGraph callbacks, tags, metadata, store, and additional configurable values. */
   config?: GraphRunConfig;
   /** Aborts cooperative graph and tool work when signaled. */
@@ -35,6 +38,8 @@ export type ResumeRun<TContext extends Record<string, unknown>> = {
   /** Opaque value forwarded unchanged to LangGraph's `Command({ resume })`. */
   resume: unknown;
   context?: TContext;
+  /** Mandatory pre-execution decision persistence for this invocation. */
+  onDecision?: DecisionObserver<TContext>;
   /** LangGraph callbacks, tags, metadata, store, and additional configurable values. */
   config?: GraphRunConfig;
   signal?: AbortSignal;
@@ -47,6 +52,8 @@ export type ContinueRun<TContext extends Record<string, unknown>> = {
   continue: true;
   threadId: string;
   context?: TContext;
+  /** Mandatory pre-execution decision persistence for this invocation. */
+  onDecision?: DecisionObserver<TContext>;
   config?: GraphRunConfig;
   signal?: AbortSignal;
 };
@@ -73,6 +80,7 @@ export interface NodeSseResponse {
   writeHead(statusCode: number, headers: Record<string, string>): this;
   write(frame: string): boolean;
   end(): void;
+  destroy(error?: Error): void;
   on(event: "close" | "drain", listener: () => void): this;
   off(event: "close" | "drain", listener: () => void): this;
 }

@@ -14,6 +14,7 @@ import { OperationPersistence, runOperation } from "./operation.js";
 import { managedStream } from "./managed-stream.js";
 import {
   createAgentReducerState,
+  cloneToolApprovalDecisionRecord,
   type AgentEvent,
   type AgentReducerState,
   type ConversationActions,
@@ -211,6 +212,8 @@ export class ConversationService<Input> {
     const records = this.records(actorId);
     const thread = await requireThread(records, threadId);
     const beforePosition = cursor ? decodeCursor(cursor) : thread.nextPosition;
+    if (beforePosition > thread.nextPosition)
+      throw conversationError(400, "Pagination cursor is invalid.");
     const [page, nativeState] = await Promise.all([
       records.listMessages(threadId, this.pageSize + 1, beforePosition),
       this.options.runtime.getResumeState(threadId),
@@ -642,7 +645,22 @@ export class ConversationService<Input> {
         await records.putThread(thread);
         await records.putOperation(threadId, operation);
       }
-      const run = prepared.run;
+      const run: Run<Input, Record<string, unknown>> = {
+        ...prepared.run,
+        context: { actorId },
+        async onDecision(record) {
+          const decision = {
+            ...cloneToolApprovalDecisionRecord(record),
+            context: { actorId },
+          };
+          operation.decisions ??= [];
+          if (
+            !operation.decisions.some((current) => current.id === decision.id)
+          )
+            operation.decisions.push(decision);
+          await records.putOperation(threadId, operation);
+        },
+      };
       operation.status = "running";
       operation.updatedAt = new Date().toISOString();
       await records.putOperation(threadId, operation);
@@ -659,9 +677,10 @@ export class ConversationService<Input> {
         displayUrls,
         promptMessage,
       );
-      // Once the native runtime is invoked, a failure may involve real side effects.
-      executionStarted = true;
       const iterator = this.options.runtime.stream(run)[Symbol.asyncIterator]();
+      // Core preflight and mandatory audit writes precede its first run.started event.
+      const first = await iterator.next();
+      executionStarted = true;
       const result = await runOperation(
         iterator,
         writer,
@@ -674,6 +693,7 @@ export class ConversationService<Input> {
           }),
         controller,
         this.settlementTimeoutMs,
+        first,
       );
       if (result.durable) this.active.delete(activeKey);
       settle(result);

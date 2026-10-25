@@ -108,7 +108,11 @@ export type ConversationErrorCode =
   | "conflict"
   | "unavailable"
   | "persistence_failed"
-  | "execution_uncertain";
+  | "execution_uncertain"
+  /** The approval waited longer than the server's approval TTL. */
+  | "approval_expired"
+  /** Another run is active on this thread. */
+  | "thread_busy";
 
 export interface ConversationError {
   protocolVersion: typeof CONVERSATION_PROTOCOL_VERSION;

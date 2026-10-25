@@ -3,6 +3,8 @@ import type { BaseStore, Item } from "@langchain/langgraph-checkpoint";
 import {
   assertConversationMessage,
   assertConversationThread,
+  cloneToolApprovalDecisionRecord,
+  type ToolApprovalDecisionRecord,
   type ConversationMessage,
   type ConversationThread,
 } from "@agentdock-ai/contracts";
@@ -41,6 +43,7 @@ export interface OperationRecord {
   updatedAt: string;
   outcome?: "complete" | "stopped" | "error";
   publishedPosition: number;
+  decisions?: (ToolApprovalDecisionRecord & { context: { actorId: string } })[];
 }
 
 export interface AttachmentRecord {
@@ -283,7 +286,29 @@ function parseOperation(value: unknown): OperationRecord {
     updatedAt: value.updatedAt,
     publishedPosition: value.publishedPosition,
     ...(value.outcome === undefined ? {} : { outcome: value.outcome }),
+    ...(value.decisions === undefined
+      ? {}
+      : { decisions: parseDecisions(value.decisions) }),
   };
+}
+
+function parseDecisions(
+  value: unknown,
+): NonNullable<OperationRecord["decisions"]> {
+  if (!Array.isArray(value))
+    throw new Error("Stored approval decisions must be an array.");
+  return value.map((record: unknown) => {
+    if (
+      !isRecord(record) ||
+      !isRecord(record.context) ||
+      typeof record.context.actorId !== "string"
+    )
+      throw new Error("Stored approval decision actor is invalid.");
+    return {
+      ...cloneToolApprovalDecisionRecord(record),
+      context: { actorId: record.context.actorId },
+    };
+  });
 }
 
 function parseAttachment(value: unknown): AttachmentRecord {

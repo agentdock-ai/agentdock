@@ -9,6 +9,7 @@ import {
   type AgentEvent,
   type AgentEventInput,
   type AgentInterrupt,
+  type AgentToolApprovalInterruptAction,
   type AgentUsage,
   type ContentPart,
   type ToolCallRecord,
@@ -296,6 +297,7 @@ export class WireEventMapper {
         throw new Error(
           "LangChain approval requires actionRequests and reviewConfigs arrays.",
         );
+      const reviewConfigs = value.reviewConfigs;
       const actions = value.actionRequests.map((action) => {
         if (!isRecord(action) || typeof action.name !== "string")
           throw new Error("LangChain approval contains an invalid action.");
@@ -306,7 +308,38 @@ export class WireEventMapper {
             "LangGraph interrupt could not be matched to a streamed tool call.",
           );
         const toolCallId = this.scopeId(call.id);
-        return { id: toolCallId, name: action.name, input, toolCallId };
+        const result: AgentToolApprovalInterruptAction = {
+          id: toolCallId,
+          name: action.name,
+          input,
+          toolCallId,
+        };
+        const review = reviewConfigs.find(
+          (config) => isRecord(config) && config.actionName === action.name,
+        );
+        if (isRecord(review) && review.allowedDecisions !== undefined) {
+          if (!Array.isArray(review.allowedDecisions))
+            throw new Error(
+              "LangChain approval allowedDecisions must be an array.",
+            );
+          result.allowedDecisions = review.allowedDecisions.map((decision) => {
+            if (
+              decision !== "approve" &&
+              decision !== "edit" &&
+              decision !== "reject"
+            )
+              throw new Error(
+                "LangChain approval contains an invalid allowed decision.",
+              );
+            return decision;
+          });
+        }
+        if (action.description !== undefined) {
+          if (typeof action.description !== "string")
+            throw new Error("LangChain approval description must be a string.");
+          result.description = action.description;
+        }
+        return result;
       });
       interrupt = {
         interruptId,

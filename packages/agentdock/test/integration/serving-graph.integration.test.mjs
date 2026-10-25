@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import {
   AgentEventType,
   createAgentReducerState,
   reduceAgentEvent,
 } from "@agentdock-ai/contracts";
-import { Agentdock, validateToolApprovalResume } from "../../src/index.js";
+import {
+  Agentdock,
+  createToolApprovalResumeValidator,
+  validateToolApprovalResume,
+} from "../../src/index.js";
 import {
   Command,
   END,
@@ -291,6 +295,153 @@ test("resume requires native pending execution", async () => {
       ),
     /native pending interrupt/,
   );
+});
+
+test.each([false, true])(
+  "native HITL tool renaming requires explicit opt-in (allowToolRename: %s)",
+  async (allowToolRename) => {
+    const executions = [];
+    const tools = ["list_files", "run_command"].map((name) =>
+      tool(
+        async ({ value }) => {
+          executions.push({ name, value });
+          return "done";
+        },
+        { name, description: name, schema: z.object({ value: z.string() }) },
+      ),
+    );
+    const graph = createAgent({
+      model: createScriptedChatModel({
+        streamSequences: [
+          createToolCallArgumentChunks({
+            name: "list_files",
+            toolCallId: "call-list",
+            input: { value: "original" },
+            messageId: "assistant-list",
+          }),
+          createScriptedMessageChunks(["done"], { id: "assistant-done" }),
+        ],
+        responses: ["", "done"],
+      }),
+      tools,
+      checkpointer: new MemorySaver(),
+      middleware: [
+        humanInTheLoopMiddleware({
+          interruptOn: { list_files: true, run_command: true },
+        }),
+      ],
+    }).graph;
+    const runtime = new Agentdock(graph, {
+      interruptFormat: Agentdock.HITL,
+      validateResume: allowToolRename
+        ? createToolApprovalResumeValidator({ allowToolRename: true })
+        : validateToolApprovalResume,
+    });
+    const threadId = "rename-approval";
+    const start = await collect(
+      runtime.stream({
+        threadId,
+        input: { messages: [{ role: "user", content: "list files" }] },
+      }),
+    );
+    const pending = start.at(-1).interrupt;
+    assert.equal(pending.actions[0].name, "list_files");
+    assert.deepEqual(executions, []);
+    const resume = {
+      [pending.interruptId]: {
+        decisions: [
+          {
+            type: "edit",
+            editedAction: { name: "run_command", args: { value: "edited" } },
+          },
+        ],
+      },
+    };
+    if (!allowToolRename) {
+      await assert.rejects(
+        () => collect(runtime.stream({ threadId, resume })),
+        /cannot change the tool name/,
+      );
+      assert.deepEqual(executions, []);
+      const state = await runtime.getResumeState(threadId);
+      assert.deepEqual(state.interrupt, pending);
+      resume[pending.interruptId].decisions[0].editedAction.name = "list_files";
+    }
+    const end = await collect(runtime.stream({ threadId, resume }));
+    assert.equal(end.at(-1).type, AgentEventType.RunCompleted);
+    assert.deepEqual(executions, [
+      { name: allowToolRename ? "run_command" : "list_files", value: "edited" },
+    ]);
+  },
+);
+
+test("concurrent native resumes across runtimes execute the approved tool once", async () => {
+  const { graph, sent, threadId } = await createApprovalAgent();
+  const runtime = new Agentdock(graph, { interruptFormat: Agentdock.HITL });
+  await collect(
+    runtime.stream({
+      threadId,
+      input: { messages: [{ role: "user", content: "send" }] },
+      context: { userId: "trusted" },
+    }),
+  );
+  const run = {
+    threadId,
+    resume: { decisions: [{ type: "approve" }] },
+    context: { userId: "trusted" },
+  };
+  const results = await Promise.allSettled([
+    collect(runtime.stream(run)),
+    collect(
+      new Agentdock(graph, { interruptFormat: Agentdock.HITL }).stream(run),
+    ),
+  ]);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  const failure = results.find((result) => result.status === "rejected");
+  assert.equal(failure.reason.code, "thread_busy");
+  assert.deepEqual(sent, ["hello"]);
+});
+
+test("native checkpoint approvals expire across fresh runtimes while rejection remains valid", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date("2026-10-22T10:00:00Z"));
+    const { graph, sent, threadId } = await createApprovalAgent();
+    const options = { interruptFormat: Agentdock.HITL, approvalTtlMs: 60000 };
+    const first = new Agentdock(graph, options);
+    await collect(
+      first.stream({
+        threadId,
+        context: { userId: "trusted" },
+        input: { messages: [{ role: "user", content: "send" }] },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-10-22T10:01:00Z"));
+    const runtime = new Agentdock(graph, options);
+    await assert.rejects(
+      runtime.toResponse({
+        threadId,
+        context: { userId: "trusted" },
+        resume: { decisions: [{ type: "approve" }] },
+      }),
+      { code: "approval_expired" },
+    );
+    assert.deepEqual(sent, []);
+    const end = await collect(
+      runtime.stream({
+        threadId,
+        context: { userId: "trusted" },
+        resume: { decisions: [{ type: "reject" }] },
+      }),
+    );
+    assert.equal(end.at(-1).type, "run.completed");
+    assert.deepEqual(sent, []);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 async function createApprovalAgent() {

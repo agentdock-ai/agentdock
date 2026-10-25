@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type {
   AgentInterrupt,
@@ -84,6 +85,13 @@ describe("conversation service utilities", () => {
     ).rejects.toMatchObject({ status: 404 });
     expect(hashRequest({ first: 1, second: { a: 2, b: 3 } })).toBe(
       hashRequest({ second: { b: 3, a: 2 }, first: 1 }),
+    );
+  });
+
+  it("orders keys by code point so hashes don't depend on the server locale", () => {
+    // localeCompare would place "a" before "B"; code-point order places "B" first.
+    expect(hashRequest({ a: 1, B: 2, ch: 3, h: 4 })).toBe(
+      createHash("sha256").update('{"B":2,"a":1,"ch":3,"h":4}').digest("hex"),
     );
   });
 });

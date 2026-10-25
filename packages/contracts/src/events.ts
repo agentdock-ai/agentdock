@@ -55,6 +55,8 @@ export interface AgentInterruptAction {
 
 export interface AgentToolApprovalInterruptAction extends AgentInterruptAction {
   toolCallId: string;
+  allowedDecisions?: ("approve" | "edit" | "reject")[];
+  description?: string;
 }
 
 interface AgentInterruptBase {

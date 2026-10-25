@@ -3,6 +3,7 @@ import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 
 export interface ThreadSnapshot {
   values: unknown;
+  createdAt?: string;
   next?: readonly string[];
   config?: LangGraphRunnableConfig;
   tasks?: readonly {

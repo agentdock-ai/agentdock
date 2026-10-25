@@ -4,11 +4,23 @@ import type {
   ConversationApprovalRequest,
 } from "@agentdock-ai/contracts";
 import type { ConversationRecords, ThreadRecord } from "./store.js";
+import { validateToolApprovalResume } from "@agentdock-ai/agentdock";
 
 export function validateDecisions(
   interrupt: AgentInterrupt,
   decisions: ConversationApprovalRequest["decisions"],
 ): void {
+  if (interrupt.kind === "tool-approval") {
+    try {
+      validateToolApprovalResume({ decisions }, [interrupt]);
+    } catch (error) {
+      throw conversationError(
+        400,
+        error instanceof Error ? error.message : "Invalid approval decision.",
+      );
+    }
+    return;
+  }
   if (decisions.length !== interrupt.actions.length)
     throw conversationError(
       400,
@@ -95,7 +107,8 @@ export function hashRequest(request: unknown): string {
   const json = JSON.stringify(request, (_key, value) => {
     if (value && typeof value === "object" && !Array.isArray(value))
       return Object.fromEntries(
-        Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+        // Code-point order keeps hashes identical across server locales.
+        Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
       );
     return value;
   });
